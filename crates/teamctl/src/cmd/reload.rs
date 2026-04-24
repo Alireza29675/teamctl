@@ -1,8 +1,8 @@
 //! Diff-based reload.
 //!
-//! Phase 1 implementation: hash each agent's rendered artifact set; if the
-//! hash differs from the last-applied snapshot, restart that agent. Unchanged
-//! agents are left alone. The snapshot lives at `state/applied.json`.
+//! Hash each agent's rendered artifact set; if the hash differs from the
+//! last-applied snapshot, restart that agent. Unchanged agents are left
+//! alone. The snapshot lives at `state/applied.json`.
 
 use std::collections::BTreeMap;
 use std::fs;

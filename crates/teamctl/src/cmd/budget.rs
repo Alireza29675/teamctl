@@ -1,9 +1,8 @@
 //! `teamctl budget` — aggregate activity and cost per project for today.
 //!
-//! Phase 7 ships the plumbing: a `budget` table, a sane aggregate query, and
-//! the command surface. Runtime cost parsers (Claude `/cost`, Codex per-msg
-//! totals, Gemini summary) feed rows in follow-up work — `budget` already
-//! accepts the schema they need.
+//! The `budget` table accepts rows from runtime cost parsers (Claude `/cost`,
+//! Codex per-msg totals, Gemini summary). The command reports whatever has
+//! been recorded plus counts from `messages` and `approvals`.
 
 use std::path::Path;
 

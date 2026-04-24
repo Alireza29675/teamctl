@@ -5,7 +5,7 @@
 
 ## Context
 
-teamctl must keep N long-lived agent processes alive. Original plan: `systemd --user` template units, Linux-only v1. During Phase 0 review we chose to develop on macOS, which has no systemd.
+teamctl must keep N long-lived agent processes alive. Original plan: `systemd --user` template units, Linux-only. macOS has no systemd, and we wanted first-class dev on macOS, so supervision had to abstract.
 
 ## Decision
 
@@ -20,9 +20,9 @@ pub trait Supervisor {
 }
 ```
 
-Phase 1 ships one implementation: **`TmuxSupervisor`** — for each agent, spawns a detached `tmux new-session -d -s a-<project>-<agent>` running the agent wrapper. The wrapper is a simple `while true; do …; sleep 5; done` loop, so crashes restart within 5 s without needing a system supervisor.
+v0.1 ships one implementation: **`TmuxSupervisor`** — for each agent, spawns a detached `tmux new-session -d -s a-<project>-<agent>` running the agent wrapper. The wrapper is a simple `while true; do …; sleep 5; done` loop, so crashes restart within 5 s without needing a system supervisor.
 
-Phase 7 adds two production back-ends as additive implementations behind the same trait:
+Two production back-ends plug in behind the same trait:
 
 - `SystemdSupervisor` — `~/.config/systemd/user/agent@.service` template unit, `Restart=always`, survives reboot.
 - `LaunchdSupervisor` — `~/Library/LaunchAgents/run.teamctl.<project>.<agent>.plist`, `KeepAlive=true`, survives reboot.

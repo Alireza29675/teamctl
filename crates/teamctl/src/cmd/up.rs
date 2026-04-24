@@ -74,7 +74,7 @@ pub fn register_all_public(compose: &Compose) -> Result<()> {
                 h.spec.reports_to.as_deref(),
             ],
         )?;
-        // Per-agent ACLs (Phase 2).
+        // Per-agent ACLs.
         let can_dm = serde_json::to_string(&h.spec.can_dm)?;
         let can_bc = serde_json::to_string(&h.spec.can_broadcast)?;
         conn.execute(

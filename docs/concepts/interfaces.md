@@ -32,7 +32,7 @@ Each manager declares which interfaces it receives from. Approvals are routed to
 
 | Interface | Inbound DMs | Approval buttons | Notes |
 |---|---|---|---|
-| telegram | ✓ | ✓ | First adapter (Phase 6). |
+| telegram | ✓ | ✓ | Shipping adapter. |
 | discord | ✓ | ✓ | Slash commands + buttons. |
 | imessage | ✓ | ✗ (reply "approve 3") | macOS host only. |
 | cli | ✓ | ✓ | `teamctl chat` / `teamctl pending`. |

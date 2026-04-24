@@ -2,9 +2,6 @@
 //!
 //! The actual connection handling lives in `team-mcp`; this module defines
 //! the schema + migrations so both crates agree on the shape of the data.
-//!
-//! The intentionally minimal Phase 1 schema: `projects`, `agents`,
-//! `messages`. Phases 4/5 add `channels`, `bridges`, `approvals`.
 
 /// Idempotent schema bootstrap. Safe to run on every connect.
 pub const SCHEMA: &str = r#"
@@ -45,7 +42,7 @@ CREATE INDEX IF NOT EXISTS messages_recipient_idx
 CREATE INDEX IF NOT EXISTS messages_project_idx
     ON messages(project_id, sent_at);
 
--- Phase 2: channels + subscriptions + per-agent ACLs.
+-- Channels + subscriptions + per-agent ACLs.
 CREATE TABLE IF NOT EXISTS channels (
     id         TEXT PRIMARY KEY,               -- "<project>:<name>"
     project_id TEXT NOT NULL,
@@ -68,7 +65,7 @@ CREATE TABLE IF NOT EXISTS agent_acls (
     can_bcast_json  TEXT NOT NULL DEFAULT '[]'     -- ["product","all"]
 );
 
--- Phase 4: inter-project manager bridges.
+-- Inter-project manager bridges.
 CREATE TABLE IF NOT EXISTS bridges (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     from_agent   TEXT NOT NULL,             -- "<project>:<agent>", must be a manager
@@ -83,7 +80,7 @@ CREATE TABLE IF NOT EXISTS bridges (
 CREATE INDEX IF NOT EXISTS bridges_open_idx
     ON bridges(expires_at, closed_at);
 
--- Phase 5: human-in-the-loop permission fabric.
+-- Human-in-the-loop permission fabric.
 CREATE TABLE IF NOT EXISTS approvals (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id     TEXT NOT NULL,
@@ -103,8 +100,8 @@ CREATE TABLE IF NOT EXISTS approvals (
 CREATE INDEX IF NOT EXISTS approvals_pending_idx
     ON approvals(status, expires_at);
 
--- Phase 7: budget ledger. Rows are appended by interface adapters and by
--- future runtime cost parsers. `teamctl budget` aggregates per project/day.
+-- Budget ledger. Rows are appended by interface adapters and by runtime
+-- cost parsers. `teamctl budget` aggregates per project/day.
 CREATE TABLE IF NOT EXISTS budget (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id  TEXT NOT NULL,

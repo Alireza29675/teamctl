@@ -34,11 +34,30 @@ struct Cli {
     /// Comma-separated list of authorized chat ids. Required.
     #[arg(long, env = "TEAMCTL_TELEGRAM_CHATS", value_delimiter = ',')]
     authorized_chat_ids: Vec<i64>,
+
+    /// Scope this bot to one manager. When set, it forwards only messages
+    /// addressed to that manager and only surfaces approvals requested by
+    /// agents in that project. Two bot instances against the same mailbox
+    /// can safely coexist when each scopes to a different manager.
+    ///
+    /// Format: `<project>:<manager>`.
+    #[arg(long, env = "TEAMCTL_MANAGER")]
+    manager: Option<String>,
 }
 
 struct State {
     conn: Mutex<Connection>,
     allow: Vec<i64>,
+    /// `<project>:<manager>` if this instance is scoped; otherwise all managers.
+    manager: Option<String>,
+}
+
+impl State {
+    fn manager_project(&self) -> Option<&str> {
+        self.manager
+            .as_deref()
+            .and_then(|m| m.split_once(':').map(|(p, _)| p))
+    }
 }
 
 impl State {
@@ -62,6 +81,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(State {
         conn: Mutex::new(conn),
         allow: cli.authorized_chat_ids,
+        manager: cli.manager,
     });
 
     // Outbound: poll approvals + mailbox, surface to primary chat.
@@ -204,18 +224,38 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
 
         let approvals: Vec<(i64, String, String, String)> = {
             let c = state.conn.lock().await;
-            let mut stmt = c
-                .prepare(
-                    "SELECT id, agent_id, action, summary FROM approvals
-                     WHERE status='pending' AND id > ?1 ORDER BY id",
-                )
-                .unwrap();
-            stmt.query_map(params![last_approval_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })
-            .unwrap()
-            .flatten()
-            .collect()
+            let rows: Vec<(i64, String, String, String)> = match state.manager_project() {
+                Some(project) => {
+                    let mut stmt = c
+                        .prepare(
+                            "SELECT id, agent_id, action, summary FROM approvals
+                             WHERE status='pending' AND id > ?1 AND project_id = ?2
+                             ORDER BY id",
+                        )
+                        .unwrap();
+                    stmt.query_map(params![last_approval_id, project], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                    })
+                    .unwrap()
+                    .flatten()
+                    .collect()
+                }
+                None => {
+                    let mut stmt = c
+                        .prepare(
+                            "SELECT id, agent_id, action, summary FROM approvals
+                             WHERE status='pending' AND id > ?1 ORDER BY id",
+                        )
+                        .unwrap();
+                    stmt.query_map(params![last_approval_id], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                    })
+                    .unwrap()
+                    .flatten()
+                    .collect()
+                }
+            };
+            rows
         };
         for (id, agent, action, summary) in approvals {
             last_approval_id = last_approval_id.max(id);
@@ -229,23 +269,48 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
 
         let forwardable: Vec<(i64, String, String, String)> = {
             let c = state.conn.lock().await;
-            let mut stmt = c
-                .prepare(
-                    "SELECT m.id, m.sender, m.recipient, m.text FROM messages m
-                     JOIN agents a ON a.id = m.recipient
-                     WHERE m.id > ?1
-                       AND m.sender != 'user:telegram'
-                       AND m.acked_at IS NULL
-                       AND a.is_manager = 1
-                     ORDER BY m.id",
-                )
-                .unwrap();
-            stmt.query_map(params![last_msg_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })
-            .unwrap()
-            .flatten()
-            .collect()
+            let rows: Vec<(i64, String, String, String)> = match state.manager.as_deref() {
+                Some(mgr) => {
+                    let mut stmt = c
+                        .prepare(
+                            "SELECT m.id, m.sender, m.recipient, m.text FROM messages m
+                             JOIN agents a ON a.id = m.recipient
+                             WHERE m.id > ?1
+                               AND m.sender != 'user:telegram'
+                               AND m.acked_at IS NULL
+                               AND a.is_manager = 1
+                               AND a.id = ?2
+                             ORDER BY m.id",
+                        )
+                        .unwrap();
+                    stmt.query_map(params![last_msg_id, mgr], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                    })
+                    .unwrap()
+                    .flatten()
+                    .collect()
+                }
+                None => {
+                    let mut stmt = c
+                        .prepare(
+                            "SELECT m.id, m.sender, m.recipient, m.text FROM messages m
+                             JOIN agents a ON a.id = m.recipient
+                             WHERE m.id > ?1
+                               AND m.sender != 'user:telegram'
+                               AND m.acked_at IS NULL
+                               AND a.is_manager = 1
+                             ORDER BY m.id",
+                        )
+                        .unwrap();
+                    stmt.query_map(params![last_msg_id], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                    })
+                    .unwrap()
+                    .flatten()
+                    .collect()
+                }
+            };
+            rows
         };
         for (id, sender, recipient, text) in forwardable {
             last_msg_id = last_msg_id.max(id);

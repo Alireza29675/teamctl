@@ -1,4 +1,4 @@
-//! Phase 4: cross-project isolation + bridges.
+//! Cross-project isolation + bridges.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};

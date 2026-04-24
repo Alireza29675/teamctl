@@ -333,9 +333,8 @@ impl Store {
         Ok(n)
     }
 
-    /// Decide one approval (CLI + interface paths share this).
-    /// Phase 6 (`team-bot`) is the first caller; `teamctl approve/deny`
-    /// writes directly with a canned SQL UPDATE today.
+    /// Decide one approval. Used by interface adapters (`team-bot` et al.);
+    /// `teamctl approve/deny` writes directly with a canned SQL UPDATE.
     #[allow(dead_code)]
     pub fn decide_approval(
         &self,

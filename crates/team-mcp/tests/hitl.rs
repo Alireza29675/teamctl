@@ -1,4 +1,4 @@
-//! Phase 5: request_approval + org_chart.
+//! request_approval + org_chart.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};

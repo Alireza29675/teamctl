@@ -1,0 +1,46 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: news-
+
+budget:
+  daily_usd_limit: 20.0
+  message_ttl_hours: 72
+
+hitl:
+  globally_sensitive_actions:
+    - publish                   # news goes live
+    - release                   # web-site deploy
+    - external_email            # outbound mail
+    - merge_to_main             # site repo merges
+  auto_approve_windows: []
+
+interfaces:
+  - type: email
+    name: head-editor-mail
+    config:
+      # IMAP inbound + SMTP outbound; the adapter watches this mailbox for
+      # replies from the head editor and delivers them into the mailbox as
+      # `sender=user:email`.
+      #
+      # Roadmap: the email adapter ships alongside Discord/iMessage. Until
+      # then, use `teamctl send news:head_editor "…"` to stand in for email.
+      imap_host: imap.fastmail.com
+      imap_user_env: NEWSROOM_EMAIL_USER
+      imap_pass_env: NEWSROOM_EMAIL_PASS
+      smtp_host: smtp.fastmail.com
+      smtp_user_env: NEWSROOM_EMAIL_USER
+      smtp_pass_env: NEWSROOM_EMAIL_PASS
+      from: "Newsroom Desk <newsroom@example.com>"
+      to:   "me@example.com"
+      manager: newsroom:head_editor
+      poll_seconds: 60
+
+projects:
+  - file: projects/newsroom.yaml
+  - file: projects/blog-site.yaml

@@ -1,8 +1,4 @@
 //! YAML schema for `team-compose.yaml` and `projects/<id>.yaml`.
-//!
-//! Phase 1 implements the v2 subset used by `examples/hello-team/`: broker,
-//! supervisor, one project, managers, a handful of workers, channels. Later
-//! phases add budget, HITL, bridges, multi-runtime — additive fields only.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

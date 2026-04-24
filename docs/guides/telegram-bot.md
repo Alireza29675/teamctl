@@ -27,7 +27,7 @@ export TEAMCTL_TELEGRAM_CHATS="75473051"
 team-bot --mailbox ./state/mailbox.db
 ```
 
-(Phase 7 will add `teamctl bot setup` to handle this interactively.)
+(An interactive `teamctl bot setup` wraps this in one command.)
 
 ## What the bot does
 

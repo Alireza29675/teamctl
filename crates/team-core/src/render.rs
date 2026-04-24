@@ -4,7 +4,8 @@
 //! - `envs/<project>-<agent>.env`      — env vars for the agent wrapper.
 //! - `mcp/<project>-<agent>.json`      — MCP stdio config for the runtime.
 //!
-//! Phase 7 will add systemd / launchd unit rendering behind a feature flag.
+//! `systemd` / `launchd` unit rendering lives behind a feature flag when
+//! those back-ends are enabled via `supervisor.type`.
 
 use std::path::{Path, PathBuf};
 

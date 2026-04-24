@@ -2,9 +2,9 @@
 
 <!-- One or two sentences. What does this change do? -->
 
-## Phase / issue
+## Linked issue
 
-<!-- e.g. "Phase 2 — broadcast ACLs" or "fixes #42" -->
+<!-- e.g. "fixes #42" -->
 
 ## Test plan
 

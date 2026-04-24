@@ -1,4 +1,4 @@
-//! Phase 2: ACLs + broadcast + channel delivery.
+//! ACLs + broadcast + channel delivery.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -58,7 +58,7 @@ fn bin() -> std::path::PathBuf {
     env!("CARGO_BIN_EXE_team-mcp").into()
 }
 
-/// Bootstrap the Phase 2 tables by hand (test doesn't run `teamctl up`).
+/// Bootstrap the channel + ACL tables by hand (test doesn't run `teamctl up`).
 fn seed(mailbox: &std::path::Path) {
     let conn = Connection::open(mailbox).unwrap();
     conn.busy_timeout(std::time::Duration::from_secs(5))

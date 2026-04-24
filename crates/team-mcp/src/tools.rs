@@ -320,7 +320,7 @@ async fn inbox_watch(ctx: &Ctx, args: Value) -> Result<Value, String> {
     } else {
         serde_json::from_value(args).map_err(|e| e.to_string())?
     };
-    // Poll every 250 ms up to the deadline. Simple, good enough for Phase 1.
+    // Poll every 250 ms up to the deadline.
     let mut remaining = a.timeout_ms;
     loop {
         let msgs = ctx

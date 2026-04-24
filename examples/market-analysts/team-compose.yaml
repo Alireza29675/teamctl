@@ -1,0 +1,34 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: markets-
+
+budget:
+  daily_usd_limit: 15.0
+  message_ttl_hours: 168          # keep a week of market chatter
+
+hitl:
+  globally_sensitive_actions:
+    # This team is read-only by design. Any action that would move money
+    # goes through HITL.
+    - payment
+    - trade
+    - external_email
+    - external_api_post
+    - publish
+
+interfaces:
+  - type: telegram
+    name: tg-markets
+    config:
+      bot_token_env: MARKETS_BOT_TOKEN
+      authorized_chat_ids_env: MARKETS_CHAT_IDS
+      manager: markets:chief
+
+projects:
+  - file: projects/markets.yaml

@@ -1,0 +1,58 @@
+version: 2
+
+project:
+  id: markets
+  name: Market Analysts
+  cwd: ./workspace
+
+channels:
+  - name: desk              # all analysts, for regular signal sharing
+    members: [chief, macro, equities, crypto, quant_risk]
+  - name: alerts            # escalations — anything posted here gets forwarded
+    members: [chief, macro, equities, crypto, quant_risk]
+
+managers:
+  chief:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/chief.md
+    permission_mode: auto
+    telegram_inbox: true
+    reports_to_user: true
+    autonomy: low_risk_only
+    can_dm: [macro, equities, crypto, quant_risk]
+    can_broadcast: [desk, alerts]
+
+workers:
+  macro:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/macro.md
+    reports_to: chief
+    can_dm: [chief, equities, crypto, quant_risk]
+    can_broadcast: [desk, alerts]
+
+  equities:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/equities.md
+    reports_to: chief
+    can_dm: [chief, macro, quant_risk]
+    can_broadcast: [desk, alerts]
+
+  crypto:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/crypto.md
+    reports_to: chief
+    can_dm: [chief, macro, quant_risk]
+    can_broadcast: [desk, alerts]
+
+  quant_risk:
+    runtime: claude-code
+    model: claude-opus-4-7
+    permission_mode: plan       # read-only: can think, cannot mutate
+    role_prompt: roles/quant_risk.md
+    reports_to: chief
+    can_dm: [chief, macro, equities, crypto]
+    can_broadcast: [desk, alerts]

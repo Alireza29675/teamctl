@@ -1,8 +1,8 @@
 //! Process supervision.
 //!
-//! Phase 1 ships a portable tmux back-end that works on macOS and Linux.
-//! Phase 7 adds `SystemdSupervisor` and `LaunchdSupervisor` behind the same
-//! trait.
+//! The default back-end is a portable `TmuxSupervisor` that works on macOS
+//! and Linux. `SystemdSupervisor` and `LaunchdSupervisor` plug in behind
+//! the same trait when the host supports them.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

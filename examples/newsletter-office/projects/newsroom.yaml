@@ -1,0 +1,49 @@
+version: 2
+
+project:
+  id: newsroom
+  name: Newsroom
+  cwd: ./newsroom-workspace
+
+channels:
+  - name: editorial
+    members: [head_editor, news_writer, fact_checker, seo_research]
+  - name: all
+    members: "*"
+
+managers:
+  head_editor:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/head_editor.md
+    permission_mode: auto
+    telegram_inbox: false
+    reports_to_user: true
+    autonomy: low_risk_only
+    can_dm: [news_writer, fact_checker, seo_research]
+    can_broadcast: [editorial, all]
+
+workers:
+  news_writer:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/news_writer.md
+    reports_to: head_editor
+    can_dm: [head_editor, fact_checker, seo_research]
+    can_broadcast: [editorial]
+
+  fact_checker:
+    runtime: gemini
+    model: gemini-3.0-pro
+    role_prompt: roles/fact_checker.md
+    reports_to: head_editor
+    can_dm: [head_editor, news_writer]
+    can_broadcast: [editorial]
+
+  seo_research:
+    runtime: gemini
+    model: gemini-3.0-pro
+    role_prompt: roles/seo_research.md
+    reports_to: head_editor
+    can_dm: [head_editor, news_writer]
+    can_broadcast: [editorial]

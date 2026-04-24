@@ -1,0 +1,44 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: startup-
+
+budget:
+  daily_usd_limit: 25.0
+  message_ttl_hours: 72
+
+hitl:
+  globally_sensitive_actions:
+    - publish
+    - release
+    - deploy
+    - payment
+    - external_email
+    - external_api_post
+    - merge_to_main
+
+interfaces:
+  # Two Telegram bots, each scoped to a single manager. They share the
+  # same SQLite mailbox but each only forwards traffic for its manager
+  # and only surfaces approvals from its project's agents.
+  - type: telegram
+    name: tg-founder
+    config:
+      bot_token_env: FOUNDER_BOT_TOKEN
+      authorized_chat_ids_env: FOUNDER_CHAT_IDS
+      manager: startup:founder
+
+  - type: telegram
+    name: tg-product
+    config:
+      bot_token_env: PRODUCT_BOT_TOKEN
+      authorized_chat_ids_env: PRODUCT_CHAT_IDS
+      manager: startup:product_manager
+
+projects:
+  - file: projects/startup.yaml

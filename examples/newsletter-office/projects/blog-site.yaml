@@ -1,0 +1,40 @@
+version: 2
+
+project:
+  id: blog-site
+  name: Blog Site
+  cwd: ./blog-site-workspace
+
+channels:
+  - name: engineering
+    members: [web_manager, frontend_dev, backend_dev]
+  - name: all
+    members: "*"
+
+managers:
+  web_manager:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/web_manager.md
+    permission_mode: auto
+    reports_to_user: true
+    autonomy: low_risk_only
+    can_dm: [frontend_dev, backend_dev]
+    can_broadcast: [engineering, all]
+
+workers:
+  frontend_dev:
+    runtime: codex
+    model: gpt-5-codex
+    role_prompt: roles/frontend_dev.md
+    reports_to: web_manager
+    can_dm: [web_manager, backend_dev]
+    can_broadcast: [engineering]
+
+  backend_dev:
+    runtime: codex
+    model: gpt-5-codex
+    role_prompt: roles/backend_dev.md
+    reports_to: web_manager
+    can_dm: [web_manager, frontend_dev]
+    can_broadcast: [engineering]
