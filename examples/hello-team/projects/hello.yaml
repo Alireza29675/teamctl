@@ -1,0 +1,32 @@
+version: 2
+
+project:
+  id: hello
+  name: Hello Team
+  cwd: .
+
+channels:
+  - name: all
+    members: "*"
+
+managers:
+  manager:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/manager.md
+    permission_mode: auto
+    telegram_inbox: true
+    reports_to_user: true
+    autonomy: low_risk_only
+    can_dm: [dev]
+    can_broadcast: [all]
+
+workers:
+  dev:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/dev.md
+    permission_mode: auto
+    reports_to: manager
+    can_dm: [manager]
+    can_broadcast: [all]

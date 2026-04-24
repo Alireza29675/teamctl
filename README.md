@@ -14,42 +14,37 @@ teamctl up
 
 ```mermaid
 flowchart TB
-    User(["👤 You"])
-    Bot["team-bot<br/><sub>Telegram</sub>"]
-    User <-->|DM, approvals| Bot
+    User(["👤 you"])
+    Bot["team-bot (Telegram)"]
+    User <--> Bot
 
-    subgraph Mailbox["team-mcp · SQLite mailbox"]
-        MBQ[("messages · agents · channels<br/>(WAL, project-scoped)")]
+    subgraph ProjA["Project A"]
+        MgrA(["manager"])
+        W1(["worker 1"])
+        W2(["worker 2"])
+        MgrA --- W1
+        MgrA --- W2
     end
 
-    subgraph ProjA["project: fork-vancouver"]
-        ProdMgr(["🧭 product-mgr<br/><sub>Claude Code · Opus</sub>"])
-        Dev1(["🛠 dev1<br/><sub>Codex</sub>"])
-        Dev2(["🎨 dev2<br/><sub>Claude · Sonnet</sub>"])
-        Critic(["🔍 critic<br/><sub>Claude · Opus</sub>"])
+    subgraph ProjB["Project B"]
+        MgrB(["manager"])
+        W3(["worker"])
+        MgrB --- W3
     end
 
-    subgraph ProjB["project: blog"]
-        Editor(["✍️ editor<br/><sub>Claude Code</sub>"])
-        Writer(["📝 writer<br/><sub>Gemini</sub>"])
-    end
+    Mailbox[("team-mcp<br/>SQLite mailbox")]
 
-    Bot <--> MBQ
-
-    ProdMgr <-->|DM / broadcast| MBQ
-    Dev1 <-->|DM / broadcast| MBQ
-    Dev2 <-->|DM / broadcast| MBQ
-    Critic <-->|DM / broadcast| MBQ
-    Editor <-->|DM / broadcast| MBQ
-    Writer <-->|DM / broadcast| MBQ
-
-    ProdMgr -. "bridge (opt-in, TTL)" .-> Editor
+    Bot <--> MgrA
+    Bot <--> MgrB
+    ProjA <--> Mailbox
+    ProjB <--> Mailbox
+    MgrA <-. bridge (opt-in, TTL) .-> MgrB
 ```
 
-- Each agent is a real long-lived CLI session in its own `tmux` pane — **not** an in-process role.
-- They only share memory through the mailbox. MCP tools (`dm`, `broadcast`, `inbox_watch`, `list_team`) are the whole API.
-- Projects are isolated by default. Two managers in different projects can only DM each other while a **bridge** is open.
-- Any action tagged `publish`, `release`, `payment`, `deploy`, etc. pauses on `request_approval` and shows up in Telegram with Approve / Deny buttons.
+- **Every node is a real long-lived CLI session** — Claude Code, Codex, or Gemini — running in its own `tmux` pane. Not in-process roles.
+- **The mailbox is the only shared memory.** Agents talk via `dm`, `broadcast`, `inbox_watch`, `list_team` MCP tools.
+- **Projects are isolated.** A worker in Project A cannot reach Project B unless Alireza opens a bridge between the two managers.
+- **Brand-sensitive actions pause.** Calls tagged `publish`, `release`, `deploy`, `payment`, … block on `request_approval` and surface in Telegram with Approve / Deny.
 
 ## Status
 

@@ -1,4 +1,9 @@
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+
+mod cmd;
 
 #[derive(Parser)]
 #[command(
@@ -8,30 +13,41 @@ use clap::{Parser, Subcommand};
     long_about = None,
 )]
 struct Cli {
+    /// Compose root (directory containing `team-compose.yaml`).
+    #[arg(long, short = 'C', env = "TEAMCTL_ROOT", default_value = ".")]
+    root: PathBuf,
+
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Parse the compose tree and validate invariants.
-    Validate {
-        #[arg(default_value = ".")]
-        path: String,
-    },
-    /// Bring the fleet up.
+    /// Parse the compose tree and check invariants.
+    Validate,
+    /// Render artifacts and start every agent's tmux session.
     Up,
-    /// Bring the fleet down. State is preserved.
+    /// Stop every agent's tmux session. State is preserved.
     Down,
-    /// Apply compose changes by diffing against the last-applied snapshot.
+    /// Apply compose changes. Restarts changed agents only.
     Reload,
-    /// Print a table of agents and their states.
+    /// Print agents, supervisor state, inbox depth.
     Status,
-    /// Tail journal + per-agent logs.
-    Logs { target: String },
+    /// Tail logs for one agent (tmux pipe-pane).
+    Logs {
+        /// Target id as `<project>:<agent>`.
+        target: String,
+    },
+    /// Inject a message as `sender=cli`.
+    Send {
+        /// Recipient `<project>:<agent>`.
+        target: String,
+        /// Message text.
+        text: String,
+    },
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("TEAMCTL_LOG")
@@ -40,21 +56,18 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let root = cli
+        .root
+        .canonicalize()
+        .with_context(|| format!("canonicalize --root {}", cli.root.display()))?;
+
     match cli.command {
-        None => {
-            println!(
-                "teamctl {} — run `teamctl --help` for usage.",
-                team_core::VERSION
-            );
-        }
-        Some(Command::Validate { path }) => {
-            println!("validate: {path} (stub — implemented in Phase 1)");
-        }
-        Some(Command::Up) => println!("up: stub (Phase 1)"),
-        Some(Command::Down) => println!("down: stub (Phase 1)"),
-        Some(Command::Reload) => println!("reload: stub (Phase 1)"),
-        Some(Command::Status) => println!("status: stub (Phase 1)"),
-        Some(Command::Logs { target }) => println!("logs {target}: stub (Phase 1)"),
+        Command::Validate => cmd::validate::run(&root),
+        Command::Up => cmd::up::run(&root),
+        Command::Down => cmd::down::run(&root),
+        Command::Reload => cmd::reload::run(&root),
+        Command::Status => cmd::status::run(&root),
+        Command::Logs { target } => cmd::logs::run(&root, &target),
+        Command::Send { target, text } => cmd::send::run(&root, &target, &text),
     }
-    Ok(())
 }
