@@ -21,6 +21,9 @@ pub struct Global {
     pub supervisor: SupervisorCfg,
 
     #[serde(default)]
+    pub budget: Budget,
+
+    #[serde(default)]
     pub hitl: Hitl,
 
     /// Human-facing inbound channels. Telegram is one adapter; Discord,
@@ -42,6 +45,18 @@ pub struct Interface {
     /// Adapter-specific config (bot token, channel id, allowlist, …).
     #[serde(default)]
     pub config: serde_yaml::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Budget {
+    #[serde(default)]
+    pub daily_usd_limit: Option<f64>,
+    #[serde(default)]
+    pub warn_threshold_pct: Option<u32>,
+    #[serde(default)]
+    pub message_ttl_hours: Option<u32>,
+    #[serde(default)]
+    pub per_project_usd_limit: std::collections::BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

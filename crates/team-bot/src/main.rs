@@ -138,16 +138,15 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
                     "SELECT id, agent_id, action, summary FROM approvals WHERE status='pending' ORDER BY id",
                 )
                 .unwrap();
-            stmt.query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })
-            .unwrap()
-            .flatten()
-            .collect()
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .unwrap()
+                .flatten()
+                .collect()
         };
         drop(c);
         if rows.is_empty() {
-            bot.send_message(msg.chat.id, "No pending approvals.").await?;
+            bot.send_message(msg.chat.id, "No pending approvals.")
+                .await?;
         } else {
             let mut out = String::from("Pending approvals:\n");
             for (id, agent, action, summary) in rows {

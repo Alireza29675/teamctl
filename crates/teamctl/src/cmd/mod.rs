@@ -1,6 +1,8 @@
 pub mod approval;
 pub mod bridge;
+pub mod budget;
 pub mod down;
+pub mod gc;
 pub mod logs;
 pub mod reload;
 pub mod send;

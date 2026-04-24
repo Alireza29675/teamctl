@@ -64,6 +64,13 @@ enum Command {
         #[arg(long)]
         note: Option<String>,
     },
+    /// Per-project activity and cost for today.
+    Budget {
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Garbage-collect expired messages and stale approvals.
+    Gc,
 }
 
 #[derive(Subcommand)]
@@ -110,6 +117,8 @@ fn main() -> Result<()> {
         Command::Status => cmd::status::run(&root),
         Command::Logs { target } => cmd::logs::run(&root, &target),
         Command::Send { target, text } => cmd::send::run(&root, &target, &text),
+        Command::Budget { project } => cmd::budget::run(&root, project.as_deref()),
+        Command::Gc => cmd::gc::run(&root),
         Command::Pending => cmd::approval::pending(&root),
         Command::Approve { id, note } => cmd::approval::decide(&root, id, true, note.as_deref()),
         Command::Deny { id, note } => cmd::approval::decide(&root, id, false, note.as_deref()),

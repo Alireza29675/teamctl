@@ -102,4 +102,20 @@ CREATE TABLE IF NOT EXISTS approvals (
 
 CREATE INDEX IF NOT EXISTS approvals_pending_idx
     ON approvals(status, expires_at);
+
+-- Phase 7: budget ledger. Rows are appended by interface adapters and by
+-- future runtime cost parsers. `teamctl budget` aggregates per project/day.
+CREATE TABLE IF NOT EXISTS budget (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id  TEXT NOT NULL,
+    agent_id    TEXT,
+    runtime     TEXT,
+    usd         REAL NOT NULL DEFAULT 0,
+    input_tok   INTEGER NOT NULL DEFAULT 0,
+    output_tok  INTEGER NOT NULL DEFAULT 0,
+    observed_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS budget_project_day_idx
+    ON budget(project_id, observed_at);
 "#;
