@@ -1,0 +1,26 @@
+version: 2
+
+project:
+  id: product
+  name: Product
+  cwd: .
+
+channels:
+  - name: all
+    members: "*"
+
+managers:
+  manager:
+    runtime: claude-code
+    model: claude-opus-4-7
+    telegram_inbox: true
+    reports_to_user: true
+    can_dm: [dev]
+    can_broadcast: [all]
+
+workers:
+  dev:
+    runtime: claude-code
+    reports_to: manager
+    can_dm: [manager]
+    can_broadcast: [all]

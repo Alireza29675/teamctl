@@ -45,6 +45,33 @@ enum Command {
         /// Message text.
         text: String,
     },
+    /// Manage inter-project manager bridges.
+    Bridge {
+        #[command(subcommand)]
+        action: BridgeAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BridgeAction {
+    /// Open a new bridge between two managers in different projects.
+    Open {
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        topic: String,
+        /// TTL in minutes. Default 120.
+        #[arg(long, default_value_t = 120)]
+        ttl: u64,
+    },
+    /// Close a bridge by id.
+    Close { id: i64 },
+    /// List bridges (open, expired, closed).
+    List,
+    /// Print the transcript for a bridge.
+    Log { id: i64 },
 }
 
 fn main() -> Result<()> {
@@ -69,5 +96,16 @@ fn main() -> Result<()> {
         Command::Status => cmd::status::run(&root),
         Command::Logs { target } => cmd::logs::run(&root, &target),
         Command::Send { target, text } => cmd::send::run(&root, &target, &text),
+        Command::Bridge { action } => match action {
+            BridgeAction::Open {
+                from,
+                to,
+                topic,
+                ttl,
+            } => cmd::bridge::open(&root, &from, &to, &topic, ttl),
+            BridgeAction::Close { id } => cmd::bridge::close(&root, id),
+            BridgeAction::List => cmd::bridge::list(&root),
+            BridgeAction::Log { id } => cmd::bridge::log(&root, id),
+        },
     }
 }

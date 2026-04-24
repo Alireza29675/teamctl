@@ -159,9 +159,22 @@ async fn dm(ctx: &Ctx, args: Value) -> Result<Value, String> {
     let caller_project = ctx.project().to_string();
     let recipient_project = recipient.split(':').next().unwrap_or_default().to_string();
     if recipient_project != caller_project {
-        return Err(format!(
-            "project isolation: cannot DM across projects ({caller_project} -> {recipient_project}); open a bridge",
-        ));
+        // Cross-project: only allowed when a live bridge authorizes it.
+        match ctx
+            .store
+            .live_bridge(&ctx.agent_id, &recipient)
+            .map_err(|e| e.to_string())?
+        {
+            Some(_bridge_id) => {
+                // Permitted. Thread-id is used by `teamctl bridge log` to
+                // reconstruct the transcript.
+            }
+            None => {
+                return Err(format!(
+                    "project isolation: cannot DM across projects ({caller_project} -> {recipient_project}); open a bridge",
+                ));
+            }
+        }
     }
     // ACL: `can_dm` must include the recipient (or be empty = unrestricted).
     if !ctx
@@ -174,6 +187,17 @@ async fn dm(ctx: &Ctx, args: Value) -> Result<Value, String> {
             sender = ctx.agent_id
         ));
     }
+    // If this is a bridged DM, record the bridge id in thread_id for auditing.
+    let bridge_thread = if recipient_project != caller_project {
+        ctx.store
+            .live_bridge(&ctx.agent_id, &recipient)
+            .ok()
+            .flatten()
+            .map(|id| format!("bridge:{id}"))
+    } else {
+        None
+    };
+    let thread_id = bridge_thread.as_deref().or(a.thread_id.as_deref());
     let id = ctx
         .store
         .send_dm(
@@ -181,7 +205,7 @@ async fn dm(ctx: &Ctx, args: Value) -> Result<Value, String> {
             &ctx.agent_id,
             &recipient,
             &a.text,
-            a.thread_id.as_deref(),
+            thread_id,
         )
         .map_err(|e| e.to_string())?;
     Ok(content_json(&json!({ "id": id, "recipient": recipient })))

@@ -125,6 +125,26 @@ impl Store {
         Ok(rows)
     }
 
+    /// Return the id of a currently-live bridge linking `from` and `to` (in
+    /// either direction), or `None` if no live bridge authorizes the DM.
+    pub fn live_bridge(&self, from: &str, to: &str) -> Result<Option<i64>> {
+        let now = Self::now();
+        let conn = self.conn.lock().unwrap();
+        let row: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM bridges
+                 WHERE closed_at IS NULL
+                   AND expires_at > ?1
+                   AND ((from_agent = ?2 AND to_agent = ?3)
+                     OR (from_agent = ?3 AND to_agent = ?2))
+                 LIMIT 1",
+                params![now, from, to],
+                |r| r.get(0),
+            )
+            .ok();
+        Ok(row)
+    }
+
     /// Does `agent_id` have permission to DM `recipient_agent_id`?
     /// An empty `can_dm` list means unrestricted (any same-project agent).
     pub fn can_dm(&self, agent_id: &str, recipient_agent_id: &str) -> Result<bool> {

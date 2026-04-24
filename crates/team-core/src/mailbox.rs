@@ -66,4 +66,19 @@ CREATE TABLE IF NOT EXISTS agent_acls (
     can_dm_json     TEXT NOT NULL DEFAULT '[]',    -- ["dev","critic"]
     can_bcast_json  TEXT NOT NULL DEFAULT '[]'     -- ["product","all"]
 );
+
+-- Phase 4: inter-project manager bridges.
+CREATE TABLE IF NOT EXISTS bridges (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_agent   TEXT NOT NULL,             -- "<project>:<agent>", must be a manager
+    to_agent     TEXT NOT NULL,             -- "<project>:<agent>", must be a manager
+    topic        TEXT NOT NULL,
+    opened_by    TEXT NOT NULL,             -- "user:<handle>" or "cli"
+    opened_at    REAL NOT NULL,
+    expires_at   REAL NOT NULL,
+    closed_at    REAL
+);
+
+CREATE INDEX IF NOT EXISTS bridges_open_idx
+    ON bridges(expires_at, closed_at);
 "#;

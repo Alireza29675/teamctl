@@ -1,0 +1,13 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: a-
+
+projects:
+  - file: projects/product.yaml
+  - file: projects/blog.yaml
