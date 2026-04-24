@@ -21,4 +21,4 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 rusqlite.workspace = true
-# teloxide is introduced in Phase 6; kept out of Phase 0 scaffold.
+teloxide = { version = "0.13", features = ["macros"] }
