@@ -73,6 +73,61 @@ pub fn register_all_public(compose: &Compose) -> Result<()> {
                 if h.is_manager { 1 } else { 0 }
             ],
         )?;
+        // Per-agent ACLs (Phase 2).
+        let can_dm = serde_json::to_string(&h.spec.can_dm)?;
+        let can_bc = serde_json::to_string(&h.spec.can_broadcast)?;
+        conn.execute(
+            "INSERT INTO agent_acls (agent_id, can_dm_json, can_bcast_json)
+             VALUES (?1,?2,?3)
+             ON CONFLICT(agent_id) DO UPDATE SET can_dm_json=excluded.can_dm_json, can_bcast_json=excluded.can_bcast_json",
+            params![h.id(), can_dm, can_bc],
+        )?;
+    }
+
+    // Channels + membership. Wipe and rewrite so removed members disappear.
+    for p in &compose.projects {
+        for ch in &p.channels {
+            let cid = format!("{}:{}", p.project.id, ch.name);
+            let wildcard = matches!(
+                ch.members,
+                team_core::compose::ChannelMembers::All(ref s) if s == "*"
+            );
+            conn.execute(
+                "INSERT INTO channels (id, project_id, name, wildcard) VALUES (?1,?2,?3,?4)
+                 ON CONFLICT(id) DO UPDATE SET wildcard=excluded.wildcard",
+                params![cid, p.project.id, ch.name, if wildcard { 1 } else { 0 }],
+            )?;
+            conn.execute(
+                "DELETE FROM channel_members WHERE channel_id = ?1",
+                params![cid],
+            )?;
+            match &ch.members {
+                team_core::compose::ChannelMembers::All(_) => {
+                    // Wildcard: join every agent in this project.
+                    let agents: Vec<String> = p
+                        .managers
+                        .keys()
+                        .chain(p.workers.keys())
+                        .map(|a| format!("{}:{}", p.project.id, a))
+                        .collect();
+                    for aid in agents {
+                        conn.execute(
+                            "INSERT OR IGNORE INTO channel_members (channel_id, agent_id) VALUES (?1,?2)",
+                            params![cid, aid],
+                        )?;
+                    }
+                }
+                team_core::compose::ChannelMembers::Explicit(members) => {
+                    for m in members {
+                        let aid = format!("{}:{}", p.project.id, m);
+                        conn.execute(
+                            "INSERT OR IGNORE INTO channel_members (channel_id, agent_id) VALUES (?1,?2)",
+                            params![cid, aid],
+                        )?;
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }

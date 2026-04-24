@@ -84,6 +84,19 @@ pub fn schema() -> Value {
             }
         },
         {
+            "name": "broadcast",
+            "description": "Post a message to a channel in the caller's project. Caller must be a channel member and have the channel listed in can_broadcast.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["channel", "text"],
+                "properties": {
+                    "channel": { "type": "string" },
+                    "text":    { "type": "string" }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "list_team",
             "description": "List every agent in the caller's project (project-scoped; never returns other projects).",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
@@ -106,6 +119,7 @@ pub async fn call(ctx: &Ctx, params: Value) -> Result<Value, String> {
         "inbox_peek" => inbox_peek(ctx, p.arguments),
         "inbox_ack" => inbox_ack(ctx, p.arguments),
         "inbox_watch" => inbox_watch(ctx, p.arguments).await,
+        "broadcast" => broadcast(ctx, p.arguments),
         "list_team" => list_team(ctx),
         other => Err(format!("unknown tool: {other}")),
     }
@@ -149,6 +163,17 @@ async fn dm(ctx: &Ctx, args: Value) -> Result<Value, String> {
             "project isolation: cannot DM across projects ({caller_project} -> {recipient_project}); open a bridge",
         ));
     }
+    // ACL: `can_dm` must include the recipient (or be empty = unrestricted).
+    if !ctx
+        .store
+        .can_dm(&ctx.agent_id, &recipient)
+        .map_err(|e| e.to_string())?
+    {
+        return Err(format!(
+            "ACL: {sender} is not permitted to DM {recipient}",
+            sender = ctx.agent_id
+        ));
+    }
     let id = ctx
         .store
         .send_dm(
@@ -160,6 +185,44 @@ async fn dm(ctx: &Ctx, args: Value) -> Result<Value, String> {
         )
         .map_err(|e| e.to_string())?;
     Ok(content_json(&json!({ "id": id, "recipient": recipient })))
+}
+
+#[derive(Deserialize)]
+struct BroadcastArgs {
+    channel: String,
+    text: String,
+}
+
+fn broadcast(ctx: &Ctx, args: Value) -> Result<Value, String> {
+    let a: BroadcastArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+    let project = ctx.project();
+    if !ctx
+        .store
+        .is_channel_member(project, &a.channel, &ctx.agent_id)
+        .map_err(|e| e.to_string())?
+    {
+        return Err(format!(
+            "ACL: {agent} is not a member of channel {channel} in project {project}",
+            agent = ctx.agent_id,
+            channel = a.channel,
+        ));
+    }
+    if !ctx
+        .store
+        .can_broadcast(&ctx.agent_id, &a.channel)
+        .map_err(|e| e.to_string())?
+    {
+        return Err(format!(
+            "ACL: {agent} is not permitted to broadcast on {channel}",
+            agent = ctx.agent_id,
+            channel = a.channel,
+        ));
+    }
+    let id = ctx
+        .store
+        .send_broadcast(project, &ctx.agent_id, &a.channel, &a.text)
+        .map_err(|e| e.to_string())?;
+    Ok(content_json(&json!({ "id": id, "channel": a.channel })))
 }
 
 #[derive(Deserialize, Default)]

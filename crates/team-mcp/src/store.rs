@@ -89,14 +89,24 @@ impl Store {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Peek undelivered/unacked messages addressed to `agent_id`.
+    /// Peek undelivered/unacked messages addressed directly to `agent_id` or
+    /// to a channel `agent_id` subscribes to.
     pub fn inbox_peek(&self, agent_id: &str, limit: usize) -> Result<Vec<Message>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, project_id, sender, recipient, text, thread_id, sent_at
-             FROM messages
-             WHERE recipient = ?1 AND acked_at IS NULL
-             ORDER BY id ASC
+            "SELECT m.id, m.project_id, m.sender, m.recipient, m.text, m.thread_id, m.sent_at
+             FROM messages m
+             WHERE m.acked_at IS NULL
+               AND m.sender != ?1
+               AND (
+                     m.recipient = ?1
+                  OR m.recipient IN (
+                        SELECT 'channel:' || cm.channel_id
+                        FROM channel_members cm
+                        WHERE cm.agent_id = ?1
+                     )
+                 )
+             ORDER BY m.id ASC
              LIMIT ?2",
         )?;
         let rows = stmt
@@ -113,6 +123,90 @@ impl Store {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Does `agent_id` have permission to DM `recipient_agent_id`?
+    /// An empty `can_dm` list means unrestricted (any same-project agent).
+    pub fn can_dm(&self, agent_id: &str, recipient_agent_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<String> = conn
+            .query_row(
+                "SELECT can_dm_json FROM agent_acls WHERE agent_id = ?1",
+                params![agent_id],
+                |r| r.get(0),
+            )
+            .ok();
+        let Some(json) = row else {
+            return Ok(true); // no ACL row = unrestricted
+        };
+        let allowed: Vec<String> = serde_json::from_str(&json).unwrap_or_default();
+        if allowed.is_empty() {
+            return Ok(true);
+        }
+        let short = recipient_agent_id
+            .split_once(':')
+            .map(|(_, a)| a)
+            .unwrap_or(recipient_agent_id);
+        Ok(allowed
+            .iter()
+            .any(|a| a == short || a == recipient_agent_id))
+    }
+
+    /// Does `agent_id` have permission to post to channel `channel_name` in its project?
+    pub fn can_broadcast(&self, agent_id: &str, channel_name: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<String> = conn
+            .query_row(
+                "SELECT can_bcast_json FROM agent_acls WHERE agent_id = ?1",
+                params![agent_id],
+                |r| r.get(0),
+            )
+            .ok();
+        let Some(json) = row else {
+            return Ok(true);
+        };
+        let allowed: Vec<String> = serde_json::from_str(&json).unwrap_or_default();
+        if allowed.is_empty() {
+            return Ok(true);
+        }
+        Ok(allowed.iter().any(|c| c == channel_name))
+    }
+
+    /// Is `agent_id` a member of `channel_name` in its project?
+    pub fn is_channel_member(
+        &self,
+        project: &str,
+        channel_name: &str,
+        agent_id: &str,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let cid = format!("{project}:{channel_name}");
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM channel_members WHERE channel_id = ?1 AND agent_id = ?2",
+                params![cid, agent_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        Ok(n > 0)
+    }
+
+    /// Insert a broadcast message addressed to `channel:<project>:<name>`.
+    pub fn send_broadcast(
+        &self,
+        project: &str,
+        sender: &str,
+        channel_name: &str,
+        text: &str,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let recipient = format!("channel:{project}:{channel_name}");
+        conn.execute(
+            "INSERT INTO messages (project_id, sender, recipient, text, sent_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![project, sender, recipient, text, Self::now()],
+        )?;
+        Ok(conn.last_insert_rowid())
     }
 
     /// Mark messages as acked.

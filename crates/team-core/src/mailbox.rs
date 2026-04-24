@@ -43,4 +43,27 @@ CREATE INDEX IF NOT EXISTS messages_recipient_idx
     ON messages(recipient, acked_at);
 CREATE INDEX IF NOT EXISTS messages_project_idx
     ON messages(project_id, sent_at);
+
+-- Phase 2: channels + subscriptions + per-agent ACLs.
+CREATE TABLE IF NOT EXISTS channels (
+    id         TEXT PRIMARY KEY,               -- "<project>:<name>"
+    project_id TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    wildcard   INTEGER NOT NULL DEFAULT 0       -- 1 iff members = "*"
+);
+
+CREATE TABLE IF NOT EXISTS channel_members (
+    channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    agent_id   TEXT NOT NULL,
+    PRIMARY KEY (channel_id, agent_id)
+);
+
+CREATE INDEX IF NOT EXISTS channel_members_agent_idx
+    ON channel_members(agent_id);
+
+CREATE TABLE IF NOT EXISTS agent_acls (
+    agent_id        TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    can_dm_json     TEXT NOT NULL DEFAULT '[]',    -- ["dev","critic"]
+    can_bcast_json  TEXT NOT NULL DEFAULT '[]'     -- ["product","all"]
+);
 "#;
