@@ -8,9 +8,9 @@
 
 /// Idempotent schema bootstrap. Safe to run on every connect.
 pub const SCHEMA: &str = r#"
-PRAGMA journal_mode = WAL;
-PRAGMA busy_timeout = 5000;
-PRAGMA foreign_keys = ON;
+-- NOTE: pragmas (journal_mode=WAL, busy_timeout, foreign_keys) are set by
+-- the connection opener *before* this batch runs — concurrent openers race
+-- if we set them here.
 
 CREATE TABLE IF NOT EXISTS projects (
     id   TEXT PRIMARY KEY,

@@ -22,3 +22,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 rusqlite.workspace = true
 notify.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

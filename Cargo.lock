@@ -897,6 +897,7 @@ dependencies = [
  "serde",
  "serde_json",
  "team-core",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
