@@ -259,6 +259,101 @@ impl Store {
         Ok(rows)
     }
 
+    /// Return the project's org chart: managers (top tier) and per-worker
+    /// `reports_to` links.
+    pub fn org_chart(&self, project: &str) -> Result<serde_json::Value> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, role, runtime, is_manager, reports_to FROM agents WHERE project_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map(params![project], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)? == 1,
+                    r.get::<_, Option<String>>(4)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let out = serde_json::json!({
+            "project": project,
+            "managers": rows.iter().filter(|r| r.3).map(|r| serde_json::json!({
+                "id": r.0, "role": r.1, "runtime": r.2
+            })).collect::<Vec<_>>(),
+            "workers": rows.iter().filter(|r| !r.3).map(|r| serde_json::json!({
+                "id": r.0, "role": r.1, "runtime": r.2, "reports_to": r.4
+            })).collect::<Vec<_>>(),
+        });
+        Ok(out)
+    }
+
+    /// Insert a new pending approval request. Returns the id.
+    #[allow(clippy::too_many_arguments)]
+    pub fn request_approval(
+        &self,
+        project: &str,
+        agent: &str,
+        action: &str,
+        scope_tag: Option<&str>,
+        summary: &str,
+        payload_json: &str,
+        ttl_seconds: f64,
+    ) -> Result<i64> {
+        let now = Self::now();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO approvals (project_id, agent_id, action, scope_tag, summary, payload_json, status, requested_at, expires_at)
+             VALUES (?1,?2,?3,?4,?5,?6,'pending',?7,?8)",
+            params![project, agent, action, scope_tag, summary, payload_json, now, now + ttl_seconds],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Read status + optional note for one approval request.
+    pub fn approval_status(&self, id: i64) -> Result<(String, Option<String>)> {
+        let conn = self.conn.lock().unwrap();
+        let (status, note): (String, Option<String>) = conn.query_row(
+            "SELECT status, decision_note FROM approvals WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok((status, note))
+    }
+
+    /// Auto-expire pending approvals whose `expires_at` has passed.
+    pub fn expire_stale_approvals(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE approvals SET status='expired', decided_at=?1
+             WHERE status='pending' AND expires_at < ?1",
+            params![Self::now()],
+        )?;
+        Ok(n)
+    }
+
+    /// Decide one approval (CLI + interface paths share this).
+    /// Phase 6 (`team-bot`) is the first caller; `teamctl approve/deny`
+    /// writes directly with a canned SQL UPDATE today.
+    #[allow(dead_code)]
+    pub fn decide_approval(
+        &self,
+        id: i64,
+        approved: bool,
+        decided_by: &str,
+        note: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let status = if approved { "approved" } else { "denied" };
+        conn.execute(
+            "UPDATE approvals SET status=?1, decided_at=?2, decided_by=?3, decision_note=?4
+             WHERE id=?5 AND status='pending'",
+            params![status, Self::now(), decided_by, note, id],
+        )?;
+        Ok(())
+    }
+
     /// Upsert project+agent registration rows. Idempotent.
     /// Consumed by `teamctl up` (Chunk C); keep pub even though `team-mcp`
     /// itself doesn't call it.

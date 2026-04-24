@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS agents (
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     role       TEXT NOT NULL,
     runtime    TEXT NOT NULL,
-    is_manager INTEGER NOT NULL DEFAULT 0
+    is_manager INTEGER NOT NULL DEFAULT 0,
+    reports_to TEXT                        -- short name, resolved within project
 );
 
 CREATE INDEX IF NOT EXISTS agents_project_idx ON agents(project_id);
@@ -81,4 +82,24 @@ CREATE TABLE IF NOT EXISTS bridges (
 
 CREATE INDEX IF NOT EXISTS bridges_open_idx
     ON bridges(expires_at, closed_at);
+
+-- Phase 5: human-in-the-loop permission fabric.
+CREATE TABLE IF NOT EXISTS approvals (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id     TEXT NOT NULL,
+    agent_id       TEXT NOT NULL,
+    action         TEXT NOT NULL,          -- "publish", "deploy", ...
+    scope_tag      TEXT,                   -- optional narrower tag
+    summary        TEXT NOT NULL,
+    payload_json   TEXT,
+    status         TEXT NOT NULL,          -- pending | approved | denied | expired
+    requested_at   REAL NOT NULL,
+    decided_at     REAL,
+    decided_by     TEXT,
+    decision_note  TEXT,
+    expires_at     REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS approvals_pending_idx
+    ON approvals(status, expires_at);
 "#;

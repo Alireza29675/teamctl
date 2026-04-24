@@ -235,6 +235,8 @@ mod tests {
                 version: 2,
                 broker: Default::default(),
                 supervisor: Default::default(),
+                hitl: Default::default(),
+                interfaces: vec![],
                 projects: vec![],
             },
             projects: vec![Project {

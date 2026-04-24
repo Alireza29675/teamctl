@@ -20,9 +20,71 @@ pub struct Global {
     #[serde(default)]
     pub supervisor: SupervisorCfg,
 
+    #[serde(default)]
+    pub hitl: Hitl,
+
+    /// Human-facing inbound channels. Telegram is one adapter; Discord,
+    /// iMessage, CLI, and webhook share the same shape.
+    #[serde(default)]
+    pub interfaces: Vec<Interface>,
+
     /// Relative paths from the compose root.
     #[serde(default)]
     pub projects: Vec<ProjectRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Interface {
+    /// Adapter type: `telegram`, `discord`, `imessage`, `cli`, `webhook`, ...
+    pub r#type: String,
+    /// Free-form name; used in logs and to route approvals.
+    pub name: String,
+    /// Adapter-specific config (bot token, channel id, allowlist, …).
+    #[serde(default)]
+    pub config: serde_yaml::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Hitl {
+    #[serde(default = "default_sensitive_actions")]
+    pub globally_sensitive_actions: Vec<String>,
+    #[serde(default)]
+    pub auto_approve_windows: Vec<AutoApprove>,
+}
+
+impl Default for Hitl {
+    fn default() -> Self {
+        Self {
+            globally_sensitive_actions: default_sensitive_actions(),
+            auto_approve_windows: Vec::new(),
+        }
+    }
+}
+
+fn default_sensitive_actions() -> Vec<String> {
+    vec![
+        "publish".into(),
+        "release".into(),
+        "payment".into(),
+        "external_email".into(),
+        "external_api_post".into(),
+        "merge_to_main".into(),
+        "dns_change".into(),
+        "deploy".into(),
+    ]
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoApprove {
+    pub action: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// RFC 3339 timestamp in UTC.
+    pub until: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

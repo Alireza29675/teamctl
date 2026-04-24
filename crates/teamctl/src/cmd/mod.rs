@@ -1,3 +1,4 @@
+pub mod approval;
 pub mod bridge;
 pub mod down;
 pub mod logs;

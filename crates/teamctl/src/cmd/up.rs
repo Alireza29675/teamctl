@@ -63,14 +63,15 @@ pub fn register_all_public(compose: &Compose) -> Result<()> {
     }
     for h in compose.agents() {
         conn.execute(
-            "INSERT INTO agents (id, project_id, role, runtime, is_manager) VALUES (?1,?2,?3,?4,?5)
-             ON CONFLICT(id) DO UPDATE SET role=excluded.role, runtime=excluded.runtime, is_manager=excluded.is_manager",
+            "INSERT INTO agents (id, project_id, role, runtime, is_manager, reports_to) VALUES (?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(id) DO UPDATE SET role=excluded.role, runtime=excluded.runtime, is_manager=excluded.is_manager, reports_to=excluded.reports_to",
             params![
                 h.id(),
                 h.project,
                 h.agent,
                 h.spec.runtime,
-                if h.is_manager { 1 } else { 0 }
+                if h.is_manager { 1 } else { 0 },
+                h.spec.reports_to.as_deref(),
             ],
         )?;
         // Per-agent ACLs (Phase 2).

@@ -126,6 +126,8 @@ mod tests {
                     r#type: "tmux".into(),
                     tmux_prefix: "a-".into(),
                 },
+                hitl: Default::default(),
+                interfaces: vec![],
                 projects: vec![],
             },
             projects: vec![Project {

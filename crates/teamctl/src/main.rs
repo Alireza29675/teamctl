@@ -50,6 +50,20 @@ enum Command {
         #[command(subcommand)]
         action: BridgeAction,
     },
+    /// Show pending HITL approval requests.
+    Pending,
+    /// Approve a pending HITL request.
+    Approve {
+        id: i64,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Deny a pending HITL request.
+    Deny {
+        id: i64,
+        #[arg(long)]
+        note: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -96,6 +110,9 @@ fn main() -> Result<()> {
         Command::Status => cmd::status::run(&root),
         Command::Logs { target } => cmd::logs::run(&root, &target),
         Command::Send { target, text } => cmd::send::run(&root, &target, &text),
+        Command::Pending => cmd::approval::pending(&root),
+        Command::Approve { id, note } => cmd::approval::decide(&root, id, true, note.as_deref()),
+        Command::Deny { id, note } => cmd::approval::decide(&root, id, false, note.as_deref()),
         Command::Bridge { action } => match action {
             BridgeAction::Open {
                 from,

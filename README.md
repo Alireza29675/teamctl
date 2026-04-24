@@ -2,7 +2,7 @@
 
 **docker-compose for persistent AI agent teams.**
 
-Declare a team of long-lived Claude Code, Codex CLI, or Gemini CLI sessions in YAML. They live in `tmux`, are supervised by `systemd` (Linux) or `launchd` (macOS) — or just `tmux` on any box — and talk to each other through a shared MCP mailbox. One manager per project chats with you on Telegram. Brand-sensitive actions pause for your approval.
+Declare a team of long-lived Claude Code, Codex CLI, or Gemini CLI sessions in YAML. Every agent is its own real CLI running in its own `tmux` pane, supervised by `tmux` (portable), `systemd` (Linux), or `launchd` (macOS). They coordinate through a shared MCP mailbox. Each project has its own private org-chart with one or more managers; you talk to those managers over pluggable **interfaces** (Telegram, Discord, iMessage, CLI, webhook). Brand-sensitive actions pause for your approval.
 
 ```bash
 curl -sSf https://teamctl.run/install | sh   # not yet live
@@ -15,36 +15,67 @@ teamctl up
 ```mermaid
 flowchart TB
     User(["👤 you"])
-    Bot["team-bot (Telegram)"]
-    User <--> Bot
+
+    subgraph Interfaces["interfaces (pluggable)"]
+      direction LR
+      Tg["Telegram"]
+      Dc["Discord"]
+      Im["iMessage"]
+      Cl["CLI"]
+    end
+    User <--> Tg
+    User <--> Dc
+    User <--> Im
+    User <--> Cl
 
     subgraph ProjA["Project A"]
-        MgrA(["manager"])
-        W1(["worker 1"])
-        W2(["worker 2"])
-        MgrA --- W1
-        MgrA --- W2
+      direction TB
+      subgraph AProd["product manager · tmux:a-A-prod-mgr"]
+        Aprod["claude (Opus)"]
+      end
+      subgraph AEng["engineering manager · tmux:a-A-eng-mgr"]
+        Aeng["claude (Opus)"]
+      end
+      subgraph AW1["worker · tmux:a-A-dev1"]
+        Adev1["codex"]
+      end
+      subgraph AW2["worker · tmux:a-A-dev2"]
+        Adev2["claude (Sonnet)"]
+      end
+      subgraph AW3["worker · tmux:a-A-writer"]
+        Aw["gemini"]
+      end
+      AProd --- AW1
+      AProd --- AW2
+      AEng --- AW2
+      AEng --- AW3
     end
 
     subgraph ProjB["Project B"]
-        MgrB(["manager"])
-        W3(["worker"])
-        MgrB --- W3
+      direction TB
+      subgraph BMgr["manager · tmux:a-B-mgr"]
+        Bmgr["claude (Opus)"]
+      end
+      subgraph BW["worker · tmux:a-B-dev"]
+        Bdev["codex"]
+      end
+      BMgr --- BW
     end
 
-    Mailbox[("team-mcp<br/>SQLite mailbox")]
+    Mailbox[("team-mcp<br/>SQLite mailbox<br/>(dm · broadcast · org_chart · HITL)")]
 
-    Bot <--> MgrA
-    Bot <--> MgrB
+    Interfaces <--> Mailbox
     ProjA <--> Mailbox
     ProjB <--> Mailbox
-    MgrA <-. bridge (opt-in, TTL) .-> MgrB
+
+    AProd <-. bridge (opt-in, TTL) .-> BMgr
 ```
 
-- **Every node is a real long-lived CLI session** — Claude Code, Codex, or Gemini — running in its own `tmux` pane. Not in-process roles.
-- **The mailbox is the only shared memory.** Agents talk via `dm`, `broadcast`, `inbox_watch`, `list_team` MCP tools.
-- **Projects are isolated.** A worker in Project A cannot reach Project B unless Alireza opens a bridge between the two managers.
-- **Brand-sensitive actions pause.** Calls tagged `publish`, `release`, `deploy`, `payment`, … block on `request_approval` and surface in Telegram with Approve / Deny.
+- **Every node is a separate long-lived CLI** — Claude Code, Codex, or Gemini — running in its own `tmux` pane. No shared process, no "roles inside one LLM."
+- **Projects are self-contained org charts.** One project can have many managers and many workers; workers are wired to one or more managers through `reports_to`. Agents can call `org_chart` to introspect their chain of command.
+- **Managers talk to each other** inside a project (shared `#leads` channel or DM). Across projects they're isolated — a one-off **bridge** opens a manager-to-manager link for a limited time.
+- **You reach managers through any of the configured interfaces.** Telegram is the first adapter; Discord, iMessage, CLI, and webhooks plug in the same way.
+- **Brand-sensitive actions pause.** Tool calls tagged `publish`, `release`, `deploy`, `payment`, … block on `request_approval` and surface on your chosen interface with Approve / Deny.
 
 ## Status
 

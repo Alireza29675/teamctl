@@ -100,6 +100,27 @@ pub fn schema() -> Value {
             "name": "list_team",
             "description": "List every agent in the caller's project (project-scoped; never returns other projects).",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
+            "name": "org_chart",
+            "description": "Return the project's org chart: managers (top tier) and workers with their `reports_to` links. Use to introspect who is above you.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
+            "name": "request_approval",
+            "description": "Request human approval for a brand-sensitive action. Blocks until approved/denied/expired (long-poll). Use before any tool call that publishes, deploys, pays, or sends externally.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["action", "summary"],
+                "properties": {
+                    "action":     { "type": "string", "description": "Coarse category, e.g. publish, deploy, payment." },
+                    "scope_tag":  { "type": "string", "description": "Optional narrower tag for auto-approval matching." },
+                    "summary":    { "type": "string" },
+                    "payload":    { "type": "object" },
+                    "ttl_seconds":{ "type": "integer", "minimum": 30, "maximum": 3600, "default": 900 }
+                },
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -121,6 +142,8 @@ pub async fn call(ctx: &Ctx, params: Value) -> Result<Value, String> {
         "inbox_watch" => inbox_watch(ctx, p.arguments).await,
         "broadcast" => broadcast(ctx, p.arguments),
         "list_team" => list_team(ctx),
+        "org_chart" => org_chart(ctx),
+        "request_approval" => request_approval(ctx, p.arguments).await,
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -319,4 +342,65 @@ fn list_team(ctx: &Ctx) -> Result<Value, String> {
         .list_project_agents(ctx.project())
         .map_err(|e| e.to_string())?;
     Ok(content_json(&json!({ "agents": ids })))
+}
+
+fn org_chart(ctx: &Ctx) -> Result<Value, String> {
+    let v = ctx
+        .store
+        .org_chart(ctx.project())
+        .map_err(|e| e.to_string())?;
+    Ok(content_json(&v))
+}
+
+#[derive(Deserialize)]
+struct ApprovalArgs {
+    action: String,
+    #[serde(default)]
+    scope_tag: Option<String>,
+    summary: String,
+    #[serde(default)]
+    payload: Value,
+    #[serde(default = "default_approval_ttl")]
+    ttl_seconds: u64,
+}
+fn default_approval_ttl() -> u64 {
+    900
+}
+
+async fn request_approval(ctx: &Ctx, args: Value) -> Result<Value, String> {
+    let a: ApprovalArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+    let payload_str = serde_json::to_string(&a.payload).unwrap_or_else(|_| "{}".into());
+    let id = ctx
+        .store
+        .request_approval(
+            ctx.project(),
+            &ctx.agent_id,
+            &a.action,
+            a.scope_tag.as_deref(),
+            &a.summary,
+            &payload_str,
+            a.ttl_seconds as f64,
+        )
+        .map_err(|e| e.to_string())?;
+
+    // Poll every 500 ms until decided or expired.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(a.ttl_seconds);
+    loop {
+        let _ = ctx.store.expire_stale_approvals();
+        let (status, note) = ctx.store.approval_status(id).map_err(|e| e.to_string())?;
+        if status != "pending" {
+            return Ok(content_json(
+                &json!({ "id": id, "status": status, "note": note }),
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            // Force-expire one last time.
+            let _ = ctx.store.expire_stale_approvals();
+            let (status, note) = ctx.store.approval_status(id).map_err(|e| e.to_string())?;
+            return Ok(content_json(
+                &json!({ "id": id, "status": status, "note": note }),
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 }
