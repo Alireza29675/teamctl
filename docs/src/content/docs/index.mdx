@@ -1,0 +1,38 @@
+---
+title: teamctl
+description: docker-compose for persistent AI agent teams.
+template: splash
+hero:
+  tagline: docker-compose for persistent AI agent teams.
+  image:
+    alt: teamctl
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/Alireza29675/teamctl
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Why teamctl
+
+Your Claude Code session is useful. Four of them, talking to each other, with a product manager in charge, is a team.
+
+<CardGrid>
+  <Card title="Multi-runtime" icon="puzzle">
+    One team can mix Claude Code, Codex CLI, and Gemini CLI freely. The mailbox is runtime-agnostic.
+  </Card>
+  <Card title="Persistent" icon="seti:db">
+    Each agent is a real long-lived CLI session in `tmux`. Context survives across turns.
+  </Card>
+  <Card title="Isolated" icon="shield">
+    Projects cannot leak. Cross-project talk needs an explicit bridge.
+  </Card>
+  <Card title="HITL" icon="approve-check">
+    Brand-sensitive actions pause for your approval on Telegram, Discord, iMessage, or CLI.
+  </Card>
+</CardGrid>

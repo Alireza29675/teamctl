@@ -1,0 +1,31 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install
+        working-directory: docs
+        run: npm install
+      - name: Build
+        working-directory: docs
+        run: npm run build
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        if: github.ref == 'refs/heads/main' && secrets.CLOUDFLARE_API_TOKEN != ''
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: teamctl-docs
+          directory: docs/dist
