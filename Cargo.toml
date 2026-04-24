@@ -36,3 +36,23 @@ team-core = { path = "crates/team-core" }
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# cargo-dist: cross-compile binaries for Linux + macOS (4 targets).
+# See https://github.com/axodotdev/cargo-dist
+[workspace.metadata.dist]
+cargo-dist-version = "0.25.1"
+ci = "github"
+installers = ["shell", "homebrew"]
+tap = "Alireza29675/homebrew-teamctl"
+publish-jobs = ["homebrew"]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+pr-run-mode = "plan"
+install-path = "~/.local/bin"
+
+[profile.dist]
+inherits = "release"

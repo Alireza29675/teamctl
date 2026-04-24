@@ -1,0 +1,31 @@
+name: release
+
+# Triggered by pushing a `v*` tag. cargo-dist plans the artifacts in a single
+# job, then cross-compiles and uploads to a GitHub Release; it updates the
+# Homebrew tap on publish.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: write
+
+jobs:
+  dist:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-dist
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/axodotdev/cargo-dist/releases/download/v0.25.1/cargo-dist-installer.sh \
+            | sh
+      - name: Plan
+        run: cargo dist plan --tag=${{ github.ref_name }}
+      - name: Build
+        run: cargo dist build --tag=${{ github.ref_name }}
+      - name: Upload to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo dist host --tag=${{ github.ref_name }} --steps=create,upload
