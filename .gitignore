@@ -1,0 +1,19 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# teamctl runtime state (never committed)
+/state/
+/examples/*/state/
+
+# Docs build
+/docs/dist/
+/docs/.astro/
+/docs/node_modules/
