@@ -66,10 +66,23 @@ pub enum ValidationError {
 
     #[error("duplicate project id `{0}`")]
     DuplicateProject(String),
+
+    #[error("project `{project}`: agent `{agent}` uses runtime `{runtime}` but no `runtimes/{runtime}.yaml` was found")]
+    UnknownRuntime {
+        project: String,
+        agent: String,
+        runtime: String,
+    },
 }
 
 pub fn validate(compose: &Compose) -> Vec<ValidationError> {
     let mut errs = Vec::new();
+
+    // Known runtimes. Missing runtimes/ dir is OK (validator doesn't require
+    // them), but if the dir exists we enforce every referenced runtime has a
+    // descriptor.
+    let runtimes = crate::runtimes::load_all(&compose.root).unwrap_or_default();
+    let check_runtime = !runtimes.is_empty();
 
     match compose.global.broker.r#type.as_str() {
         "sqlite" => {}
@@ -155,6 +168,13 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
                         target: t.clone(),
                     });
                 }
+            }
+            if check_runtime && !runtimes.contains_key(a.runtime.as_str()) {
+                errs.push(ValidationError::UnknownRuntime {
+                    project: p.project.id.clone(),
+                    agent: id.into(),
+                    runtime: a.runtime.clone(),
+                });
             }
         };
 

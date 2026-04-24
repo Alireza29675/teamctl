@@ -9,6 +9,7 @@
 pub mod compose;
 pub mod mailbox;
 pub mod render;
+pub mod runtimes;
 pub mod supervisor;
 pub mod validate;
 

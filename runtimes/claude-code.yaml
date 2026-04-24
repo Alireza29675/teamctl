@@ -1,0 +1,13 @@
+# Runtime adapter: Claude Code
+#
+# Launched by `bin/agent-wrapper.sh` in the `run_claude_code` branch.
+# MCP stdio: supported natively.
+# Session resume: `--continue` (honored by the wrapper on retry).
+
+binary: claude
+supports_mcp: true
+session_resume: "--continue"
+default_model: claude-opus-4-7
+env:
+  # Claude Code honors this when the compose file sets a project cwd.
+  CLAUDE_PROJECT_DIR_MODE: "compose"

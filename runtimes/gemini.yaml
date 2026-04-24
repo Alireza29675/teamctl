@@ -1,0 +1,14 @@
+# Runtime adapter: Google Gemini CLI
+#
+# Launched by `bin/agent-wrapper.sh` in the `run_gemini` branch.
+# MCP stdio: supported since Gemini CLI 0.3.
+# Session resume: no native equivalent; wrapper relies on loop-and-restart.
+
+binary: gemini
+supports_mcp: true
+session_resume: "none"
+default_model: gemini-3.0-pro
+env:
+  # --yolo auto-approves tool calls; safe because team-mcp's HITL gate
+  # intercepts brand-sensitive actions upstream.
+  GEMINI_YOLO: "1"
