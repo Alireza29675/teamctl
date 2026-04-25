@@ -53,6 +53,9 @@ targets = [
 ]
 pr-run-mode = "plan"
 install-path = "~/.local/bin"
+# Allow the hand-edited `publish-crates` job in release.yml. Without this
+# cargo-dist's Plan step rejects the workflow as out-of-date.
+allow-dirty = ["ci"]
 
 [profile.dist]
 inherits = "release"
