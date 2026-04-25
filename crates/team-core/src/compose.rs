@@ -304,6 +304,50 @@ pub struct Compose {
 }
 
 impl Compose {
+    /// Walk up from `start` looking for the nearest `.team/team-compose.yaml`,
+    /// then fall back to a flat `team-compose.yaml` in `start` itself. Returns
+    /// the directory containing the compose file (the "root"), suitable for
+    /// passing to [`Compose::load`].
+    ///
+    /// This is the equivalent of git's `.git/` discovery — once a repo carries
+    /// a `.team/` folder, every `teamctl` subcommand finds it from anywhere
+    /// inside the tree.
+    pub fn discover(start: &Path) -> anyhow::Result<PathBuf> {
+        let start = start
+            .canonicalize()
+            .map_err(|e| anyhow::anyhow!("canonicalize {}: {e}", start.display()))?;
+        // 1. Walk up looking for .team/team-compose.yaml.
+        let mut cur: Option<&Path> = Some(&start);
+        while let Some(dir) = cur {
+            let candidate = dir.join(".team").join("team-compose.yaml");
+            if candidate.is_file() {
+                return Ok(dir.join(".team"));
+            }
+            cur = dir.parent();
+        }
+        // 2. Flat layout in `start`.
+        if start.join("team-compose.yaml").is_file() {
+            return Ok(start);
+        }
+        // 3. Walk up for a flat layout (legacy convenience).
+        let mut cur: Option<&Path> = start.parent();
+        while let Some(dir) = cur {
+            if dir.join("team-compose.yaml").is_file() {
+                eprintln!(
+                    "warning: using legacy flat layout at {}; consider migrating to {}",
+                    dir.display(),
+                    dir.join(".team").display()
+                );
+                return Ok(dir.to_path_buf());
+            }
+            cur = dir.parent();
+        }
+        Err(anyhow::anyhow!(
+            "no `.team/team-compose.yaml` found in {} or any parent",
+            start.display()
+        ))
+    }
+
     /// Parse `team-compose.yaml` at `root` and every referenced project file.
     pub fn load(root: impl AsRef<Path>) -> anyhow::Result<Self> {
         let root = root.as_ref().to_path_buf();
@@ -392,5 +436,36 @@ mod tests {
         assert_eq!(a.runtime, "claude-code");
         assert_eq!(a.autonomy, "low_risk_only");
         assert!(!a.telegram_inbox);
+    }
+
+    #[test]
+    fn discover_prefers_dot_team() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        std::fs::create_dir_all(repo.join(".team")).unwrap();
+        std::fs::write(repo.join(".team/team-compose.yaml"), "version: 2\n").unwrap();
+        // a stray flat-layout file in the same dir should NOT be preferred.
+        std::fs::write(repo.join("team-compose.yaml"), "version: 2\n").unwrap();
+
+        // Walking up from a sub-dir should still find the .team/ root.
+        let sub = repo.join("src/deep/nested");
+        std::fs::create_dir_all(&sub).unwrap();
+        let found = Compose::discover(&sub).unwrap();
+        assert_eq!(found, repo.canonicalize().unwrap().join(".team"));
+    }
+
+    #[test]
+    fn discover_falls_back_to_flat_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("team-compose.yaml"), "version: 2\n").unwrap();
+        let found = Compose::discover(tmp.path()).unwrap();
+        assert_eq!(found, tmp.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn discover_errors_when_nothing_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = Compose::discover(tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("no `.team/team-compose.yaml`"));
     }
 }

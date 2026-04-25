@@ -1,0 +1,5 @@
+# teamctl runtime state — do not commit.
+state/
+
+# Secrets — never commit. `.env.example` is the checked-in template.
+.env

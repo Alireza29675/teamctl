@@ -1,0 +1,29 @@
+version: 2
+
+project:
+  id: {{project_id}}
+  name: {{project_name}}
+  cwd: ./workspace
+
+channels:
+  - name: all
+    members: "*"
+
+managers:
+  manager:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/manager.md
+    permission_mode: auto
+    reports_to_user: true
+    can_dm: [dev]
+    can_broadcast: [all]
+
+workers:
+  dev:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/dev.md
+    reports_to: manager
+    can_dm: [manager]
+    can_broadcast: [all]

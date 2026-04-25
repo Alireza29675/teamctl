@@ -1,0 +1,12 @@
+version: 2
+
+project:
+  id: {{project_id}}
+  name: {{project_name}}
+  cwd: ./workspace
+
+channels: []
+
+managers: {}
+
+workers: {}

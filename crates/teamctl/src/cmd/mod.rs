@@ -1,13 +1,21 @@
 pub mod approval;
+pub mod attach;
 pub mod bridge;
 pub mod budget;
+pub mod context;
 pub mod down;
+pub mod env;
+pub mod exec;
 pub mod gc;
+pub mod init;
+pub mod inspect;
 pub mod logs;
+pub mod mail;
 pub mod reload;
 pub mod rl_watch;
 pub mod send;
 pub mod status;
+pub mod tail;
 pub mod up;
 pub mod validate;
 
