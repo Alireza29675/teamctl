@@ -11,3 +11,17 @@ default_model: claude-opus-4-7
 env:
   # Claude Code honors this when the compose file sets a project cwd.
   CLAUDE_PROJECT_DIR_MODE: "compose"
+
+# Lines that indicate a rate-limit hit. Tested against each output line as
+# Rust regexes (case-insensitive). `resets_at_capture` extracts an absolute
+# clock-time; `resets_in_capture` extracts a relative duration.
+rate_limit_patterns:
+  # "5-hour limit reached ∙ resets at 4pm"
+  - match: "(?i)limit reached.*resets at"
+    resets_at_capture: "(?i)resets at ([0-9]{1,2}(?::[0-9]{2})?\\s*(?:am|pm)?)"
+  # "Claude usage limit reached. Your limit will reset at 16:00 UTC."
+  - match: "(?i)usage limit reached"
+    resets_at_capture: "(?i)reset(?:s)? at ([0-9]{1,2}:[0-9]{2}(?:\\s*[A-Z]{2,5})?)"
+  # Generic 429-style fallback.
+  - match: "(?i)rate.?limit"
+    resets_in_capture: "(?i)(?:retry|wait|back off)\\s*(?:in|after)?\\s*([0-9]+\\s*(?:s|sec|m|min|h|hr)[a-z]*)"

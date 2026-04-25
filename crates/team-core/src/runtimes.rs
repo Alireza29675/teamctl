@@ -18,6 +18,28 @@ pub struct Runtime {
     pub default_model: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+
+    /// Patterns that, if matched in the runtime's stdout/stderr, indicate a
+    /// rate-limit hit. `teamctl rl-watch` consumes these.
+    #[serde(default)]
+    pub rate_limit_patterns: Vec<RateLimitPattern>,
+}
+
+/// One rate-limit detector. `match` is a regex tested against each line
+/// of runtime output. If matched, the wrapper records a hit. The optional
+/// captures attempt to extract when the limit lifts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitPattern {
+    /// Regex tested against each output line.
+    pub r#match: String,
+    /// Optional regex with one capture group of an absolute reset clock,
+    /// e.g. "resets at (4pm)" or "resets at (16:00)" or an RFC3339 timestamp.
+    #[serde(default)]
+    pub resets_at_capture: Option<String>,
+    /// Optional regex with one capture group of a relative duration,
+    /// e.g. "in (5h 15m)" or "in (1h)" or "(\\d+) seconds".
+    #[serde(default)]
+    pub resets_in_capture: Option<String>,
 }
 
 /// Load every `runtimes/<name>.yaml` under the compose root into a map keyed

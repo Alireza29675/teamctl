@@ -211,6 +211,7 @@ mod tests {
                 can_dm: vec![agent_dm_target.into()],
                 can_broadcast: vec!["team".into()],
                 reports_to: None,
+                on_rate_limit: None,
             },
         );
         let mut workers = BTreeMap::new();
@@ -227,6 +228,7 @@ mod tests {
                 can_dm: vec!["mgr".into()],
                 can_broadcast: vec!["team".into()],
                 reports_to: Some("mgr".into()),
+                on_rate_limit: None,
             },
         );
         Compose {
@@ -237,6 +239,7 @@ mod tests {
                 supervisor: Default::default(),
                 budget: Default::default(),
                 hitl: Default::default(),
+                rate_limits: Default::default(),
                 interfaces: vec![],
                 projects: vec![],
             },

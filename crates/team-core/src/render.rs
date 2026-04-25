@@ -113,6 +113,7 @@ mod tests {
                 can_dm: vec![],
                 can_broadcast: vec![],
                 reports_to: None,
+                on_rate_limit: None,
             },
         );
         Compose {
@@ -129,6 +130,7 @@ mod tests {
                 },
                 budget: Default::default(),
                 hitl: Default::default(),
+                rate_limits: Default::default(),
                 interfaces: vec![],
                 projects: vec![],
             },

@@ -9,6 +9,7 @@
 - Per-agent ACLs (`can_dm`, `can_broadcast`), channels, project isolation
 - Inter-project manager bridges with TTL and audit log
 - HITL permission fabric (default sensitive-action list, auto-approve windows)
+- Rate-limit detection per runtime, configurable hook chain (wait / send / webhook / run)
 - Telegram interface adapter with inline approval UI
 - `teamctl validate / up / down / reload / status / logs / send / bridge / pending / approve / deny / budget / gc`
 - `cargo-dist` release pipeline + install script

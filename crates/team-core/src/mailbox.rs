@@ -115,4 +115,20 @@ CREATE TABLE IF NOT EXISTS budget (
 
 CREATE INDEX IF NOT EXISTS budget_project_day_idx
     ON budget(project_id, observed_at);
+
+-- Rate-limit events. Written by `teamctl rl-watch` whenever a runtime
+-- emits a rate-limit signature. Hooks (notify, webhook, run) run off these
+-- rows; the wrapper loop sleeps until `resets_at` before respawning.
+CREATE TABLE IF NOT EXISTS rate_limits (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id    TEXT NOT NULL,
+    runtime     TEXT NOT NULL,
+    hit_at      REAL NOT NULL,
+    resets_at   REAL,                  -- nullable: sometimes we can't parse
+    raw_match   TEXT NOT NULL,
+    handled_at  REAL
+);
+
+CREATE INDEX IF NOT EXISTS rate_limits_agent_idx
+    ON rate_limits(agent_id, hit_at);
 "#;

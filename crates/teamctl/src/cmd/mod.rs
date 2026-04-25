@@ -5,6 +5,7 @@ pub mod down;
 pub mod gc;
 pub mod logs;
 pub mod reload;
+pub mod rl_watch;
 pub mod send;
 pub mod status;
 pub mod up;

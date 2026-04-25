@@ -71,6 +71,16 @@ enum Command {
     },
     /// Garbage-collect expired messages and stale approvals.
     Gc,
+    /// Wrap a runtime invocation, watching for rate-limit signatures and
+    /// firing configured hooks. Used by `agent-wrapper.sh`.
+    #[command(name = "rl-watch")]
+    RlWatch {
+        /// Target id as `<project>:<agent>`.
+        target: String,
+        /// The runtime command + args, after `--`.
+        #[arg(last = true, allow_hyphen_values = true)]
+        runtime_command: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -119,6 +129,10 @@ fn main() -> Result<()> {
         Command::Send { target, text } => cmd::send::run(&root, &target, &text),
         Command::Budget { project } => cmd::budget::run(&root, project.as_deref()),
         Command::Gc => cmd::gc::run(&root),
+        Command::RlWatch {
+            target,
+            runtime_command,
+        } => cmd::rl_watch::run(&root, &target, &runtime_command),
         Command::Pending => cmd::approval::pending(&root),
         Command::Approve { id, note } => cmd::approval::decide(&root, id, true, note.as_deref()),
         Command::Deny { id, note } => cmd::approval::decide(&root, id, false, note.as_deref()),

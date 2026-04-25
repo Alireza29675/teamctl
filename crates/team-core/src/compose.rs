@@ -22,6 +22,9 @@ pub struct Global {
     #[serde(default)]
     pub hitl: Hitl,
 
+    #[serde(default)]
+    pub rate_limits: RateLimits,
+
     /// Human-facing inbound channels. Telegram is one adapter; Discord,
     /// iMessage, CLI, and webhook share the same shape.
     #[serde(default)]
@@ -53,6 +56,57 @@ pub struct Budget {
     pub message_ttl_hours: Option<u32>,
     #[serde(default)]
     pub per_project_usd_limit: std::collections::BTreeMap<String, f64>,
+}
+
+/// Rate-limit handling policy.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RateLimits {
+    /// Default hook-name chain to run on a hit. Empty means `[wait]`.
+    #[serde(default)]
+    pub default_on_hit: Vec<String>,
+
+    /// Named hooks. Agents reference these by name in their `on_rate_limit:`.
+    #[serde(default)]
+    pub hooks: Vec<RateLimitHook>,
+
+    /// Fallback wait when the hit can't be parsed for a reset time.
+    /// Default 30 minutes.
+    #[serde(default = "default_fallback_wait")]
+    pub fallback_wait_seconds: u64,
+}
+
+fn default_fallback_wait() -> u64 {
+    30 * 60
+}
+
+/// One named action that can run on a rate-limit hit.
+///
+/// `action` is one of:
+/// - `wait` — sleep until `resets_at` (or `fallback_wait_seconds`).
+/// - `send` — write a message into the mailbox; `to` and `template` required.
+/// - `webhook` — POST/GET to `url` (or `url_env`); the rate-limit row
+///   serializes as JSON in the body.
+/// - `run` — exec `command` with placeholders substituted.
+///
+/// Placeholders in `template` and `command` arguments:
+/// `{agent}`, `{runtime}`, `{hit_at}`, `{resets_at}`, `{resets_at_local}`,
+/// `{raw_match}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitHook {
+    pub name: String,
+    pub action: String,
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub template: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub url_env: Option<String>,
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub command: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,6 +281,10 @@ pub struct Agent {
     pub can_broadcast: Vec<String>,
     #[serde(default)]
     pub reports_to: Option<String>,
+
+    /// Override the global rate-limit hook chain for this agent.
+    #[serde(default)]
+    pub on_rate_limit: Option<Vec<String>>,
 }
 
 fn default_runtime() -> String {

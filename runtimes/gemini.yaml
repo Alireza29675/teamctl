@@ -12,3 +12,10 @@ env:
   # --yolo auto-approves tool calls; safe because team-mcp's HITL gate
   # intercepts brand-sensitive actions upstream.
   GEMINI_YOLO: "1"
+
+rate_limit_patterns:
+  - match: "(?i)quota (?:exceeded|exhausted)"
+    resets_in_capture: "(?i)(?:retry|wait)\\s*(?:in|after)?\\s*([0-9]+\\s*(?:s|sec|m|min|h|hr)[a-z]*)"
+  - match: "(?i)resource_exhausted|RESOURCE_EXHAUSTED"
+  - match: "(?i)rate.?limit"
+    resets_in_capture: "(?i)(?:retry|wait)\\s*(?:in|after)?\\s*([0-9]+\\s*(?:s|sec|m|min|h|hr)[a-z]*)"

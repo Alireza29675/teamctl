@@ -24,6 +24,7 @@ export default defineConfig({
             { label: 'Bridges', link: '/concepts/bridges/' },
             { label: 'Interfaces', link: '/concepts/interfaces/' },
             { label: 'HITL', link: '/concepts/hitl/' },
+            { label: 'Rate limits', link: '/concepts/rate-limits/' },
           ],
         },
         {

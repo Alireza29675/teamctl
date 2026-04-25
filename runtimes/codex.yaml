@@ -11,3 +11,9 @@ default_model: gpt-5-codex
 env:
   # Disable codex's own approval prompt — HITL gate in team-mcp handles this.
   CODEX_APPROVAL_MODE: "auto-edit"
+
+rate_limit_patterns:
+  - match: "(?i)rate.?limit"
+    resets_in_capture: "(?i)(?:retry|try again|wait)\\s*(?:in|after)?\\s*([0-9]+\\s*(?:s|sec|m|min|h|hr)[a-z]*)"
+  - match: "(?i)quota (?:exceeded|reached)"
+    resets_at_capture: "(?i)reset(?:s)? (?:at|on) ([0-9]{1,2}:[0-9]{2}(?:\\s*[A-Z]{2,5})?)"
