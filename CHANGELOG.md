@@ -4,6 +4,16 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-04-25
+
+### Fixed
+
+- Release pipeline now produces GitHub Release artifacts. v0.1.1 published
+  to crates.io but the hand-written cargo-dist workflow ran cross-compile
+  on a single Ubuntu runner, so no platform tarballs were ever uploaded.
+  Regenerated `release.yml` from `dist generate` (proper job matrix) and
+  split crates.io publishing into a sibling `publish-crates.yml`.
+
 ## [0.1.1] — 2026-04-25
 
 ### Added
