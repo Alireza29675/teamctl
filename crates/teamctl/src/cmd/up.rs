@@ -154,4 +154,4 @@ pub fn ensure_wrapper_and_dirs(compose: &Compose) -> Result<()> {
     Ok(())
 }
 
-const DEFAULT_WRAPPER: &str = include_str!("../../../../bin/agent-wrapper.sh");
+const DEFAULT_WRAPPER: &str = include_str!("../../assets/agent-wrapper.sh");
