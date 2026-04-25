@@ -4,6 +4,20 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Fixed
+
+- Runtime adapter descriptors for the three shipped runtimes (Claude Code,
+  Codex, Gemini) are now embedded in the `team-core` binary instead of
+  being read from a `runtimes/` directory at the compose root. Without
+  this, every fresh install (`teamctl init` + `teamctl up`, or any
+  `cargo install` / Homebrew / `install.sh` flow) tight-looped with
+  `runtime 'claude-code' for agent 'X' has no descriptor in runtimes/`
+  because the YAMLs only existed inside the source tree and were never
+  packaged. `<root>/runtimes/<id>.yaml` continues to work as an override,
+  matching the design intent in ADR 0004 ("optional overrides for shipped
+  runtimes"). Validator and `rl-watch` error messages now reflect that
+  the missing-runtime case means no built-in *and* no override.
+
 ## [0.1.2] — 2026-04-25
 
 ### Fixed

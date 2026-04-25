@@ -1,10 +1,23 @@
-//! Runtime adapter descriptors (`runtimes/*.yaml`).
+//! Runtime adapter descriptors.
+//!
+//! Canonical descriptors for the runtimes teamctl ships with (Claude Code,
+//! Codex, Gemini) are baked into the binary via [`embedded_defaults`]. Users
+//! can override or extend them by dropping their own `<root>/runtimes/<id>.yaml`
+//! into the compose tree -- file-based descriptors win on key collision.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+/// Canonical descriptors that ship with teamctl. Keep this list in sync
+/// with the YAML files under `crates/team-core/runtimes/`.
+const EMBEDDED: &[(&str, &str)] = &[
+    ("claude-code", include_str!("../runtimes/claude-code.yaml")),
+    ("codex", include_str!("../runtimes/codex.yaml")),
+    ("gemini", include_str!("../runtimes/gemini.yaml")),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Runtime {
@@ -42,11 +55,28 @@ pub struct RateLimitPattern {
     pub resets_in_capture: Option<String>,
 }
 
-/// Load every `runtimes/<name>.yaml` under the compose root into a map keyed
-/// by the file stem (so `claude-code.yaml` → key `"claude-code"`).
+/// Embedded canonical runtime descriptors -- the ones teamctl ships with.
+/// Always available; do not require any files on disk.
+pub fn embedded_defaults() -> Result<BTreeMap<String, Runtime>> {
+    EMBEDDED
+        .iter()
+        .map(|(stem, src)| {
+            let r: Runtime = serde_yaml::from_str(src)
+                .with_context(|| format!("parse embedded runtime `{stem}`"))?;
+            Ok(((*stem).to_string(), r))
+        })
+        .collect()
+}
+
+/// Resolve the runtime adapter map for a compose tree.
+///
+/// Starts from the [`embedded_defaults`] (Claude Code / Codex / Gemini) and
+/// overlays any `<root>/runtimes/<name>.yaml` files. File-based descriptors
+/// override the embedded ones when keys collide and can introduce new
+/// runtimes the binary has never heard of.
 pub fn load_all(root: &Path) -> Result<BTreeMap<String, Runtime>> {
+    let mut map = embedded_defaults()?;
     let dir = root.join("runtimes");
-    let mut map = BTreeMap::new();
     if !dir.exists() {
         return Ok(map);
     }
@@ -75,31 +105,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn load_nonexistent_returns_empty() {
-        let tmp = tempfile::tempdir().unwrap();
-        let m = load_all(tmp.path()).unwrap();
-        assert!(m.is_empty());
+    fn embedded_defaults_parse() {
+        let m = embedded_defaults().unwrap();
+        assert!(m.contains_key("claude-code"));
+        assert!(m.contains_key("codex"));
+        assert!(m.contains_key("gemini"));
+        assert_eq!(m["claude-code"].binary, "claude");
+        assert!(m["claude-code"].supports_mcp);
     }
 
     #[test]
-    fn load_parses_runtimes() {
+    fn load_nonexistent_returns_embedded_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = load_all(tmp.path()).unwrap();
+        // No files on disk, but the embedded defaults must still be there.
+        assert!(m.contains_key("claude-code"));
+        assert!(m.contains_key("codex"));
+        assert!(m.contains_key("gemini"));
+    }
+
+    #[test]
+    fn user_file_overrides_embedded_default() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("runtimes");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("claude-code.yaml"),
-            "binary: claude\nsupports_mcp: true\ndefault_model: claude-opus-4-7\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("codex.yaml"),
-            "binary: codex\nsupports_mcp: true\n",
+            "binary: my-claude-fork\nsupports_mcp: false\n",
         )
         .unwrap();
         let m = load_all(tmp.path()).unwrap();
-        assert_eq!(m.len(), 2);
-        assert_eq!(m["claude-code"].binary, "claude");
-        assert!(m["claude-code"].supports_mcp);
+        assert_eq!(m["claude-code"].binary, "my-claude-fork");
+        assert!(!m["claude-code"].supports_mcp);
+        // Other embedded defaults are untouched.
         assert_eq!(m["codex"].binary, "codex");
+    }
+
+    #[test]
+    fn user_file_can_add_new_runtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("runtimes");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("aider.yaml"),
+            "binary: aider\nsupports_mcp: false\n",
+        )
+        .unwrap();
+        let m = load_all(tmp.path()).unwrap();
+        assert_eq!(m["aider"].binary, "aider");
+        // Embedded defaults coexist.
+        assert!(m.contains_key("claude-code"));
     }
 }

@@ -67,7 +67,7 @@ pub enum ValidationError {
     #[error("duplicate project id `{0}`")]
     DuplicateProject(String),
 
-    #[error("project `{project}`: agent `{agent}` uses runtime `{runtime}` but no `runtimes/{runtime}.yaml` was found")]
+    #[error("project `{project}`: agent `{agent}` uses runtime `{runtime}`, which is not built in and not declared in `<root>/runtimes/{runtime}.yaml`")]
     UnknownRuntime {
         project: String,
         agent: String,
@@ -78,9 +78,9 @@ pub enum ValidationError {
 pub fn validate(compose: &Compose) -> Vec<ValidationError> {
     let mut errs = Vec::new();
 
-    // Known runtimes. Missing runtimes/ dir is OK (validator doesn't require
-    // them), but if the dir exists we enforce every referenced runtime has a
-    // descriptor.
+    // Known runtimes. Embedded defaults are always present, so the
+    // validator can always enforce that every referenced runtime resolves
+    // to a descriptor (built in or user-supplied override).
     let runtimes = crate::runtimes::load_all(&compose.root).unwrap_or_default();
     let check_runtime = !runtimes.is_empty();
 

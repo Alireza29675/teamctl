@@ -35,7 +35,8 @@ pub fn run(root: &Path, target: &str, runtime_args: &[String]) -> Result<()> {
     let runtimes = team_core::runtimes::load_all(&compose.root)?;
     let Some(rt_def) = runtimes.get(&handle.spec.runtime) else {
         bail!(
-            "runtime `{}` for agent `{target}` has no descriptor in runtimes/",
+            "runtime `{}` for agent `{target}` is unknown -- not built in and no `<root>/runtimes/{}.yaml` override found",
+            handle.spec.runtime,
             handle.spec.runtime
         );
     };
