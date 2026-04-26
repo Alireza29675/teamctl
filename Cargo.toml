@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.78"
 license = "MIT"
@@ -30,7 +30,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 notify = "6"
 schemars = "0.8"
 insta = { version = "1", features = ["yaml"] }
-team-core = { path = "crates/team-core", version = "0.2.1" }
+team-core = { path = "crates/team-core", version = "0.2.2" }
 
 [profile.release]
 lto = "thin"
@@ -42,6 +42,11 @@ strip = true
 [workspace.metadata.dist]
 cargo-dist-version = "0.25.1"
 ci = "github"
+# We hand-edit release.yml to keep `runs-on: ubuntu-24.04` (GitHub Actions
+# retired ubuntu-20.04 in April 2026; cargo-dist 0.25.1 still defaults to
+# 20.04). `allow-dirty = ["ci"]` tells `dist host` to skip the freshness
+# check on the workflow file so releases don't fail on the diff.
+allow-dirty = ["ci"]
 installers = ["shell", "homebrew"]
 tap = "Alireza29675/homebrew-teamctl"
 publish-jobs = ["homebrew"]

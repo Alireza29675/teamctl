@@ -4,6 +4,23 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-04-26
+
+### Fixed
+
+- Release pipeline. v0.2.0 and v0.2.1 published to crates.io but
+  produced no GitHub Release artifacts (no platform tarballs, no
+  Homebrew formula bump) because `dist host` exited 255 on a freshness
+  check: the hand-edited `runs-on: ubuntu-24.04` in `release.yml`
+  diverges from what `cargo-dist 0.25.1` would generate
+  (`ubuntu-20.04`, retired by GitHub Actions in April 2026). Adding
+  `allow-dirty = ["ci"]` to the dist metadata tells dist to skip the
+  workflow-freshness diff so releases unblock.
+- Docs build (Astro Starlight). The Astro 4.16 / Starlight 0.29 pin
+  pulled in newer transitive `zod` versions whose internal v4 API
+  layout broke `zod-to-json-schema`. Bumped to Astro 5 + Starlight
+  0.30, both of which handle modern zod cleanly.
+
 ## [0.2.1] — 2026-04-26
 
 ### Changed
