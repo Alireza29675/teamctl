@@ -31,6 +31,15 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   up` is itself an explicit "I trust this directory" signal -- without
   this, the runtime blocks on a trust prompt the moment it boots and
   defeats the "agents start working when teamctl up runs" model.
+- `claude-code` agents now launch with `--dangerously-skip-permissions`
+  in addition to whatever `permission_mode:` the agent sets. Auto mode
+  in Claude Code still prompts for tool calls its risk classifier deems
+  sensitive (anything matching `claude mcp *`, `git push`, ...). With
+  no human at the keyboard those prompts deadlock the pane, so the
+  classifier becomes advisory and the prompt is suppressed. The proper
+  human-in-loop ring for teamctl is the team-mcp `request_approval`
+  tool gated by the agent's `autonomy:` field -- not the per-tool-call
+  prompt buried inside the runtime.
 
 ### Fixed
 

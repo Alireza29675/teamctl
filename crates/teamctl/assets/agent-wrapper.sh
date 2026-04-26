@@ -50,6 +50,12 @@ while :; do
             BIN=claude
             set --
             [ -n "$PERMISSION_MODE" ] && set -- "$@" --permission-mode "$PERMISSION_MODE"
+            # Autonomous agents have no human at the keyboard, so any
+            # permission prompt deadlocks the pane. Skip them at the
+            # claude layer; teamctl's HITL gate (request_approval via
+            # team-mcp + the agent's `autonomy:` field) is the proper
+            # human-in-loop ring instead.
+            set -- "$@" --dangerously-skip-permissions
             [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
             [ -n "$MCP_CONFIG" ] && set -- "$@" --mcp-config "$MCP_CONFIG"
             [ -n "$SYSTEM_PROMPT_PATH" ] && [ -f "$SYSTEM_PROMPT_PATH" ] && \
