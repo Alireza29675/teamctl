@@ -5,8 +5,13 @@
 #   - sourcing the per-agent env file (via the tmux command's `env`)
 #   - looping on the runtime so crashes auto-restart
 #   - routing every runtime invocation through `teamctl rl-watch` so
-#     rate-limits get parsed, hooks fire, and we sleep until the limit
+#     the runtime gets a real pty (interactive REPL), rate-limit
+#     signatures get parsed, hooks fire, and we sleep until the limit
 #     window has cleared before respawning.
+#
+# This file is teamctl-managed: `teamctl up` rewrites it on every run.
+# Customize behaviour through env vars (BOOTSTRAP_PROMPT, MODEL, ...)
+# rather than editing the script.
 #
 # First positional arg is `<project>:<agent>`.
 
@@ -25,6 +30,7 @@ fi
 : "${SYSTEM_PROMPT_PATH:=}"
 : "${CLAUDE_PROJECT_DIR:=.}"
 : "${TEAMCTL_ROOT:=$CLAUDE_PROJECT_DIR}"
+: "${BOOTSTRAP_PROMPT:=Begin your shift as ${AGENT}. Open inbox_watch via the \`team\` MCP server and keep it open. Process any messages per your role and the system prompt. Stay running -- do not exit.}"
 
 cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || true
 
@@ -32,46 +38,40 @@ log() {
     printf '[agent-wrapper %s] %s\n' "$AGENT" "$*" >&2
 }
 
-# Build the runtime invocation as positional args. The wrapper hands the
-# whole thing to `teamctl rl-watch -- …`, which spawns the runtime under
-# a parsing pipeline. If teamctl is not on PATH, we fall back to direct
-# exec — at the cost of dumb retries on rate-limit hits.
-build_claude_args() {
-    set --
-    [ -n "$PERMISSION_MODE" ] && set -- "$@" --permission-mode "$PERMISSION_MODE"
-    [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
-    [ -n "$MCP_CONFIG" ] && set -- "$@" --mcp-config "$MCP_CONFIG"
-    [ -n "$SYSTEM_PROMPT_PATH" ] && [ -f "$SYSTEM_PROMPT_PATH" ] && \
-        set -- "$@" --append-system-prompt "$(cat "$SYSTEM_PROMPT_PATH")"
-    BIN=claude
-    BIN_ARGS="$*"
-}
-
-build_codex_args() {
-    set --
-    [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
-    [ -n "$MCP_CONFIG" ] && set -- "$@" --mcp-config "$MCP_CONFIG"
-    [ -n "$SYSTEM_PROMPT_PATH" ] && set -- "$@" --instructions "$SYSTEM_PROMPT_PATH"
-    BIN=codex
-    BIN_ARGS="$*"
-}
-
-build_gemini_args() {
-    set --
-    [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
-    [ -n "$MCP_CONFIG" ] && set -- "$@" --mcp-config "$MCP_CONFIG"
-    [ -n "$SYSTEM_PROMPT_PATH" ] && set -- "$@" --system-instruction-file "$SYSTEM_PROMPT_PATH"
-    set -- "$@" --yolo
-    BIN=gemini
-    BIN_ARGS="$*"
-}
-
+# Build the runtime invocation as the script's positional parameters.
+# Doing this in-line (instead of in a function) keeps the args quoted —
+# previous versions stuffed everything into a single $BIN_ARGS string and
+# re-split on whitespace, which silently corrupted multi-word values like
+# the role prompt.
 while :; do
     log "starting runtime=$RUNTIME model=${MODEL:-<default>}"
     case "$RUNTIME" in
-        claude-code) build_claude_args ;;
-        codex)       build_codex_args ;;
-        gemini)      build_gemini_args ;;
+        claude-code)
+            BIN=claude
+            set --
+            [ -n "$PERMISSION_MODE" ] && set -- "$@" --permission-mode "$PERMISSION_MODE"
+            [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
+            [ -n "$MCP_CONFIG" ] && set -- "$@" --mcp-config "$MCP_CONFIG"
+            [ -n "$SYSTEM_PROMPT_PATH" ] && [ -f "$SYSTEM_PROMPT_PATH" ] && \
+                set -- "$@" --append-system-prompt "$(cat "$SYSTEM_PROMPT_PATH")"
+            set -- "$@" "$BOOTSTRAP_PROMPT"
+            ;;
+        codex)
+            BIN=codex
+            set --
+            [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
+            [ -n "$MCP_CONFIG" ] && set -- "$@" --mcp-config "$MCP_CONFIG"
+            [ -n "$SYSTEM_PROMPT_PATH" ] && set -- "$@" --instructions "$SYSTEM_PROMPT_PATH"
+            set -- "$@" "$BOOTSTRAP_PROMPT"
+            ;;
+        gemini)
+            BIN=gemini
+            set --
+            [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
+            [ -n "$MCP_CONFIG" ] && set -- "$@" --mcp-config "$MCP_CONFIG"
+            [ -n "$SYSTEM_PROMPT_PATH" ] && set -- "$@" --system-instruction-file "$SYSTEM_PROMPT_PATH"
+            set -- "$@" --yolo "$BOOTSTRAP_PROMPT"
+            ;;
         *)
             log "unknown runtime: $RUNTIME"
             sleep 30
@@ -80,12 +80,10 @@ while :; do
     esac
 
     if command -v teamctl >/dev/null 2>&1; then
-        # shellcheck disable=SC2086
-        teamctl --root "$TEAMCTL_ROOT" rl-watch "$AGENT" -- "$BIN" $BIN_ARGS
+        teamctl --root "$TEAMCTL_ROOT" rl-watch "$AGENT" -- "$BIN" "$@"
     else
         log "teamctl not on PATH — running runtime directly (no rate-limit handling)"
-        # shellcheck disable=SC2086
-        "$BIN" $BIN_ARGS
+        "$BIN" "$@"
     fi
     ec=$?
     log "runtime exited ec=$ec — restarting in 5s"

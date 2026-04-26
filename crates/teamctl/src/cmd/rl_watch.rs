@@ -1,8 +1,10 @@
 //! `teamctl rl-watch <project>:<agent> -- <bin> <args…>`
 //!
-//! Runs a runtime binary, streams its stdout/stderr through to our own
-//! stdout (so the agent's tmux pane shows what's happening), and tests each
-//! line against the runtime's `rate_limit_patterns`. On a hit:
+//! Spawns a runtime binary under a *pseudo-terminal* so it sees a real TTY
+//! (interactive Claude Code REPL, Codex, etc. all need this), forwards
+//! the wrapper's own stdin into the pty so attached operators can drive
+//! the session, copies pty output back to the wrapper's stdout, AND
+//! scans each line for the runtime's `rate_limit_patterns`. On a hit:
 //!
 //! 1. Insert a row into the `rate_limits` table.
 //! 2. Run the agent's `on_rate_limit` hook chain (or the global default).
@@ -11,17 +13,20 @@
 //! 4. Exit 0 — the surrounding `agent-wrapper.sh` loop respawns the runtime
 //!    *after* the limit window has cleared.
 //!
-//! If the runtime exits cleanly without a rate-limit signature, we exit
-//! with the runtime's own status code so the wrapper handles that path.
+//! Without the pty wrap, runtimes detect non-TTY stdio and silently drop
+//! into one-shot/print mode, exit immediately, and the wrapper enters a
+//! 5-second restart loop -- which was the v0.1 behaviour.
 
-use std::io::{BufRead, BufReader};
+use std::io::{IsTerminal, Read, Write};
 use std::path::Path;
-use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{Local, NaiveTime, TimeZone, Timelike, Utc};
+use portable_pty::{native_pty_system, CommandBuilder, ExitStatus, PtySize};
 use regex::Regex;
 use rusqlite::{params, Connection};
 use team_core::compose::{Compose, RateLimitHook};
@@ -57,40 +62,99 @@ pub fn run(root: &Path, target: &str, runtime_args: &[String]) -> Result<()> {
         patterns.len()
     );
 
-    // Spawn the runtime with merged stdout+stderr piped in.
-    let mut child = Command::new(bin)
-        .args(bin_args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("spawn runtime `{bin}`"))?;
+    // Open a pty pair sized to our controlling terminal (or 80x24 fallback).
+    let pty_size = current_winsize();
+    let pair = native_pty_system()
+        .openpty(pty_size)
+        .context("openpty for runtime")?;
 
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
+    // Build the child command. CommandBuilder doesn't inherit env by default;
+    // copy ours through so the runtime sees PATH, HOME, ANTHROPIC_*, etc.
+    let mut cmd = CommandBuilder::new(bin);
+    for arg in bin_args {
+        cmd.arg(arg);
+    }
+    for (k, v) in std::env::vars() {
+        cmd.env(k, v);
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        cmd.cwd(cwd);
+    }
 
-    // Two reader threads — one per stream — both publishing matched events
-    // back to the main thread via an mpsc channel.
-    let (tx, rx) = std::sync::mpsc::channel::<RlEvent>();
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .with_context(|| format!("spawn runtime `{bin}` under pty"))?;
+    drop(pair.slave); // close our copy of the slave fd
 
-    let stdout_tx = tx.clone();
-    let stdout_pats = patterns.clone();
-    thread::spawn(move || stream_loop(stdout, stdout_pats, stdout_tx, false));
+    let mut reader = pair.master.try_clone_reader().context("clone pty reader")?;
+    let mut writer = pair.master.take_writer().context("take pty writer")?;
 
-    let stderr_tx = tx.clone();
-    let stderr_pats = patterns.clone();
-    thread::spawn(move || stream_loop(stderr, stderr_pats, stderr_tx, true));
+    // If our stdin is a TTY, switch it to raw mode so individual keystrokes
+    // reach the child immediately (instead of being buffered until newline
+    // by line discipline). Restored on drop of the guard.
+    let _termios_guard = if std::io::stdin().is_terminal() {
+        TermiosGuard::new()
+    } else {
+        TermiosGuard::noop()
+    };
 
-    drop(tx); // last sender dies when both reader threads finish
+    let child_alive = Arc::new(AtomicBool::new(true));
 
+    // Stdin -> pty writer thread. Exits when stdin hits EOF or child dies.
+    let stdin_alive = child_alive.clone();
+    thread::spawn(move || {
+        let mut stdin = std::io::stdin();
+        let mut buf = [0u8; 4096];
+        while stdin_alive.load(Ordering::SeqCst) {
+            match stdin.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if writer.write_all(&buf[..n]).is_err() {
+                        break;
+                    }
+                    let _ = writer.flush();
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // Main loop: pty reader -> stdout, with line-buffered pattern scan.
+    let mut buf = [0u8; 4096];
+    let mut line_buf: Vec<u8> = Vec::new();
+    let stdout = std::io::stdout();
     let mut hit: Option<RlEvent> = None;
-    while let Ok(ev) = rx.recv() {
-        if hit.is_none() {
-            hit = Some(ev);
-            // Don't kill child here — let it exit on its own. Most runtimes
-            // do once they print the rate-limit message.
+
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                {
+                    let mut out = stdout.lock();
+                    let _ = out.write_all(&buf[..n]);
+                    let _ = out.flush();
+                }
+                if hit.is_none() {
+                    for &b in &buf[..n] {
+                        match b {
+                            b'\n' | b'\r' => {
+                                if let Some(ev) = scan_line(&line_buf, &patterns) {
+                                    hit = Some(ev);
+                                    break;
+                                }
+                                line_buf.clear();
+                            }
+                            _ => line_buf.push(b),
+                        }
+                    }
+                }
+            }
+            Err(_) => break,
         }
     }
 
+    child_alive.store(false, Ordering::SeqCst);
     let status = child.wait().context("wait runtime")?;
 
     if let Some(ev) = hit {
@@ -102,14 +166,155 @@ pub fn run(root: &Path, target: &str, runtime_args: &[String]) -> Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(anyhow!("runtime exited {}", code_str(&status)))
+        Err(anyhow!("runtime exited {}", status_str(&status)))
     }
 }
 
-fn code_str(status: &ExitStatus) -> String {
-    match status.code() {
-        Some(c) => c.to_string(),
-        None => "<signal>".into(),
+fn scan_line(buf: &[u8], patterns: &[CompiledPattern]) -> Option<RlEvent> {
+    if buf.is_empty() {
+        return None;
+    }
+    // Strip basic ANSI CSI/OSC sequences before matching so escape codes
+    // baked into the runtime's status line don't defeat the regex.
+    let stripped = strip_ansi(buf);
+    let line = String::from_utf8_lossy(&stripped).into_owned();
+    for p in patterns {
+        if p.matcher.is_match(&line) {
+            let resets_at = parse_resets(&line, p);
+            return Some(RlEvent {
+                raw: line,
+                resets_at,
+            });
+        }
+    }
+    None
+}
+
+fn strip_ansi(input: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        if input[i] == 0x1b && i + 1 < input.len() {
+            match input[i + 1] {
+                b'[' => {
+                    // CSI: skip until a byte in 0x40..=0x7E
+                    i += 2;
+                    while i < input.len() && !(0x40..=0x7e).contains(&input[i]) {
+                        i += 1;
+                    }
+                    if i < input.len() {
+                        i += 1;
+                    }
+                }
+                b']' => {
+                    // OSC: skip until BEL (0x07) or ST (ESC \)
+                    i += 2;
+                    while i < input.len() {
+                        if input[i] == 0x07 {
+                            i += 1;
+                            break;
+                        }
+                        if input[i] == 0x1b && i + 1 < input.len() && input[i + 1] == b'\\' {
+                            i += 2;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {
+                    // Other ESC X — skip the two bytes
+                    i += 2;
+                }
+            }
+        } else {
+            out.push(input[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn status_str(status: &ExitStatus) -> String {
+    if status.success() {
+        "0".into()
+    } else {
+        format!("{}", status.exit_code())
+    }
+}
+
+fn current_winsize() -> PtySize {
+    #[cfg(unix)]
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        let fd = libc::STDIN_FILENO;
+        if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
+            return PtySize {
+                rows: ws.ws_row,
+                cols: ws.ws_col,
+                pixel_width: ws.ws_xpixel,
+                pixel_height: ws.ws_ypixel,
+            };
+        }
+    }
+    PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    }
+}
+
+/// RAII guard that puts stdin into raw mode on construction and restores
+/// the saved termios on drop. `noop()` constructs a guard that does
+/// nothing (used when stdin is not a TTY).
+struct TermiosGuard {
+    #[cfg(unix)]
+    saved: Option<libc::termios>,
+}
+
+impl TermiosGuard {
+    #[cfg(unix)]
+    fn new() -> Self {
+        unsafe {
+            let fd = libc::STDIN_FILENO;
+            let mut termios: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(fd, &mut termios) != 0 {
+                return TermiosGuard { saved: None };
+            }
+            let saved = termios;
+            libc::cfmakeraw(&mut termios);
+            if libc::tcsetattr(fd, libc::TCSANOW, &termios) != 0 {
+                return TermiosGuard { saved: None };
+            }
+            TermiosGuard { saved: Some(saved) }
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn new() -> Self {
+        TermiosGuard {}
+    }
+
+    fn noop() -> Self {
+        #[cfg(unix)]
+        {
+            TermiosGuard { saved: None }
+        }
+        #[cfg(not(unix))]
+        {
+            TermiosGuard {}
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for TermiosGuard {
+    fn drop(&mut self) {
+        if let Some(t) = self.saved {
+            unsafe {
+                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &t);
+            }
+        }
     }
 }
 
@@ -147,33 +352,6 @@ fn compile_patterns(src: &[RateLimitPattern]) -> Result<Vec<CompiledPattern>> {
 struct RlEvent {
     raw: String,
     resets_at: Option<f64>,
-}
-
-fn stream_loop<R: std::io::Read + Send + 'static>(
-    src: R,
-    patterns: Vec<CompiledPattern>,
-    tx: std::sync::mpsc::Sender<RlEvent>,
-    is_stderr: bool,
-) {
-    let reader = BufReader::new(src);
-    for line in reader.lines().map_while(Result::ok) {
-        // Passthrough so the agent's tmux pane keeps showing the live output.
-        if is_stderr {
-            eprintln!("{line}");
-        } else {
-            println!("{line}");
-        }
-        for p in &patterns {
-            if p.matcher.is_match(&line) {
-                let resets_at = parse_resets(&line, p);
-                let _ = tx.send(RlEvent {
-                    raw: line.clone(),
-                    resets_at,
-                });
-                break;
-            }
-        }
-    }
 }
 
 fn parse_resets(line: &str, p: &CompiledPattern) -> Option<f64> {
@@ -429,7 +607,7 @@ fn run_hook(hook: &RateLimitHook, bag: &HookContext, db_path: &Path) -> Result<(
             };
             let method = hook.method.as_deref().unwrap_or("POST");
             let body = bag.to_json().to_string();
-            let mut cmd = Command::new("curl");
+            let mut cmd = std::process::Command::new("curl");
             cmd.args([
                 "-fsS",
                 "-X",
@@ -452,7 +630,7 @@ fn run_hook(hook: &RateLimitHook, bag: &HookContext, db_path: &Path) -> Result<(
                 .next()
                 .ok_or_else(|| anyhow!("hook {} `command` is empty", hook.name))?;
             let args: Vec<String> = iter.map(|a| bag.substitute(a)).collect();
-            let st = Command::new(bin)
+            let st = std::process::Command::new(bin)
                 .args(&args)
                 .status()
                 .with_context(|| format!("run command for hook {}", hook.name))?;
@@ -505,5 +683,29 @@ mod tests {
         let c = compile_patterns(&v).unwrap();
         assert_eq!(c.len(), 1);
         assert!(c[0].matcher.is_match("Limit reached, please wait"));
+    }
+
+    #[test]
+    fn strip_ansi_csi() {
+        let input = b"\x1b[31mhello\x1b[0m world";
+        assert_eq!(strip_ansi(input), b"hello world");
+    }
+
+    #[test]
+    fn strip_ansi_osc() {
+        let input = b"\x1b]0;title\x07after";
+        assert_eq!(strip_ansi(input), b"after");
+    }
+
+    #[test]
+    fn scan_line_matches_with_ansi_codes() {
+        let patterns = compile_patterns(&[RateLimitPattern {
+            r#match: "(?i)limit reached".into(),
+            resets_at_capture: None,
+            resets_in_capture: None,
+        }])
+        .unwrap();
+        let line = b"\x1b[33mLimit reached!\x1b[0m";
+        assert!(scan_line(line, &patterns).is_some());
     }
 }

@@ -4,6 +4,34 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Changed
+
+- `teamctl rl-watch` now spawns the runtime under a real pseudo-terminal
+  (via `portable-pty`) and forwards stdin from the wrapper's controlling
+  TTY. Without this, runtimes detected non-TTY stdio and silently dropped
+  into one-shot/print mode -- so `tmux attach -t a-<agent>` showed a
+  five-second restart loop instead of an interactive Claude Code REPL.
+  Rate-limit pattern scanning is preserved by tee-ing the pty's output
+  through an ANSI-stripping line scanner before re-emitting it.
+- `agent-wrapper.sh` now passes runtime arguments as proper `argv` to
+  `teamctl rl-watch -- "$BIN" "$@"` instead of round-tripping them
+  through a single `$BIN_ARGS` string. The old shape silently word-split
+  multi-word values like `--append-system-prompt "$(cat role.md)"`,
+  feeding the runtime garbage. The wrapper also appends a configurable
+  `BOOTSTRAP_PROMPT` (defaults to "Begin your shift as <agent>. Open
+  inbox_watch via team MCP. Stay running.") so agents enter their work
+  loop on launch instead of sitting at an empty prompt.
+- `teamctl up` rewrites `bin/agent-wrapper.sh` whenever the on-disk copy
+  differs from the binary's bundled template. Previously the wrapper was
+  written only on first launch, so upgrading teamctl never delivered
+  wrapper fixes to existing workspaces.
+- `teamctl up` auto-accepts Claude Code's per-workspace trust dialog for
+  every cwd that will host a `claude-code` agent (writes
+  `hasTrustDialogAccepted: true` into `~/.claude.json`). Running `teamctl
+  up` is itself an explicit "I trust this directory" signal -- without
+  this, the runtime blocks on a trust prompt the moment it boots and
+  defeats the "agents start working when teamctl up runs" model.
+
 ### Fixed
 
 - Runtime adapter descriptors for the three shipped runtimes (Claude Code,

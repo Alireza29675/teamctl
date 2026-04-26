@@ -1,5 +1,6 @@
+use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 use team_core::compose::Compose;
@@ -18,12 +19,100 @@ pub fn run(root: &Path) -> Result<()> {
     ensure_wrapper_and_dirs(&compose)?;
     render_all_public(&compose)?;
     register_all_public(&compose)?;
+    ensure_claude_trust(&compose)?;
 
     let sup = TmuxSupervisor;
     for h in compose.agents() {
         let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
         sup.up(&spec)?;
         println!("up · {}", h.id());
+    }
+    Ok(())
+}
+
+/// Pre-accept Claude Code's per-workspace trust dialog for every cwd that
+/// will host a `claude-code` agent. Without this, the runtime blocks on a
+/// "Do you trust this folder?" prompt the moment it boots, defeating the
+/// "agents start working when teamctl up runs" model.
+///
+/// Running `teamctl up` is itself an explicit "I trust this directory"
+/// signal -- the user is about to launch AI agents with tool access in
+/// it -- so we record that consent in `~/.claude.json` once instead of
+/// making them click through the dialog every restart.
+fn ensure_claude_trust(compose: &Compose) -> Result<()> {
+    let cwds: BTreeSet<PathBuf> = compose
+        .agents()
+        .filter(|h| h.spec.runtime == "claude-code")
+        .filter_map(|h| {
+            let project = compose
+                .projects
+                .iter()
+                .find(|p| p.project.id == h.project)?;
+            let cwd = if project.project.cwd.is_absolute() {
+                project.project.cwd.clone()
+            } else {
+                compose.root.join(&project.project.cwd)
+            };
+            cwd.canonicalize().ok().or(Some(cwd))
+        })
+        .collect();
+
+    if cwds.is_empty() {
+        return Ok(());
+    }
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Ok(());
+    };
+    let config_path = home.join(".claude.json");
+
+    let mut config: serde_json::Value = match fs::read_to_string(&config_path) {
+        Ok(s) => serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    if !config
+        .get("projects")
+        .map(|v| v.is_object())
+        .unwrap_or(false)
+    {
+        config["projects"] = serde_json::json!({});
+    }
+    let projects = config["projects"].as_object_mut().unwrap();
+
+    let mut newly_trusted = Vec::new();
+    for cwd in &cwds {
+        let key = cwd.display().to_string();
+        let entry = projects
+            .entry(key.clone())
+            .or_insert_with(|| serde_json::json!({}));
+        if !entry.is_object() {
+            *entry = serde_json::json!({});
+        }
+        let obj = entry.as_object_mut().unwrap();
+        let already = matches!(
+            obj.get("hasTrustDialogAccepted"),
+            Some(serde_json::Value::Bool(true))
+        );
+        if !already {
+            obj.insert(
+                "hasTrustDialogAccepted".into(),
+                serde_json::Value::Bool(true),
+            );
+            newly_trusted.push(key);
+        }
+    }
+
+    if newly_trusted.is_empty() {
+        return Ok(());
+    }
+
+    // Write atomically so a concurrent claude reader never sees a
+    // half-written config.
+    let tmp = config_path.with_extension("json.teamctl.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(&config)?)?;
+    fs::rename(&tmp, &config_path)?;
+
+    for path in newly_trusted {
+        eprintln!("trust · auto-accepted Claude Code workspace trust for {path}");
     }
     Ok(())
 }
@@ -133,13 +222,23 @@ pub fn register_all_public(compose: &Compose) -> Result<()> {
     Ok(())
 }
 
-/// Write `bin/agent-wrapper.sh` and create `state/` subdirs if missing.
+/// Write `bin/agent-wrapper.sh` and create `state/` subdirs.
+///
+/// The wrapper is teamctl-managed infrastructure: it gets rewritten on
+/// every `teamctl up` so upgrading the binary picks up wrapper fixes
+/// (pty handling, argv quoting, ...) without users having to rm and
+/// re-init their workspace. Customization happens through env vars in
+/// the generated `state/envs/<agent>.env`, not by editing the wrapper.
 pub fn ensure_wrapper_and_dirs(compose: &Compose) -> Result<()> {
     let wrapper = super::agent_wrapper(&compose.root);
-    if !wrapper.exists() {
-        if let Some(parent) = wrapper.parent() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = wrapper.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let needs_write = match fs::read_to_string(&wrapper) {
+        Ok(existing) => existing != DEFAULT_WRAPPER,
+        Err(_) => true,
+    };
+    if needs_write {
         fs::write(&wrapper, DEFAULT_WRAPPER)?;
     }
     #[cfg(unix)]
