@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.6"
+version = "0.2.7"
 edition = "2021"
 rust-version = "1.78"
 license = "MIT"
@@ -30,7 +30,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 notify = "6"
 schemars = "0.8"
 insta = { version = "1", features = ["yaml"] }
-team-core = { path = "crates/team-core", version = "0.2.6" }
+team-core = { path = "crates/team-core", version = "0.2.7" }
 
 [profile.release]
 lto = "thin"
@@ -63,6 +63,15 @@ install-path = "~/.local/bin"
 # Jobs that target them sit queued forever. Override every target to a
 # currently-supported runner image.
 github-custom-runners = { x86_64-unknown-linux-gnu = "ubuntu-24.04", aarch64-unknown-linux-gnu = "ubuntu-24.04", x86_64-apple-darwin = "macos-14", aarch64-apple-darwin = "macos-14" }
+
+# Cross-compile sysroot for the aarch64 Linux target. cc-rs (used by
+# `ring`, `openssl-sys`, ...) auto-resolves `aarch64-linux-gnu-gcc`
+# from PATH when the build target is aarch64-unknown-linux-gnu, but
+# the GitHub Actions ubuntu-24.04 runner doesn't ship the cross-gcc.
+# Without this, every cross-compile dies with
+# `failed to find tool "aarch64-linux-gnu-gcc"`.
+[workspace.metadata.dist.dependencies.apt]
+gcc-aarch64-linux-gnu = { targets = ["aarch64-unknown-linux-gnu"] }
 
 [profile.dist]
 inherits = "release"

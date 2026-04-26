@@ -4,6 +4,18 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.2.7] — 2026-04-26
+
+### Fixed
+
+- aarch64-unknown-linux-gnu Release builds (final). Even with rustls
+  in v0.2.6, `ring` (rustls's crypto provider) needs to compile its
+  ARM assembly using `aarch64-linux-gnu-gcc`, which the GitHub Actions
+  ubuntu-24.04 runner doesn't ship by default. Configured cargo-dist's
+  `[workspace.metadata.dist.dependencies.apt]` to install
+  `gcc-aarch64-linux-gnu` only on the aarch64-linux build matrix
+  entry, so cc-rs auto-resolves the cross compiler.
+
 ## [0.2.6] — 2026-04-26
 
 ### Changed
