@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 rust-version = "1.78"
 license = "MIT"
@@ -30,7 +30,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 notify = "6"
 schemars = "0.8"
 insta = { version = "1", features = ["yaml"] }
-team-core = { path = "crates/team-core", version = "0.2.3" }
+team-core = { path = "crates/team-core", version = "0.2.4" }
 
 [profile.release]
 lto = "thin"
@@ -48,12 +48,6 @@ ci = "github"
 # check on the workflow file so releases don't fail on the diff.
 allow-dirty = ["ci"]
 installers = ["shell", "homebrew"]
-# cargo-dist 0.25.1 emits `macos-13` for the matrix runner labels; that
-# image was retired by GitHub Actions and jobs sit queued forever.
-# Override to a current macOS runner.
-[workspace.metadata.dist.github-custom-runners]
-x86_64-apple-darwin = "macos-14"
-aarch64-apple-darwin = "macos-14"
 tap = "Alireza29675/homebrew-teamctl"
 publish-jobs = ["homebrew"]
 targets = [
@@ -64,6 +58,11 @@ targets = [
 ]
 pr-run-mode = "plan"
 install-path = "~/.local/bin"
+# cargo-dist 0.25.1's default runner labels are all retired by GitHub
+# Actions: `ubuntu-20.04` and `macos-13` were both removed in 2025-2026.
+# Jobs that target them sit queued forever. Override every target to a
+# currently-supported runner image.
+github-custom-runners = { x86_64-unknown-linux-gnu = "ubuntu-24.04", aarch64-unknown-linux-gnu = "ubuntu-24.04", x86_64-apple-darwin = "macos-14", aarch64-apple-darwin = "macos-14" }
 
 [profile.dist]
 inherits = "release"

@@ -4,17 +4,30 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-04-26
+
+### Fixed
+
+- Release builds for every platform. cargo-dist 0.25.1's default runner
+  labels (`ubuntu-20.04`, `macos-13`) were both retired by GitHub
+  Actions in 2025-2026 -- jobs targeting them sit queued forever.
+  Override every target via inline
+  `github-custom-runners = { x86_64-unknown-linux-gnu = "ubuntu-24.04",
+   aarch64-unknown-linux-gnu = "ubuntu-24.04",
+   x86_64-apple-darwin = "macos-14",
+   aarch64-apple-darwin = "macos-14" }`.
+  v0.2.3 attempted this with the `[workspace.metadata.dist.github-custom-runners]`
+  table syntax; cargo-dist 0.25.1's deserializer rejects that with
+  "invalid type: sequence, expected a string" -- the inline-table form
+  is what the v0 schema actually accepts.
+
 ## [0.2.3] — 2026-04-26
 
 ### Fixed
 
-- macOS Release builds. v0.2.2's platform builds sat queued forever
-  because cargo-dist 0.25.1 emits `macos-13` runner labels and GitHub
-  Actions retired that image in late 2025. Pinned current macOS
-  runners via
-  `[workspace.metadata.dist.github-custom-runners]` →
-  `x86_64-apple-darwin = "macos-14"`,
-  `aarch64-apple-darwin = "macos-14"`.
+- (intended) macOS Release builds via `github-custom-runners` table.
+  Released to crates.io but the Release workflow rejected the table
+  syntax. Superseded by 0.2.4's inline form.
 
 ## [0.2.2] — 2026-04-26
 
