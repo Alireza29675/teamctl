@@ -276,7 +276,11 @@ jobs:
       PLAN: ${{ needs.plan.outputs.val }}
       GITHUB_USER: "axo bot"
       GITHUB_EMAIL: "admin+bot@axo.dev"
-    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    # Disabled until the Homebrew tap (Alireza29675/homebrew-teamctl) is
+    # provisioned and a HOMEBREW_TAP_TOKEN repo secret with Contents:
+    # Read+Write on the tap exists. To re-enable, restore the original
+    # condition: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    if: false
     steps:
       - uses: actions/checkout@v4
         with:
