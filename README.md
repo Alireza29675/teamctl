@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/hero.png" alt="teamctl — agentic organizations as code" width="880">
+  <img src="docs/assets/hero.jpg" alt="teamctl — agentic organizations as code" width="880">
 </p>
 
 # teamctl
