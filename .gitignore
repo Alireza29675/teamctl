@@ -13,6 +13,10 @@ Cargo.lock.bak
 /state/
 /examples/*/state/
 
+# Local secrets (never committed)
+.env
+**/.env
+
 # Docs build
 /docs/dist/
 /docs/.astro/

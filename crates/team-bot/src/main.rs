@@ -31,9 +31,11 @@ struct Cli {
     #[arg(long, env = "TEAMCTL_TELEGRAM_TOKEN")]
     token: String,
 
-    /// Comma-separated list of authorized chat ids. Required.
-    #[arg(long, env = "TEAMCTL_TELEGRAM_CHATS", value_delimiter = ',')]
-    authorized_chat_ids: Vec<i64>,
+    /// Comma-separated list of authorized chat ids. May be empty during
+    /// bootstrap — the bot will then reply to `/start` with the caller's
+    /// chat id so it can be added to `.env`.
+    #[arg(long, env = "TEAMCTL_TELEGRAM_CHATS")]
+    authorized_chat_ids: Option<String>,
 
     /// Scope this bot to one manager. When set, it forwards only messages
     /// addressed to that manager and only surfaces approvals requested by
@@ -78,9 +80,18 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let bot = Bot::new(&cli.token);
     let conn = open_mailbox(&cli.mailbox)?;
+    let allow: Vec<i64> = cli
+        .authorized_chat_ids
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse().ok())
+        .collect();
     let state = Arc::new(State {
         conn: Mutex::new(conn),
-        allow: cli.authorized_chat_ids,
+        allow,
         manager: cli.manager,
     });
 
@@ -130,13 +141,30 @@ fn open_mailbox(path: &std::path::Path) -> Result<Connection> {
 }
 
 async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseResult<()> {
-    if !state.is_authorized(msg.chat.id.0) {
+    let chat_id = msg.chat.id.0;
+    let trimmed = msg.text().map(str::trim).unwrap_or("");
+
+    // Bootstrap: a chat that isn't on the allow list gets a one-shot reply
+    // to `/start` exposing its own chat id, so the operator can paste it
+    // into `.env` without hunting for @userinfobot.
+    if !state.allow.contains(&chat_id) && trimmed == "/start" {
+        bot.send_message(
+            msg.chat.id,
+            format!(
+                "This chat isn't authorized yet.\n\n\
+                 Your chat id: {chat_id}\n\n\
+                 Add it to .env next to your team-compose.yaml:\n\
+                 TEAMCTL_TELEGRAM_CHATS={chat_id}\n\n\
+                 Then restart team-bot."
+            ),
+        )
+        .await?;
         return Ok(());
     }
-    let Some(text) = msg.text() else {
+
+    if !state.is_authorized(chat_id) {
         return Ok(());
-    };
-    let trimmed = text.trim();
+    }
     if let Some(rest) = trimmed.strip_prefix("/dm ") {
         if let Some((target, body)) = rest.split_once(' ') {
             if let Some((project, _)) = target.split_once(':') {
@@ -267,24 +295,25 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
             let _ = bot.send_message(chat, text).reply_markup(kb).await;
         }
 
-        let forwardable: Vec<(i64, String, String, String)> = {
+        // Forward replies addressed to the human. The agent-side `reply_to_user`
+        // tool inserts rows with `recipient = 'user:telegram'`; in scoped
+        // mode we only forward replies from the configured manager's project.
+        let forwardable: Vec<(i64, String, String)> = {
             let c = state.conn.lock().await;
-            let rows: Vec<(i64, String, String, String)> = match state.manager.as_deref() {
-                Some(mgr) => {
+            let rows: Vec<(i64, String, String)> = match state.manager_project() {
+                Some(project) => {
                     let mut stmt = c
                         .prepare(
-                            "SELECT m.id, m.sender, m.recipient, m.text FROM messages m
-                             JOIN agents a ON a.id = m.recipient
+                            "SELECT m.id, m.sender, m.text FROM messages m
                              WHERE m.id > ?1
-                               AND m.sender != 'user:telegram'
+                               AND m.recipient = 'user:telegram'
                                AND m.acked_at IS NULL
-                               AND a.is_manager = 1
-                               AND a.id = ?2
+                               AND m.project_id = ?2
                              ORDER BY m.id",
                         )
                         .unwrap();
-                    stmt.query_map(params![last_msg_id, mgr], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                    stmt.query_map(params![last_msg_id, project], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
                     })
                     .unwrap()
                     .flatten()
@@ -293,17 +322,15 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
                 None => {
                     let mut stmt = c
                         .prepare(
-                            "SELECT m.id, m.sender, m.recipient, m.text FROM messages m
-                             JOIN agents a ON a.id = m.recipient
+                            "SELECT m.id, m.sender, m.text FROM messages m
                              WHERE m.id > ?1
-                               AND m.sender != 'user:telegram'
+                               AND m.recipient = 'user:telegram'
                                AND m.acked_at IS NULL
-                               AND a.is_manager = 1
                              ORDER BY m.id",
                         )
                         .unwrap();
                     stmt.query_map(params![last_msg_id], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
                     })
                     .unwrap()
                     .flatten()
@@ -312,11 +339,14 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
             };
             rows
         };
-        for (id, sender, recipient, text) in forwardable {
+        for (id, sender, text) in forwardable {
             last_msg_id = last_msg_id.max(id);
-            let _ = bot
-                .send_message(chat, format!("→ {recipient}\n(from {sender})\n{text}"))
-                .await;
+            let _ = bot.send_message(chat, format!("[{sender}] {text}")).await;
+            let c = state.conn.lock().await;
+            let _ = c.execute(
+                "UPDATE messages SET acked_at = strftime('%s','now') WHERE id = ?1",
+                params![id],
+            );
         }
     }
 }

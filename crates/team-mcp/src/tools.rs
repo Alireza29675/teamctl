@@ -107,6 +107,19 @@ pub fn schema() -> Value {
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
+            "name": "reply_to_user",
+            "description": "Send a reply to the human operator who DMed this agent. Available only to managers (`is_manager: true`); the configured interface adapter (Telegram, Discord, …) forwards it. Use this to answer Alireza, not `dm` (which is for inter-agent traffic and is project-scoped).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                    "text":      { "type": "string" },
+                    "thread_id": { "type": "string" }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "request_approval",
             "description": "Request human approval for a brand-sensitive action. Blocks until approved/denied/expired (long-poll). Use before any tool call that publishes, deploys, pays, or sends externally.",
             "inputSchema": {
@@ -144,6 +157,7 @@ pub async fn call(ctx: &Ctx, params: Value) -> Result<Value, String> {
         "list_team" => list_team(ctx),
         "org_chart" => org_chart(ctx),
         "request_approval" => request_approval(ctx, p.arguments).await,
+        "reply_to_user" => reply_to_user(ctx, p.arguments).await,
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -229,6 +243,40 @@ async fn dm(ctx: &Ctx, args: Value) -> Result<Value, String> {
             &recipient,
             &a.text,
             thread_id,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(content_json(&json!({ "id": id, "recipient": recipient })))
+}
+
+#[derive(Deserialize)]
+struct ReplyToUserArgs {
+    text: String,
+    #[serde(default)]
+    thread_id: Option<String>,
+}
+
+async fn reply_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
+    let a: ReplyToUserArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+    if !ctx
+        .store
+        .is_manager(&ctx.agent_id)
+        .map_err(|e| e.to_string())?
+    {
+        return Err(format!(
+            "reply_to_user: only managers can reply to the user (caller={})",
+            ctx.agent_id
+        ));
+    }
+    let project = ctx.project().to_string();
+    let recipient = "user:telegram";
+    let id = ctx
+        .store
+        .send_dm(
+            &project,
+            &ctx.agent_id,
+            recipient,
+            &a.text,
+            a.thread_id.as_deref(),
         )
         .map_err(|e| e.to_string())?;
     Ok(content_json(&json!({ "id": id, "recipient": recipient })))

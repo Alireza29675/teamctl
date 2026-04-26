@@ -389,6 +389,20 @@ impl Store {
         Ok(())
     }
 
+    /// Is `agent_id` registered as a manager (`is_manager = 1`)? Used to
+    /// gate `reply_to_user` so only managers can talk back to the human.
+    pub fn is_manager(&self, agent_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT is_manager FROM agents WHERE id = ?1",
+                params![agent_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        Ok(n == 1)
+    }
+
     /// Unacked count for an agent. Used by `teamctl status`.
     #[allow(dead_code)]
     pub fn inbox_depth(&self, agent_id: &str) -> Result<i64> {

@@ -4,6 +4,33 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.2.9] — 2026-04-26
+
+### Added
+
+- `reply_to_user` MCP tool. Managers (`is_manager: true`) can now talk
+  back to the human operator who DMed them; the configured interface
+  adapter (Telegram, Discord, ...) forwards the reply. Inserts a
+  message row with `recipient = "user:telegram"`. Workers calling it
+  get an explicit error -- inter-agent traffic stays on `dm`.
+  Companion: `Store::is_manager(agent_id)` lookup against the
+  `agents` table.
+- Telegram bot bootstrap UX. A `/start` from a chat that isn't on the
+  allow list now replies with the chat's numeric id and a copy-paste
+  hint for `.env`, removing the @userinfobot detour during first-run
+  setup. `TEAMCTL_TELEGRAM_CHATS` accepts an empty value to make
+  bootstrap reachable.
+
+### Changed
+
+- Telegram bot's outbound stream now forwards messages whose
+  `recipient = 'user:telegram'` (the `reply_to_user` output) and
+  ack's them via `acked_at`. Previously it forwarded messages going
+  *into* managers, which surfaced inbound traffic instead of
+  outbound replies.
+- `.gitignore`: added `.env` and `**/.env` so Telegram tokens and
+  per-team secrets don't get committed.
+
 ## [0.2.8] — 2026-04-26
 
 ### Fixed
