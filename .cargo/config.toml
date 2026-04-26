@@ -1,0 +1,7 @@
+# Cross-compile linker overrides for cargo-dist Release builds.
+# Without this, the GitHub Actions runner cross-builds Rust crates
+# correctly but the linker invocation pulls the x86_64 `rust-lld`
+# from the host's sysroot, which then errors with
+# "is incompatible with elf64-x86-64" on every aarch64 object file.
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"

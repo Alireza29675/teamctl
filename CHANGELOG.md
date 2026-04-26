@@ -4,6 +4,17 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.2.8] — 2026-04-26
+
+### Fixed
+
+- aarch64-unknown-linux-gnu Release builds, take 4. With the cross-gcc
+  installed (v0.2.7), the C parts compiled but the **Rust linker** still
+  defaulted to the host's x86_64 `rust-lld`, producing "is incompatible
+  with elf64-x86-64" on every aarch64 object. Added `.cargo/config.toml`
+  with `target.aarch64-unknown-linux-gnu.linker = "aarch64-linux-gnu-gcc"`
+  so cargo invokes the cross linker for that target.
+
 ## [0.2.7] — 2026-04-26
 
 ### Fixed
