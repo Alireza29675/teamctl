@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/hero.png" alt="teamctl — agentic organizations as code" width="880">
+</p>
+
 # teamctl
 
 **docker-compose for persistent AI agent teams.**
