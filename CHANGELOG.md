@@ -4,6 +4,8 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-04-26
+
 ### Changed
 
 - `teamctl rl-watch` now spawns the runtime under a real pseudo-terminal
