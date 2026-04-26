@@ -1,11 +1,15 @@
 name: docs
 
+# Disabled on push pending a fix for the Astro + zod transitive
+# breakage that makes `astro build` exit 1 with
+# `Cannot read properties of undefined (reading '_zod')` in
+# `node_modules/zod/v4/core/schemas.js`. The dep tree (Astro, Starlight,
+# zod-to-json-schema, zod) needs to be re-pinned with a real
+# `package-lock.json` generated from a local `npm install`. No Node
+# toolchain was available at the time of disabling. Re-enable the
+# `push:` trigger once the build is reliably green.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'docs/**'
-      - '.github/workflows/docs.yml'
+  workflow_dispatch:
 
 jobs:
   build:
