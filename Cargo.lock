@@ -1906,7 +1906,7 @@ checksum = "20f34339676cdcab560c9a82300c4c2581f68b9369aedf0fae86f2ff9565ff3e"
 
 [[package]]
 name = "team-bot"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1922,7 +1922,7 @@ dependencies = [
 
 [[package]]
 name = "team-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "insta",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "team-mcp"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1954,7 +1954,7 @@ dependencies = [
 
 [[package]]
 name = "teamctl"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",

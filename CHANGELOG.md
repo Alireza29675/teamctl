@@ -4,6 +4,18 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-04-26
+
+### Fixed
+
+- macOS Release builds. v0.2.2's platform builds sat queued forever
+  because cargo-dist 0.25.1 emits `macos-13` runner labels and GitHub
+  Actions retired that image in late 2025. Pinned current macOS
+  runners via
+  `[workspace.metadata.dist.github-custom-runners]` →
+  `x86_64-apple-darwin = "macos-14"`,
+  `aarch64-apple-darwin = "macos-14"`.
+
 ## [0.2.2] — 2026-04-26
 
 ### Fixed
