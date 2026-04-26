@@ -4,17 +4,27 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-04-26
+
+### Changed
+
+- `team-bot` now uses **rustls** instead of native-tls. Vendoring
+  OpenSSL in v0.2.5 wasn't enough -- building openssl-src from source
+  also needs `aarch64-linux-gnu-gcc`, which isn't on the GitHub Actions
+  cross-build runner. rustls is pure Rust with zero C dependencies, so
+  it cross-compiles cleanly to every dist target. Switched
+  teloxide's features to `default-features = false` +
+  `["macros", "ctrlc_handler", "rustls"]`.
+
 ## [0.2.5] — 2026-04-26
 
 ### Fixed
 
-- aarch64-unknown-linux-gnu Release builds. `team-bot` pulls in
-  `openssl-sys` transitively (teloxide -> reqwest -> openssl-sys) and
-  the cross-compile toolchain on the GitHub Actions Linux runner has
-  no aarch64 libssl, so the build failed with
-  "Could not find directory of OpenSSL installation". Vendored OpenSSL
-  in `team-bot` so it builds from source against the cross-compiled
-  triple.
+- (intended) aarch64-unknown-linux-gnu Release builds via vendored
+  OpenSSL. Released to crates.io but the build still failed because
+  the openssl-src vendored build still requires
+  `aarch64-linux-gnu-gcc` which isn't installed on the runner.
+  Superseded by 0.2.6's switch to rustls.
 
 ## [0.2.4] — 2026-04-26
 

@@ -21,9 +21,10 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 rusqlite.workspace = true
-teloxide = { version = "0.13", features = ["macros"] }
-# Vendor OpenSSL so the cross-compiled aarch64-unknown-linux-gnu build
-# in `dist build` doesn't need a target-architecture libssl on the
-# runner (teloxide -> reqwest -> openssl-sys, which fails with
-# "Could not find directory of OpenSSL installation" when cross-built).
-openssl = { version = "0.10", features = ["vendored"] }
+# Use rustls (pure Rust TLS) instead of teloxide's default native-tls.
+# native-tls drags in openssl-sys, which needs a target-arch libssl on
+# the host *and* an `aarch64-linux-gnu-gcc` to even build openssl-src
+# from source -- neither is available in the cargo-dist cross-build for
+# aarch64-unknown-linux-gnu. rustls has zero C deps so it cross-compiles
+# cleanly to every target dist supports.
+teloxide = { version = "0.13", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
