@@ -4,6 +4,18 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-04-26
+
+### Fixed
+
+- aarch64-unknown-linux-gnu Release builds. `team-bot` pulls in
+  `openssl-sys` transitively (teloxide -> reqwest -> openssl-sys) and
+  the cross-compile toolchain on the GitHub Actions Linux runner has
+  no aarch64 libssl, so the build failed with
+  "Could not find directory of OpenSSL installation". Vendored OpenSSL
+  in `team-bot` so it builds from source against the cross-compiled
+  triple.
+
 ## [0.2.4] — 2026-04-26
 
 ### Fixed
