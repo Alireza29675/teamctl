@@ -108,7 +108,7 @@ The space of "process-level supervisors of CLI coding agents" is busy, and the c
 | Declarative team file (YAML)         |   ✅   |      —       |      —      |       —        |          —           |
 | Org charts as code (`reports_to`)    |   ✅   |      —       |      —      |       —        |          —           |
 | Multi-runtime out of the box (Claude Code · Codex · Gemini) | ✅ | partial | Claude-only | n/a | DIY |
-| Persistent agents across reboots     |   ✅   |   partial    |   partial   |     n/a        |         DIY          |
+| Persistent agents across reboots¹    | partial | partial    |   partial   |     n/a        |         DIY          |
 | Mailbox bundled with the supervisor  |   ✅   |      —       |      —      |   ✅ (alone)   |          —           |
 | Inter-agent DMs + channels           |   ✅   |      —       |   partial   |      ✅        |         DIY          |
 | Project isolation + opt-in bridges   |   ✅   |      —       |      —      |       —        |          —           |
@@ -122,6 +122,8 @@ A few honest notes on the table:
 - **claude-flow** is the largest project in the neighborhood and goes deep on swarms + neural patterns inside Claude. teamctl is narrower: persistent declarative teams, runtime-agnostic.
 - **mcp_agent_mail** is an unbundled mailbox you wire into other tools. teamctl bundles a mailbox with the supervisor + interfaces — different layer, complementary problem.
 - **`tmux + scripts`** is the honest baseline. If you'd rather hand-roll a wrapper script and a `mailbox.sh`, you can. teamctl is what happens after you've done that twice.
+
+¹ teamctl persists across `teamctl down` / re-attach today via tmux session restoration; survival across host reboots requires systemd/launchd integration, which is on the near-term ROADMAP — not yet shipped.
 
 Sources: each cell is from the project's own README at the time of writing — happy to take corrections via PR.
 
