@@ -14,6 +14,8 @@ teamctl init hello-team
 teamctl up
 ```
 
+> *Available once `teamctl.run` is live; until then, install from a [GitHub release tarball](https://github.com/Alireza29675/teamctl/releases/latest) or build from source.*
+
 > Prefer to build from source? `cargo install teamctl team-mcp team-bot` works too. A Homebrew tap is on the way — see the [ROADMAP](./ROADMAP.md).
 
 ## How it works
