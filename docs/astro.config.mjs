@@ -16,6 +16,13 @@ export default defineConfig({
       sidebar: [
         { label: 'Getting started', link: '/getting-started/' },
         {
+          label: 'Operating',
+          items: [
+            { label: 'Cost & rate limits', link: '/cost/' },
+            { label: 'Coordination policy', link: '/coordination-policy/' },
+          ],
+        },
+        {
           label: 'Concepts',
           items: [
             { label: 'Projects', link: '/concepts/projects/' },

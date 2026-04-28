@@ -1,36 +1,125 @@
 ---
-title: teamctl
-description: docker-compose for persistent AI agent teams.
+title: Autonomous Agentic Teams
+description: Persistent agents that report to each other, run as real CLI sessions, and ask before they ship. Declare your team in YAML.
 template: splash
 hero:
-  tagline: docker-compose for persistent AI agent teams.
+  title: Autonomous Agentic Teams.
+  tagline: Persistent agents that report to each other, run as real CLI sessions, and ask before they ship. Declare your team in YAML. Bring Claude Code, Codex, or Gemini. teamctl runs the rest.
   actions:
     - text: Get started
       link: /getting-started/
       icon: right-arrow
       variant: primary
-    - text: View on GitHub
+    - text: See it on GitHub
       link: https://github.com/Alireza29675/teamctl
       icon: external
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-## Why teamctl
+## Install
 
-Your Claude Code session is useful. Four of them, talking to each other, with a product manager in charge, is a team.
+```bash
+# Today — works:
+cargo install teamctl --locked
+
+# Or:
+curl -fsSL https://teamctl.run/install | sh
+```
+
+## A team of AI agents you can declare, run, and trust.
+
+Most agent frameworks live inside one Python process. teamctl doesn't. Each agent is its own real CLI — Claude Code, Codex CLI, or Gemini CLI — running in its own tmux pane on your machine. They survive reboots. They talk through a shared mailbox. They ask before they ship anything sensitive.
+
+You declare the team once, in a YAML file. teamctl supervises them like services.
 
 <CardGrid>
   <Card title="Multi-runtime" icon="puzzle">
-    One team can mix Claude Code, Codex CLI, and Gemini CLI freely. The mailbox is runtime-agnostic.
+    One team, three runtimes. Mix Claude Code, Codex, and Gemini per role.
   </Card>
   <Card title="Persistent" icon="seti:db">
-    Each agent is a real long-lived CLI session in `tmux`. Context survives across turns.
+    Agents survive reboots and crashes. tmux today; systemd / launchd planned.
   </Card>
-  <Card title="Isolated" icon="shield">
-    Projects cannot leak. Cross-project talk needs an explicit bridge.
+  <Card title="Isolated by default" icon="shield">
+    Each project is its own org chart. Cross-project bridges are opt-in and TTL'd.
   </Card>
-  <Card title="HITL" icon="approve-check">
-    Brand-sensitive actions pause for your approval on Telegram, Discord, iMessage, or CLI.
+  <Card title="Human-in-the-loop" icon="approve-check">
+    Sensitive tool calls block on a Telegram approval before they run.
   </Card>
 </CardGrid>
+
+## A YAML file. A few CLI agents. One shared mailbox.
+
+```yaml
+project:
+  id: hello
+  name: Hello Team
+  cwd: .
+
+channels:
+  - name: all
+    members: "*"
+
+managers:
+  manager:
+    runtime: claude-code
+    role_prompt: roles/manager.md
+    can_dm: [dev]
+    can_broadcast: [all]
+
+workers:
+  dev:
+    runtime: claude-code
+    reports_to: manager
+    can_dm: [manager]
+```
+
+That's a real team. `manager` and `dev` are different processes — different tmux panes, different model contexts, different runtimes if you want. They DM each other and broadcast on a shared channel. `reports_to` is the org chart.
+
+- **`runtime`** — what kind of agent. Today: `claude-code`, `codex`, `gemini`.
+- **`role_prompt`** — a Markdown file. The agent's job description.
+- **`can_dm` / `can_broadcast`** — who can talk to whom.
+- **`reports_to`** — the team's hierarchy.
+- **`hitl.globally_sensitive_actions`** — which tool calls block on approval.
+
+## Run a real team in one command.
+
+```bash
+teamctl init --template solo
+teamctl up
+```
+
+That's the whole getting-started. tmux opens with panes for the manager and the dev. They start talking. Tap `teamctl ps` to see who's alive. `teamctl mail solo:manager` reads the manager's inbox. `teamctl send solo:manager "research X and write a brief"` kicks off a real task.
+
+Want to see more team shapes? Browse [`examples/`](https://github.com/Alireza29675/teamctl/tree/main/examples) in the repo:
+
+- **`hello-team`** — the 60-second first run.
+- **`newsletter-office`** — a head-editor + reporters + blog repo. HITL on `publish` and `merge_to_main`.
+- **`market-analysts`** — analyst-lead + 3 analysts.
+- **`multi-runtime`** — same team, different runtimes per role.
+
+## How it compares
+
+Plain comparison. No put-downs. We respect every tool here.
+
+| | teamctl | claude-squad | claude-flow | mcp_agent_mail | tmux + scripts |
+|---|---|---|---|---|---|
+| YAML-declared `reports_to` org chart | ✅ | ❌ | ❌ | n/a | ❌ |
+| Multi-runtime (CC + Codex + Gemini) | ✅ | ✅ (also Aider) | partial (CC + Codex) | n/a | manual |
+| Persistent across reboots | ✅ | ❌ | ❌ | n/a | manual |
+| HITL approvals (Telegram) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Inter-agent mailbox bundled | ✅ | ❌ (shared workspaces) | partial (MCP tools, no mail layer) | ✅ (it *is* the mailbox) | ❌ |
+| System-native supervision[^1] | planned | ❌ | ❌ | n/a | ❌ |
+| Rust | ✅ | ❌ (Go) | ❌ (TS) | mixed | n/a |
+
+[^1]: teamctl's persistent supervisor is tmux today; `systemd` and `launchd` back-ends are designed and on the roadmap. We mark this row "planned" rather than ✅ to keep the table honest.
+
+## Pre-baked answers
+
+**How do I track cost per agent?** Each agent is a real CLI session. Cost-per-agent is whatever your provider invoices for that session's API key. teamctl detects rate-limit signals per runtime and respects them; per-agent token spend visibility is on the roadmap. See [Cost & rate limits](/cost/) for the current story.
+
+**What stops the agents from spamming each other?** Each project has one shared channel. Broadcast is allowlisted per agent (`can_broadcast`), not on by default for everyone. DMs are explicit — `can_dm` is a list. `gc` cleans the mailbox on a TTL. We chose to ship `broadcast` because real teams need it; the design intent is to keep it scoped, not to filter it out. See [Coordination policy](/coordination-policy/) for the full reasoning.
+
+---
+
+[GitHub](https://github.com/Alireza29675/teamctl) · [crates.io](https://crates.io/crates/teamctl) · MIT License · Rust · v0.2.9
