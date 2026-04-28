@@ -49,12 +49,13 @@ jobs:
           curl -fsSL "$INSTALLER_URL" | sh
 
       - name: Verify binaries on PATH
+        # Network step pulls the *published* main-branch installer, which today
+        # only installs teamctl. The PR's script (verified below) brings all
+        # three. Don't expect team-mcp/team-bot here until this PR ships.
         run: |
           set -eu
           export PATH="$TEAMCTL_INSTALL_DIR:$PATH"
           teamctl --version
-          team-mcp --version
-          team-bot --version
 
       - name: Run installer (local script under test, pinned latest)
         run: |
@@ -68,3 +69,5 @@ jobs:
           set -eu
           export PATH="$TEAMCTL_INSTALL_DIR:$PATH"
           teamctl --version
+          team-mcp --version
+          team-bot --version
