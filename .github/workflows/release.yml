@@ -134,6 +134,68 @@ jobs:
           # Actually do builds and make zips and whatnot
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
+      # Smoke-test every produced tarball: extract and run `<bin> --version` on
+      # the same runner, across all three published crates (teamctl, team-mcp,
+      # team-bot). For aarch64-linux we cross-compile on x86_64 runners, so go
+      # through qemu-user-static. Catches the v0.1.1 / v0.2.5 / v0.2.7 / v0.2.8
+      # failure mode (broken aarch64-linux artifacts shipping to crates.io
+      # before anyone noticed the GH-Release build went red) by failing the
+      # release at the build stage instead of at "host". Smoking all three
+      # binaries (not just teamctl) catches breakage in team-mcp/team-bot that
+      # would otherwise ship green — same vulnerability class.
+      - name: Set up qemu (aarch64-linux smoke only)
+        if: contains(join(matrix.targets, ','), 'aarch64-unknown-linux-gnu')
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Smoke-test tarballs
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          smoked=0
+          for tarball in target/distrib/teamctl-*.tar.xz \
+                         target/distrib/team-mcp-*.tar.xz \
+                         target/distrib/team-bot-*.tar.xz; do
+            base="$(basename "$tarball" .tar.xz)"
+            # Strip the longest binary-name prefix (`team-mcp-`, `team-bot-`,
+            # then `teamctl-`) to recover the target triple.
+            case "$base" in
+              team-mcp-*) bin_name="team-mcp"; target="${base#team-mcp-}" ;;
+              team-bot-*) bin_name="team-bot"; target="${base#team-bot-}" ;;
+              teamctl-*)  bin_name="teamctl";  target="${base#teamctl-}" ;;
+              *) echo "::error::unrecognized tarball $tarball"; exit 1 ;;
+            esac
+            workdir="$(mktemp -d)"
+            tar -xJf "$tarball" -C "$workdir"
+            bin="$workdir/$base/$bin_name"
+            if [ ! -x "$bin" ]; then
+              echo "::error::tarball $tarball missing executable $bin_name"
+              exit 1
+            fi
+            echo "smoke: $base ($bin_name --version)"
+            case "$target" in
+              x86_64-unknown-linux-gnu | x86_64-apple-darwin | aarch64-apple-darwin)
+                "$bin" --version
+                ;;
+              aarch64-unknown-linux-gnu)
+                docker run --rm --platform linux/arm64 \
+                  -v "$workdir/$base":/work -w /work \
+                  arm64v8/ubuntu:24.04 "./$bin_name" --version
+                ;;
+              *)
+                echo "::error::unhandled target $target — add a smoke branch"
+                exit 1
+                ;;
+            esac
+            smoked=$((smoked + 1))
+            rm -rf "$workdir"
+          done
+          if [ "$smoked" -eq 0 ]; then
+            echo "::error::no tarballs found to smoke-test"
+            exit 1
+          fi
+          echo "smoked $smoked tarball(s)"
       - id: cargo-dist
         name: Post-build
         # We force bash here just because github makes it really hard to get values up
