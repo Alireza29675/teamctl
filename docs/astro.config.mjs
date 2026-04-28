@@ -22,6 +22,7 @@ export default defineConfig({
             { label: 'Channels', link: '/concepts/channels/' },
             { label: 'Runtimes', link: '/concepts/runtimes/' },
             { label: 'Bridges', link: '/concepts/bridges/' },
+            { label: 'The .team/ folder', link: '/concepts/team-folder/' },
             { label: 'Interfaces', link: '/concepts/interfaces/' },
             { label: 'HITL', link: '/concepts/hitl/' },
             { label: 'Rate limits', link: '/concepts/rate-limits/' },
