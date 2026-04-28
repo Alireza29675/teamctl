@@ -1,4 +1,6 @@
-# ADR 0001 — SQLite mailbox over Redis Streams
+---
+title: ADR 0001 — SQLite mailbox over Redis Streams
+---
 
 - Status: accepted
 - Date: 2026-04-24

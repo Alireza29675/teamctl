@@ -1,14 +1,15 @@
 name: docs
 
-# Disabled on push pending a fix for the Astro + zod transitive
-# breakage that makes `astro build` exit 1 with
-# `Cannot read properties of undefined (reading '_zod')` in
-# `node_modules/zod/v4/core/schemas.js`. The dep tree (Astro, Starlight,
-# zod-to-json-schema, zod) needs to be re-pinned with a real
-# `package-lock.json` generated from a local `npm install`. No Node
-# toolchain was available at the time of disabling. Re-enable the
-# `push:` trigger once the build is reliably green.
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 jobs:
@@ -19,15 +20,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
       - name: Install
         working-directory: docs
-        run: npm install
+        run: npm ci
       - name: Build
         working-directory: docs
         run: npm run build
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/pages-action@v1
-        if: ${{ github.ref == 'refs/heads/main' && env.CF_TOKEN != '' }}
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CF_TOKEN != '' }}
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         with:

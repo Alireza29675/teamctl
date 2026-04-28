@@ -1,4 +1,6 @@
-# Bridges
+---
+title: Bridges
+---
 
 Projects are isolated by default. A **bridge** is a time-boxed authorization you open between two managers in different projects so they can DM each other.
 

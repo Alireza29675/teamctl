@@ -1,4 +1,6 @@
-# ADR 0002 — Portable tmux supervisor, pluggable `systemd` / `launchd` back-ends
+---
+title: ADR 0002 — Portable tmux supervisor, pluggable `systemd` / `launchd` back-ends
+---
 
 - Status: accepted (supersedes earlier draft that locked systemd as the only back-end)
 - Date: 2026-04-24

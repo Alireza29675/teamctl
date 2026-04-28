@@ -1,4 +1,6 @@
-# Human-in-the-loop (HITL)
+---
+title: Human-in-the-loop (HITL)
+---
 
 teamctl agents can act autonomously on low-risk work. Anything **brand-sensitive** pauses and asks you first — over any configured interface (Telegram, Discord, iMessage, CLI, webhook).
 

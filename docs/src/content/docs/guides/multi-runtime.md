@@ -1,4 +1,6 @@
-# Multi-runtime teams
+---
+title: Multi-runtime teams
+---
 
 Mix Claude Code, Codex, and Gemini freely inside one team. They all speak MCP over stdio against the same mailbox; the manager doesn't know or care which CLI a worker happens to be running.
 

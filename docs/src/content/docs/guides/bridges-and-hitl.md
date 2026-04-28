@@ -1,4 +1,6 @@
-# Bridges and HITL
+---
+title: Bridges and HITL
+---
 
 This guide covers the two mechanisms that keep teamctl safe: **project bridges** (for cross-project manager collaboration) and **human-in-the-loop approvals** (for brand-sensitive actions).
 

@@ -1,4 +1,6 @@
-# Channels
+---
+title: Channels
+---
 
 A **channel** is a named broadcast group inside a project. Every agent on the channel sees every message posted to it. Channels exist only within one project — there's no global chat.
 

@@ -1,4 +1,6 @@
-# Interfaces
+---
+title: Interfaces
+---
 
 An **interface** is a pluggable human-facing channel. Telegram is one adapter; Discord, iMessage, CLI, and webhook are others. You can configure many at once — a manager might receive DMs on Telegram and approvals on iMessage.
 
