@@ -1,4 +1,6 @@
-# Reference: `teamctl` CLI
+---
+title: "Reference: `teamctl` CLI"
+---
 
 ## Global flags
 

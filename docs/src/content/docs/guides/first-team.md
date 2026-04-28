@@ -1,4 +1,6 @@
-# Your first team
+---
+title: Your first team
+---
 
 The `examples/hello-team/` directory is the smallest useful deployment. Two agents, one project, Claude Code on both, nothing fancy.
 

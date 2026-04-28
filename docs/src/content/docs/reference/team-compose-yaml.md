@@ -1,4 +1,6 @@
-# Reference: `team-compose.yaml`
+---
+title: "Reference: `team-compose.yaml`"
+---
 
 The compose tree has two layers:
 

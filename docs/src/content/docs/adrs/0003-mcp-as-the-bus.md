@@ -1,4 +1,6 @@
-# ADR 0003 — MCP as the inter-agent bus
+---
+title: ADR 0003 — MCP as the inter-agent bus
+---
 
 - Status: accepted
 - Date: 2026-04-24

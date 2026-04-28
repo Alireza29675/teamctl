@@ -1,4 +1,6 @@
-# Telegram bot setup
+---
+title: Telegram bot setup
+---
 
 The `team-bot` binary is the first interface adapter — it connects a Telegram chat to the teamctl mailbox so you can DM managers and approve sensitive actions.
 

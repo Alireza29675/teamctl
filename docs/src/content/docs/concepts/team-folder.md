@@ -1,4 +1,6 @@
-# The `.team/` folder
+---
+title: The `.team/` folder
+---
 
 A repo with a teamctl team carries a `.team/` directory at its root, the
 same way a git repo carries `.git/`. teamctl walks up from the current

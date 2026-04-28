@@ -1,4 +1,6 @@
-# Runtimes
+---
+title: Runtimes
+---
 
 A **runtime** is the CLI binary behind an agent. teamctl ships adapters for the three major AI coding CLIs — they can all mix freely inside one team.
 

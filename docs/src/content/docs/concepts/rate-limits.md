@@ -1,4 +1,6 @@
-# Rate limits
+---
+title: Rate limits
+---
 
 Every runtime hits limits eventually — Claude Max sessions reset every 5h,
 Codex usage caps reset on a rolling window, Gemini quota fires on the hour.

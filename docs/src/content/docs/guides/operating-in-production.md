@@ -1,4 +1,6 @@
-# Operating in production
+---
+title: Operating in production
+---
 
 ## Supervisor back-ends
 

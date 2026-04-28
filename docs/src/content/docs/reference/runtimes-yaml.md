@@ -1,4 +1,6 @@
-# Reference: `runtimes/*.yaml`
+---
+title: "Reference: `runtimes/*.yaml`"
+---
 
 Each YAML file under `runtimes/` defines one runtime adapter. File stem = runtime id used in agent `runtime:` fields.
 
