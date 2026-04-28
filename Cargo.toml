@@ -29,7 +29,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 notify = "6"
 schemars = "0.8"
-insta = { version = "1", features = ["yaml"] }
 team-core = { path = "crates/team-core", version = "0.2.9" }
 
 [profile.release]
