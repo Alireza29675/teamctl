@@ -1,0 +1,73 @@
+name: installer-smoke
+
+# Smoke-test the curl-pipe installer against the latest published release on
+# Linux + macOS. Catches drift between `tools/install.sh`, the cargo-dist
+# release tarballs, and (eventually) the teamctl.run/install endpoint.
+#
+# Triggers:
+# - push to main when the script or this workflow changes
+# - weekly schedule, so we notice if the GH Releases or teamctl.run hosting
+#   silently breaks between teamctl releases
+# - manual dispatch
+#
+# Note: until dev2's T-004 (teamctl.run docs/route) lands, we point at the
+# raw GitHub URL for the script. After T-004, swap INSTALLER_URL to
+# https://teamctl.run/install.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/install.sh'
+      - '.github/workflows/installer-smoke.yml'
+  pull_request:
+    paths:
+      - 'tools/install.sh'
+      - '.github/workflows/installer-smoke.yml'
+  schedule:
+    - cron: '0 12 * * 1'  # Mondays 12:00 UTC
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: smoke / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    env:
+      INSTALLER_URL: https://raw.githubusercontent.com/Alireza29675/teamctl/main/tools/install.sh
+      TEAMCTL_INSTALL_DIR: ${{ github.workspace }}/.teamctl-bin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run installer (network)
+        run: |
+          set -eu
+          mkdir -p "$TEAMCTL_INSTALL_DIR"
+          curl -fsSL "$INSTALLER_URL" | sh
+
+      - name: Verify binaries on PATH
+        # Network step pulls the *published* main-branch installer, which today
+        # only installs teamctl. The PR's script (verified below) brings all
+        # three. Don't expect team-mcp/team-bot here until this PR ships.
+        run: |
+          set -eu
+          export PATH="$TEAMCTL_INSTALL_DIR:$PATH"
+          teamctl --version
+
+      - name: Run installer (local script under test, pinned latest)
+        run: |
+          set -eu
+          rm -rf "$TEAMCTL_INSTALL_DIR"
+          mkdir -p "$TEAMCTL_INSTALL_DIR"
+          sh ./tools/install.sh
+
+      - name: Verify binaries on PATH (local script)
+        run: |
+          set -eu
+          export PATH="$TEAMCTL_INSTALL_DIR:$PATH"
+          teamctl --version
+          team-mcp --version
+          team-bot --version
