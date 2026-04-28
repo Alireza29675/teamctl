@@ -1,0 +1,3 @@
+# Cloudflare Pages redirects (https://developers.cloudflare.com/pages/configuration/redirects/)
+# Single source of truth for tools/install.sh: the GitHub raw URL on main.
+/install  https://raw.githubusercontent.com/Alireza29675/teamctl/main/tools/install.sh  302
