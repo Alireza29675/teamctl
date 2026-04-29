@@ -135,3 +135,164 @@ fn send_injects_into_mailbox() {
     assert_eq!(recipient, "hello:manager");
     assert_eq!(text, "hi there");
 }
+
+// ── T-010: source-aware override warning ─────────────────────────────────
+
+/// Run `teamctl validate` against `cwd` with a clean env, returning stderr.
+/// `extra_env` lets each test inject the override under test (TEAMCTL_ROOT,
+/// TEAMCTL_QUIET, ...). `home` isolates the registered-context store at
+/// `$HOME/.config/teamctl/contexts.json`.
+fn run_validate_with_env(
+    cwd: &std::path::Path,
+    home: &std::path::Path,
+    extra_env: &[(&str, &str)],
+    explicit_root: Option<&std::path::Path>,
+) -> String {
+    let mut cmd = Command::new(bin());
+    cmd.env_clear()
+        .env("HOME", home)
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .current_dir(cwd);
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    if let Some(r) = explicit_root {
+        cmd.args(["--root", r.to_str().unwrap(), "validate"]);
+    } else {
+        cmd.arg("validate");
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "validate exited non-zero: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stderr).unwrap()
+}
+
+/// Lay out a `.team/`-style root at `<dir>/.team/` (so cwd walk-up will find it).
+fn seed_dot_team(dir: &std::path::Path) -> std::path::PathBuf {
+    let root = dir.join(".team");
+    fs::create_dir_all(&root).unwrap();
+    seed_compose(&root);
+    root
+}
+
+/// Strip ANSI colour codes so assertions are stable regardless of TTY.
+fn strip_ansi(s: &str) -> String {
+    let re = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    re.replace_all(s, "").to_string()
+}
+
+#[test]
+fn warn_a_walk_up_silent() {
+    let tmp = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let root = seed_dot_team(tmp.path());
+    let _ = root; // walk-up will find it from cwd
+    let stderr = run_validate_with_env(tmp.path(), home.path(), &[], None);
+    let clean = strip_ansi(&stderr);
+    assert!(
+        !clean.contains("warning:"),
+        "walk-up must not warn; stderr was: {clean}"
+    );
+}
+
+#[test]
+fn warn_b_env_root_warns() {
+    let tmp = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let root = seed_dot_team(tmp.path());
+    // CWD is also a valid walk-up target — warning still fires because the
+    // resolved root came from env, not walk-up.
+    let stderr = run_validate_with_env(
+        tmp.path(),
+        home.path(),
+        &[("TEAMCTL_ROOT", root.to_str().unwrap())],
+        None,
+    );
+    let clean = strip_ansi(&stderr);
+    assert!(
+        clean.contains("warning:") && clean.contains("TEAMCTL_ROOT"),
+        "expected env warning; stderr was: {clean}"
+    );
+}
+
+#[test]
+fn warn_b_empty_env_root_treated_as_unset() {
+    // `TEAMCTL_ROOT=""` (exported empty) should fall through to walk-up
+    // rather than errorring on `canonicalize("")`.
+    let tmp = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let _ = seed_dot_team(tmp.path());
+    let stderr = run_validate_with_env(tmp.path(), home.path(), &[("TEAMCTL_ROOT", "")], None);
+    let clean = strip_ansi(&stderr);
+    assert!(
+        !clean.contains("warning:"),
+        "empty TEAMCTL_ROOT must fall through silently to walk-up; stderr was: {clean}"
+    );
+}
+
+#[test]
+fn warn_c_explicit_root_silent() {
+    let tmp = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let root = seed_dot_team(tmp.path());
+    // Even with TEAMCTL_ROOT in env, --root on the CLI is the deliberate intent.
+    let stderr = run_validate_with_env(
+        tmp.path(),
+        home.path(),
+        &[("TEAMCTL_ROOT", "/definitely/not/this")],
+        Some(&root),
+    );
+    let clean = strip_ansi(&stderr);
+    assert!(
+        !clean.contains("warning:"),
+        "--root must not warn; stderr was: {clean}"
+    );
+}
+
+#[test]
+fn warn_d_registered_context_warns() {
+    let tmp = tempdir().unwrap();
+    let unrelated_cwd = tempdir().unwrap(); // no .team here, no walk-up hit
+    let home = tempdir().unwrap();
+    let root = seed_dot_team(tmp.path());
+
+    // Pre-populate the contexts store at $HOME/.config/teamctl/contexts.json.
+    let cfg_dir = home.path().join(".config/teamctl");
+    fs::create_dir_all(&cfg_dir).unwrap();
+    let store = format!(
+        r#"{{"current":"demo","contexts":{{"demo":"{}"}}}}"#,
+        root.display()
+    );
+    fs::write(cfg_dir.join("contexts.json"), store).unwrap();
+
+    let stderr = run_validate_with_env(unrelated_cwd.path(), home.path(), &[], None);
+    let clean = strip_ansi(&stderr);
+    assert!(
+        clean.contains("warning:") && clean.contains("context 'demo'"),
+        "expected context warning; stderr was: {clean}"
+    );
+}
+
+#[test]
+fn warn_e_quiet_silences_env() {
+    let tmp = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let root = seed_dot_team(tmp.path());
+    let stderr = run_validate_with_env(
+        tmp.path(),
+        home.path(),
+        &[
+            ("TEAMCTL_ROOT", root.to_str().unwrap()),
+            ("TEAMCTL_QUIET", "1"),
+        ],
+        None,
+    );
+    let clean = strip_ansi(&stderr);
+    assert!(
+        !clean.contains("warning:"),
+        "TEAMCTL_QUIET=1 must silence; stderr was: {clean}"
+    );
+}

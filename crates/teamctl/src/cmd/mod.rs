@@ -18,6 +18,7 @@ pub mod status;
 pub mod tail;
 pub mod up;
 pub mod validate;
+pub mod warn;
 
 use std::path::{Path, PathBuf};
 
