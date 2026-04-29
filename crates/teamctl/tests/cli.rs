@@ -219,6 +219,26 @@ fn warn_b_env_root_warns() {
 }
 
 #[test]
+fn warn_b_empty_env_root_treated_as_unset() {
+    // `TEAMCTL_ROOT=""` (exported empty) should fall through to walk-up
+    // rather than errorring on `canonicalize("")`.
+    let tmp = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let _ = seed_dot_team(tmp.path());
+    let stderr = run_validate_with_env(
+        tmp.path(),
+        home.path(),
+        &[("TEAMCTL_ROOT", "")],
+        None,
+    );
+    let clean = strip_ansi(&stderr);
+    assert!(
+        !clean.contains("warning:"),
+        "empty TEAMCTL_ROOT must fall through silently to walk-up; stderr was: {clean}"
+    );
+}
+
+#[test]
 fn warn_c_explicit_root_silent() {
     let tmp = tempdir().unwrap();
     let home = tempdir().unwrap();

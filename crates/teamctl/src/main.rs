@@ -289,11 +289,16 @@ fn resolve_root_with_source(
         return Ok((canon, RootSource::CliFlag));
     }
     if let Some(raw) = std::env::var_os("TEAMCTL_ROOT") {
-        let p = PathBuf::from(raw);
-        let canon = p
-            .canonicalize()
-            .with_context(|| format!("canonicalize $TEAMCTL_ROOT {}", p.display()))?;
-        return Ok((canon, RootSource::Env));
+        // Treat `TEAMCTL_ROOT=""` (exported empty) the same as unset —
+        // canonicalize would error otherwise, hiding the real "no root"
+        // diagnostic the walk-up path produces.
+        if !raw.is_empty() {
+            let p = PathBuf::from(raw);
+            let canon = p
+                .canonicalize()
+                .with_context(|| format!("canonicalize $TEAMCTL_ROOT {}", p.display()))?;
+            return Ok((canon, RootSource::Env));
+        }
     }
     if let Some((name, p)) = cmd::context::root_for_current_named()? {
         return Ok((p, RootSource::Context(name)));
