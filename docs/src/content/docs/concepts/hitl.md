@@ -51,5 +51,5 @@ From any of:
 
 ## Related
 
-- [Interfaces](./interfaces.md)
-- [Guide: Bridges and HITL](../guides/bridges-and-hitl.md)
+- [Interfaces](/concepts/interfaces/)
+- [Guide: Bridges and HITL](/guides/bridges-and-hitl/)

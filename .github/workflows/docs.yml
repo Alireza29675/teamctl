@@ -28,9 +28,20 @@ jobs:
       - name: Build
         working-directory: docs
         run: npm run build
+      - name: Link check (internal, fail on broken)
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --no-progress --root-dir "${{ github.workspace }}/docs/dist" 'docs/dist/**/*.html'
+          fail: true
+      - name: Link check (external, warn-only)
+        uses: lycheeverse/lychee-action@v2
+        continue-on-error: true
+        with:
+          args: --no-progress --max-concurrency 4 --root-dir "${{ github.workspace }}/docs/dist" 'docs/dist/**/*.html'
+          fail: false
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/pages-action@v1
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CF_TOKEN != '' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && env.CF_TOKEN != '' }}
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         with:

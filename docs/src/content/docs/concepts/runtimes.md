@@ -41,5 +41,5 @@ If the binary is missing on `$PATH`, `teamctl up` fails fast with a clear error 
 
 ## Related
 
-- [Guide: Multi-runtime teams](../guides/multi-runtime.md)
-- [Reference: runtimes/*.yaml](../reference/runtimes-yaml.md)
+- [Guide: Multi-runtime teams](/guides/multi-runtime/)
+- [Reference: runtimes/*.yaml](/reference/runtimes-yaml/)

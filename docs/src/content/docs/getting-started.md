@@ -53,7 +53,7 @@ rm -rf state/           # full reset
 
 ## Next
 
-- [Concepts · Projects](./concepts/projects.md)
-- [Concepts · HITL](./concepts/hitl.md) — how to keep agents from shipping bad content
-- [Reference · team-compose.yaml](./reference/team-compose-yaml.md)
-- [Guide · Telegram bot](./guides/telegram-bot.md)
+- [Concepts · Projects](/concepts/projects/)
+- [Concepts · HITL](/concepts/hitl/) — how to keep agents from shipping bad content
+- [Reference · team-compose.yaml](/reference/team-compose-yaml/)
+- [Guide · Telegram bot](/guides/telegram-bot/)

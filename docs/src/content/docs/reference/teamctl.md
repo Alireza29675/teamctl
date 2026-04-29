@@ -112,7 +112,7 @@ A *context* is a named pointer to a `.team/` root on this machine. Useful when y
 |---|---|
 | `teamctl rl-watch <project>:<agent> -- <runtime-command...>` | Wrap a runtime invocation, watching its output for rate-limit signatures. Used internally by `agent-wrapper.sh`; not normally invoked by hand. |
 
-See the [Rate limits](../concepts/rate-limits.md) concept for the hook chain that fires when a rate-limit is detected.
+See the [Rate limits](/concepts/rate-limits/) concept for the hook chain that fires when a rate-limit is detected.
 
 ## Exit codes
 

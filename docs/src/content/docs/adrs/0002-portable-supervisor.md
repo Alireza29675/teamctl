@@ -40,6 +40,6 @@ Two production back-ends plug in behind the same trait:
 
 ## Consequences
 
-- `TmuxSupervisor` alone does **not** survive machine reboot. Documented clearly in [operating-in-production](../guides/operating-in-production.md).
+- `TmuxSupervisor` alone does **not** survive machine reboot. Documented clearly in [operating-in-production](/guides/operating-in-production/).
 - `teamctl status` queries are back-end specific; the trait's `status()` normalizes them.
 - Integration tests have two shapes: a "tmux" lane runnable on macOS and Linux CI, and a "systemd" lane that runs only on Linux with `--privileged` or on a real host.
