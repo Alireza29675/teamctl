@@ -277,9 +277,7 @@ fn main() -> Result<()> {
 /// order: `--root` flag > `TEAMCTL_ROOT` env > current registered context >
 /// walk up from CWD looking for `.team/`. The returned [`cmd::warn::RootSource`]
 /// drives the T-010 override-warning on read-side commands.
-fn resolve_root_with_source(
-    explicit: Option<PathBuf>,
-) -> Result<(PathBuf, cmd::warn::RootSource)> {
+fn resolve_root_with_source(explicit: Option<PathBuf>) -> Result<(PathBuf, cmd::warn::RootSource)> {
     use cmd::warn::RootSource;
 
     if let Some(p) = explicit {

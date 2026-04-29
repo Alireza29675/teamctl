@@ -225,12 +225,7 @@ fn warn_b_empty_env_root_treated_as_unset() {
     let tmp = tempdir().unwrap();
     let home = tempdir().unwrap();
     let _ = seed_dot_team(tmp.path());
-    let stderr = run_validate_with_env(
-        tmp.path(),
-        home.path(),
-        &[("TEAMCTL_ROOT", "")],
-        None,
-    );
+    let stderr = run_validate_with_env(tmp.path(), home.path(), &[("TEAMCTL_ROOT", "")], None);
     let clean = strip_ansi(&stderr);
     assert!(
         !clean.contains("warning:"),
