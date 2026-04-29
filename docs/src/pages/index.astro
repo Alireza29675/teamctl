@@ -1,33 +1,92 @@
 ---
-// T-022 minimal landing. Heading + copyable install command + docs link.
-// T-021 component plumbing intentionally left on disk for future revisit;
-// this page does not import any of it.
+// T-022 expanded landing. Heading + subline + YAML demo + `teamctl up`
+// + install + docs link. Linear-tier layout, Vercel-tier code container,
+// no animation. Strict accent rule: YAML keys + Copy hover only.
+//
+// T-021 component plumbing left on disk for future revisit; this page
+// does not import any of it.
+
 const installCmd = 'curl -sSf https://teamctl.run/install | sh';
+const upCmd = 'teamctl up';
+
+// Frozen YAML demo — drafted by dev3, awaiting marketing tone signoff.
+// Lines split for the muted 2-tone highlighter below.
+const yaml = [
+  'project:',
+  '  id: writing',
+  '  name: Writing Team',
+  '',
+  'managers:',
+  '  editor:',
+  '    runtime: claude-code',
+  '    interface: telegram',
+  '    can_dm: [writer, researcher]',
+  '',
+  'workers:',
+  '  writer:',
+  '    runtime: codex',
+  '    reports_to: editor',
+  '  researcher:',
+  '    runtime: claude-code',
+  '    reports_to: editor',
+];
+
+// Render each YAML line server-side as muted-2-tone HTML. Keys carry
+// the accent token; everything else is base --fg. Built in frontmatter
+// so the page ships as static HTML and we avoid runtime highlighting.
+const escape = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const yamlHtml = yaml
+  .map((raw) => {
+    if (raw === '') return '';
+    const m = /^(\s*)([A-Za-z_][\w-]*)(:.*)$/.exec(raw);
+    if (!m) return escape(raw);
+    const [, indent, key, rest] = m;
+    return `${indent}<span class="k">${escape(key)}:</span>${escape(rest.slice(1))}`;
+  })
+  .join('\n');
 ---
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>teamctl — persistent AI coworkers, supervised like services</title>
+    <title>teamctl — docker-compose for persistent AI agent teams</title>
     <meta
       name="description"
-      content="Declare a team of persistent AI agents in YAML. teamctl supervises them like services."
+      content="Docker-compose for persistent AI agent teams. Declare a team in YAML and supervise it like services."
+    />
+    <meta property="og:title" content="teamctl — docker-compose for persistent AI agent teams" />
+    <meta
+      property="og:description"
+      content="Docker-compose for persistent AI agent teams. Declare a team in YAML and supervise it like services."
     />
   </head>
   <body>
     <main>
-      <h1>
-        Persistent AI coworkers —<br />
-        declared in YAML, supervised like services.
-      </h1>
+      <header class="lede">
+        <h1>
+          Persistent AI coworkers —<br />
+          declared in YAML, supervised like services.
+        </h1>
+        <p class="subline">Docker-compose for persistent AI agent teams.</p>
+      </header>
 
-      <div class="install">
-        <pre><code id="install-cmd">{installCmd}</code></pre>
-        <button type="button" class="copy-btn" data-copy aria-label="Copy install command">
-          <span class="copy-default">Copy</span>
-          <span class="copy-done" hidden>Copied</span>
-        </button>
-      </div>
+      <figure class="demo" aria-label="Example team.yaml and the command to start it">
+        <div class="code-card">
+          <pre class="yaml"><code set:html={yamlHtml}></code></pre>
+        </div>
+        <pre class="up"><code><span class="prompt">$ </span>{upCmd}</code></pre>
+      </figure>
+
+      <section class="install-section">
+        <div class="install">
+          <pre><code id="install-cmd">{installCmd}</code></pre>
+          <button type="button" class="copy-btn" data-copy aria-label="Copy install command">
+            <span class="copy-default">Copy</span>
+            <span class="copy-done" hidden>Copied</span>
+          </button>
+        </div>
+      </section>
 
       <p class="docs">
         <a href="/getting-started/">Read the docs →</a>
@@ -61,44 +120,101 @@ const installCmd = 'curl -sSf https://teamctl.run/install | sh';
     <style>
       :root {
         --bg: #0d0e10;
+        --bg-soft: #14161a;
         --fg: #e9e7df;
         --fg-mute: #8a8780;
         --hairline: rgba(233, 231, 223, 0.12);
         --accent: #d6a15a;
+        --serif: 'Iowan Old Style', 'Charter', 'Georgia', serif;
+        --sans: ui-sans-serif, system-ui, -apple-system, 'Inter', sans-serif;
+        --mono: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, monospace;
       }
       html, body {
-        background: var(--bg);
+        background:
+          radial-gradient(ellipse 80% 60% at 50% 0%, rgba(255, 240, 215, 0.025), transparent 60%),
+          var(--bg);
         color: var(--fg);
-        font-family: ui-sans-serif, system-ui, -apple-system, 'Inter', sans-serif;
+        font-family: var(--sans);
         margin: 0;
         -webkit-font-smoothing: antialiased;
       }
       main {
-        max-width: 44rem;
+        max-width: 50rem;
         margin: 0 auto;
-        padding: 14vh 2rem 6rem;
+        padding: 14vh 2rem 8rem;
         display: grid;
-        gap: 2.5rem;
+        gap: 3rem;
       }
+
+      /* Lede */
+      .lede { display: grid; gap: 0.9rem; }
       h1 {
-        font-family: 'Iowan Old Style', 'Charter', 'Georgia', serif;
+        font-family: var(--serif);
         font-weight: 400;
         font-size: clamp(2rem, 4.4vw, 3rem);
         line-height: 1.18;
         letter-spacing: -0.012em;
         margin: 0;
       }
+      .subline {
+        margin: 0;
+        color: var(--fg-mute);
+        font-size: 1.05rem;
+        line-height: 1.5;
+      }
+
+      /* Demo: code card + $ teamctl up */
+      .demo { margin: 0; display: grid; gap: 1rem; }
+
+      .code-card {
+        position: relative;
+        background:
+          linear-gradient(180deg, rgba(255, 245, 220, 0.018), transparent 40%),
+          var(--bg-soft);
+        border: 1px solid var(--hairline);
+        border-radius: 10px;
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.025),
+          0 1px 0 rgba(0, 0, 0, 0.4);
+      }
+      .yaml {
+        margin: 0;
+        padding: 1.5rem 1.75rem;
+        overflow-x: auto;
+        font-family: var(--mono);
+        font-size: 0.92rem;
+        line-height: 1.75;
+        color: var(--fg);
+        white-space: pre;
+      }
+      /* Inner spans come from set:html and don't carry Astro's scope hash;
+         use :global() so the muted-2-tone palette still applies. */
+      .yaml :global(.k) { color: var(--accent); }
+
+      .up {
+        margin: 0;
+        padding: 0.4rem 0.25rem 0;
+        font-family: var(--mono);
+        font-size: 0.92rem;
+        color: var(--fg-mute);
+        background: transparent;
+      }
+      .up .prompt { color: var(--fg-mute); user-select: none; }
+      .up code { color: var(--fg); }
+
+      /* Install — separated visually from the demo composition. */
+      .install-section { margin-top: 1.5rem; }
       .install {
         position: relative;
-        background: #14161a;
+        background: var(--bg-soft);
         border: 1px solid var(--hairline);
         border-radius: 8px;
       }
       .install pre {
         margin: 0;
-        padding: 1.1rem 6rem 1.1rem 1.25rem;
+        padding: 1.05rem 6rem 1.05rem 1.25rem;
         overflow-x: auto;
-        font-family: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+        font-family: var(--mono);
         font-size: 0.95rem;
         color: var(--fg);
         white-space: pre;
@@ -123,11 +239,15 @@ const installCmd = 'curl -sSf https://teamctl.run/install | sh';
         border-color: rgba(214, 161, 90, 0.5);
         outline: none;
       }
+
+      /* Docs link */
+      .docs { margin: 0; }
       .docs a {
         color: var(--fg-mute);
         text-decoration: none;
         border-bottom: 1px solid var(--hairline);
         padding-bottom: 0.15rem;
+        font-size: 0.98rem;
       }
       .docs a:hover { color: var(--fg); }
     </style>
