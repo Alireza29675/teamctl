@@ -1,23 +1,8 @@
 ---
-// T-021 v2 landing — root route owned outside of Starlight's content
-// pipeline so heavy animation deps stay off /docs/* pages.
-//
-// Section ownership:
-//   §1 Hero        → dev1 (HeroAmbient.tsx, R3F single canvas)
-//   §2 OrgChart    → dev3 (SVG sticky-pin)
-//   §3 TelegramLoop→ dev3 (DOM/CSS)
-//   §4 WhyIBuilt   → dev3 placeholder, P-9 prose lands later
-//   §5 Outbound    → dev3
-//   §6 Footer      → dev3
-
-import HeroAmbient from '../components/landing/HeroAmbient.tsx';
-import OrgChart from '../components/landing/OrgChart.astro';
-import TelegramLoop from '../components/landing/TelegramLoop.astro';
-// §4 WhyIBuiltThis intentionally hidden until P-9 interview prose lands.
-// import WhyIBuiltThis from '../components/landing/WhyIBuiltThis.astro';
-import QuietOutbound from '../components/landing/QuietOutbound.astro';
-import Footer from '../components/landing/Footer.astro';
-import '../styles/landing.css';
+// T-022 minimal landing. Heading + copyable install command + docs link.
+// T-021 component plumbing intentionally left on disk for future revisit;
+// this page does not import any of it.
+const installCmd = 'curl -sSf https://teamctl.run/install | sh';
 ---
 <html lang="en">
   <head>
@@ -29,15 +14,122 @@ import '../styles/landing.css';
       content="Declare a team of persistent AI agents in YAML. teamctl supervises them like services."
     />
   </head>
-  <body class="landing">
-    <HeroAmbient client:visible />
+  <body>
+    <main>
+      <h1>
+        Persistent AI coworkers —<br />
+        declared in YAML, supervised like services.
+      </h1>
 
+      <div class="install">
+        <pre><code id="install-cmd">{installCmd}</code></pre>
+        <button type="button" class="copy-btn" data-copy aria-label="Copy install command">
+          <span class="copy-default">Copy</span>
+          <span class="copy-done" hidden>Copied</span>
+        </button>
+      </div>
 
-    <OrgChart />
-    <TelegramLoop />
-    {/* §4 WhyIBuiltThis hidden — restore after P-9 interview lands. */}
-    <QuietOutbound />
-    <Footer />
+      <p class="docs">
+        <a href="/getting-started/">Read the docs →</a>
+      </p>
+    </main>
+
+    <script>
+      const btn = document.querySelector<HTMLButtonElement>('[data-copy]');
+      const cmd = document.getElementById('install-cmd');
+      if (btn && cmd) {
+        btn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(cmd.textContent ?? '');
+            const def = btn.querySelector<HTMLElement>('.copy-default');
+            const done = btn.querySelector<HTMLElement>('.copy-done');
+            if (def && done) {
+              def.hidden = true;
+              done.hidden = false;
+              setTimeout(() => {
+                def.hidden = false;
+                done.hidden = true;
+              }, 1600);
+            }
+          } catch {
+            /* clipboard refused — leave UI untouched */
+          }
+        });
+      }
+    </script>
+
+    <style>
+      :root {
+        --bg: #0d0e10;
+        --fg: #e9e7df;
+        --fg-mute: #8a8780;
+        --hairline: rgba(233, 231, 223, 0.12);
+        --accent: #d6a15a;
+      }
+      html, body {
+        background: var(--bg);
+        color: var(--fg);
+        font-family: ui-sans-serif, system-ui, -apple-system, 'Inter', sans-serif;
+        margin: 0;
+        -webkit-font-smoothing: antialiased;
+      }
+      main {
+        max-width: 44rem;
+        margin: 0 auto;
+        padding: 14vh 2rem 6rem;
+        display: grid;
+        gap: 2.5rem;
+      }
+      h1 {
+        font-family: 'Iowan Old Style', 'Charter', 'Georgia', serif;
+        font-weight: 400;
+        font-size: clamp(2rem, 4.4vw, 3rem);
+        line-height: 1.18;
+        letter-spacing: -0.012em;
+        margin: 0;
+      }
+      .install {
+        position: relative;
+        background: #14161a;
+        border: 1px solid var(--hairline);
+        border-radius: 8px;
+      }
+      .install pre {
+        margin: 0;
+        padding: 1.1rem 6rem 1.1rem 1.25rem;
+        overflow-x: auto;
+        font-family: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+        font-size: 0.95rem;
+        color: var(--fg);
+        white-space: pre;
+      }
+      .copy-btn {
+        position: absolute;
+        right: 0.5rem;
+        top: 50%;
+        transform: translateY(-50%);
+        background: transparent;
+        color: var(--fg-mute);
+        border: 1px solid var(--hairline);
+        border-radius: 6px;
+        padding: 0.35rem 0.8rem;
+        font: inherit;
+        font-size: 0.82rem;
+        cursor: pointer;
+        transition: color 200ms ease, border-color 200ms ease;
+      }
+      .copy-btn:hover, .copy-btn:focus-visible {
+        color: var(--accent);
+        border-color: rgba(214, 161, 90, 0.5);
+        outline: none;
+      }
+      .docs a {
+        color: var(--fg-mute);
+        text-decoration: none;
+        border-bottom: 1px solid var(--hairline);
+        padding-bottom: 0.15rem;
+      }
+      .docs a:hover { color: var(--fg); }
+    </style>
   </body>
 </html>
-
