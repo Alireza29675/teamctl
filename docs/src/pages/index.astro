@@ -6,6 +6,9 @@
 // T-021 component plumbing left on disk for future revisit; this page
 // does not import any of it.
 
+import { Picture } from 'astro:assets';
+import heroJpg from '../../assets/hero.jpg';
+
 const installCmd = 'curl -sSf https://teamctl.run/install | sh';
 const upCmd = 'teamctl up';
 
@@ -68,6 +71,18 @@ const yamlHtml = yaml
   </head>
   <body>
     <main>
+      <figure class="hero">
+        <Picture
+          src={heroJpg}
+          alt=""
+          loading="eager"
+          decoding="async"
+          formats={['avif', 'webp']}
+          fallbackFormat="jpg"
+          quality={80}
+        />
+      </figure>
+
       <header class="lede">
         <h1>Autonomous Teams of Agents</h1>
         <p class="subline">declared in YAML, supervised like docker-compose and accessed via Telegram.</p>
@@ -150,6 +165,20 @@ const yamlHtml = yaml
         padding: 14vh 2rem 8rem;
         display: grid;
         gap: 3rem;
+      }
+
+      /* Hero image — contained in the same column. Static, no motion. */
+      .hero {
+        margin: 0;
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid var(--hairline);
+        background: var(--bg-soft);
+      }
+      .hero img {
+        display: block;
+        width: 100%;
+        height: auto;
       }
 
       /* Lede */
