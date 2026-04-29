@@ -23,8 +23,9 @@ teamctl bridge close 1
 While the bridge is open, only the two named managers can DM across.
 Every message exchanged is recorded with `thread_id = bridge:<id>` for
 audit. The pattern shows up in `examples/newsletter-office/` (newsroom
-↔ blog handoff) and in `examples/oss-maintainer/` (release_manager
-proposing across projects under HITL). The compose file below stays
+↔ blog handoff) and `examples/oss-maintainer/` carries the same
+HITL spirit at single-project scope (release_manager gates
+release-critical actions via plan-mode). The compose file below stays
 preserved as a reference recipe.
 
 ```yaml
