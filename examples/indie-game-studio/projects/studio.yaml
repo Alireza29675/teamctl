@@ -1,0 +1,55 @@
+version: 2
+
+project:
+  id: studio
+  name: Indie Game Studio
+  cwd: ./workspace
+
+channels:
+  # Public design surface — designer, writer, director argue here.
+  - name: design
+    members: [director, designer, writer]
+  # Private back-channel between director and the read-only critic.
+  # Designer and writer are deliberately NOT members; the critic
+  # dissents privately so creative momentum doesn't stall on every
+  # half-formed idea.
+  - name: critique
+    members: [director, playtest_critic]
+
+managers:
+  director:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/director.md
+    permission_mode: auto
+    telegram_inbox: true
+    reports_to_user: true
+    autonomy: low_risk_only
+    can_dm: [designer, writer, playtest_critic]
+    can_broadcast: [design, critique]
+
+workers:
+  designer:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/designer.md
+    reports_to: director
+    can_dm: [director, writer]
+    can_broadcast: [design]
+
+  writer:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/writer.md
+    reports_to: director
+    can_dm: [director, designer]
+    can_broadcast: [design]
+
+  playtest_critic:
+    runtime: claude-code
+    model: claude-opus-4-7
+    permission_mode: plan          # read-only: dissents, never mutates
+    role_prompt: roles/playtest_critic.md
+    reports_to: director
+    can_dm: [director]
+    can_broadcast: [critique]

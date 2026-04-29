@@ -1,0 +1,36 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: oss-
+
+budget:
+  daily_usd_limit: 20.0
+  message_ttl_hours: 72
+
+hitl:
+  globally_sensitive_actions:
+    - publish
+    - release
+    - deploy
+    - merge_to_main
+    - external_email
+    - external_api_post
+
+interfaces:
+  # One Telegram bot, scoped to the maintainer. Approvals from anywhere
+  # in the team surface here — that's how `release_manager`'s plan-mode
+  # proposals reach you.
+  - type: telegram
+    name: tg-maintainer
+    config:
+      bot_token_env: MAINTAINER_BOT_TOKEN
+      authorized_chat_ids_env: MAINTAINER_CHAT_IDS
+      manager: oss:maintainer
+
+projects:
+  - file: projects/oss.yaml

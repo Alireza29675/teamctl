@@ -1,0 +1,73 @@
+version: 2
+
+project:
+  id: oss
+  name: OSS Maintainer
+  cwd: ./workspace
+
+channels:
+  # Pipeline channels — triage and bug_fix are insulated from each
+  # other so triage doesn't see the patch flow and bug_fix doesn't see
+  # the labelling chatter. Each pairs the worker with the maintainer.
+  - name: triage
+    members: [maintainer, triage]
+  - name: dev
+    members: [maintainer, bug_fix]
+  # Release is the maintainer's plan-mode workspace. Only release_manager
+  # (read-only / plan) and the maintainer are in it; nothing said here
+  # mutates the repo until the maintainer approves on Telegram.
+  - name: release
+    members: [maintainer, release_manager]
+  - name: all
+    members: "*"
+
+managers:
+  maintainer:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/maintainer.md
+    permission_mode: auto
+    telegram_inbox: true
+    reports_to_user: true
+    autonomy: low_risk_only
+    can_dm: [triage, bug_fix, docs, release_manager]
+    can_broadcast: [triage, dev, release, all]
+
+workers:
+  triage:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/triage.md
+    permission_mode: auto
+    reports_to: maintainer
+    can_dm: [maintainer]
+    can_broadcast: [triage]
+
+  bug_fix:
+    runtime: codex
+    model: gpt-5-codex
+    role_prompt: roles/bug_fix.md
+    reports_to: maintainer
+    can_dm: [maintainer]
+    can_broadcast: [dev]
+
+  docs:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/docs.md
+    permission_mode: auto
+    reports_to: maintainer
+    can_dm: [maintainer]
+    can_broadcast: [all]
+
+  # release_manager runs in plan mode — it cannot mutate the repo. Its
+  # only output is proposals to the maintainer, which become Telegram
+  # approval prompts via `request_approval(action="release")`.
+  release_manager:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/release_manager.md
+    permission_mode: plan
+    reports_to: maintainer
+    can_dm: [maintainer]
+    can_broadcast: [release]
