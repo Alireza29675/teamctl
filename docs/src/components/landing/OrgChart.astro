@@ -1,0 +1,106 @@
+---
+// §2 — Designed SVG org chart, sticky-pinned with three-act draw-on.
+// Scaffold: SVG geometry + draw-on placeholder. Persistent CSS pulse
+// runs after draw-on completes. GSAP ScrollTrigger wires up later.
+//
+// Non-negotiable: edges must keep pulsing subtly after the pin releases.
+// The CSS keyframe (`org-pulse-loop` in landing.css) handles the loop;
+// the GSAP timeline only owns the draw-on phase.
+---
+<section class="org-chart" data-org-chart>
+  <div class="org-pin">
+    <h2>Every node is a process.<br />Every edge is a conversation.</h2>
+
+    <svg
+      class="org-svg"
+      viewBox="0 0 800 480"
+      role="img"
+      aria-label="Manager node connected to four worker nodes; cross-project edge to a sibling manager."
+    >
+      <!-- Edges (act 1: manager → workers, act 2: workers → mailbox,
+           act 3: cross-project bridge). stroke-dasharray drives the
+           draw-on; the persistent pulse class is appended after act 3. -->
+      <g
+        fill="none"
+        stroke="rgba(233,231,223,0.35)"
+        stroke-width="1.2"
+        data-edge-group="manager-workers"
+      >
+        <path d="M400 120 L220 280" />
+        <path d="M400 120 L340 300" />
+        <path d="M400 120 L460 300" />
+        <path d="M400 120 L580 280" />
+      </g>
+      <g
+        fill="none"
+        stroke="rgba(233,231,223,0.25)"
+        stroke-width="1"
+        data-edge-group="workers-mailbox"
+      >
+        <path d="M220 280 L400 400" />
+        <path d="M340 300 L400 400" />
+        <path d="M460 300 L400 400" />
+        <path d="M580 280 L400 400" />
+      </g>
+      <!-- Accent lives ONLY here (live-state pulse). -->
+      <g
+        fill="none"
+        stroke-width="1.4"
+        class="org-pulse org-pulse-active"
+        data-edge-group="cross-project"
+      >
+        <path d="M400 120 L720 80" stroke-dasharray="4 6" />
+      </g>
+
+      <!-- Nodes -->
+      <g fill="#14161a" stroke="rgba(233,231,223,0.6)" stroke-width="1">
+        <circle cx="400" cy="120" r="22" />
+        <circle cx="220" cy="280" r="16" />
+        <circle cx="340" cy="300" r="16" />
+        <circle cx="460" cy="300" r="16" />
+        <circle cx="580" cy="280" r="16" />
+        <circle cx="400" cy="400" r="14" />
+        <circle cx="720" cy="80" r="18" />
+      </g>
+
+      <g
+        fill="var(--fg-mute)"
+        font-family="var(--sans)"
+        font-size="11"
+        text-anchor="middle"
+      >
+        <text x="400" y="86">manager</text>
+        <text x="400" y="430">mailbox</text>
+        <text x="720" y="46">peer manager</text>
+      </g>
+    </svg>
+
+    <p class="caption">Every node is a process. Every edge is a conversation.</p>
+  </div>
+</section>
+
+<style>
+  .org-chart { position: relative; }
+  .org-pin {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    gap: 2rem;
+    text-align: center;
+  }
+  .org-svg {
+    width: min(72rem, 100%);
+    height: auto;
+  }
+  .org-chart h2 {
+    font-size: clamp(1.6rem, 3vw, 2.4rem);
+    line-height: 1.2;
+    margin: 0;
+  }
+</style>
+
+<script>
+  // Scaffold draw-on: GSAP ScrollTrigger wiring lands in the spec phase.
+  // For now we declare the data hooks so the timeline has stable selectors.
+  // (No-op script — left as documentation for the wiring contract.)
+</script>

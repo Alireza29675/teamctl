@@ -1,0 +1,25 @@
+---
+// §5 — single line linking to /compare/. No animation, no flourish.
+// Route choice noted in scaffold: `/compare/` (root-level, marketing
+// landing-class) over `/concepts/compare/` (Starlight-nested) per
+// section 5 brief — final route TBD by eng_lead, see spec §5.
+---
+<section class="quiet-outbound">
+  <p>
+    <a href="/compare/">
+      How this differs from agent SDKs, supervisors, and mailboxes →
+    </a>
+  </p>
+</section>
+
+<style>
+  .quiet-outbound { padding: 6rem 2rem; text-align: center; }
+  .quiet-outbound a {
+    color: var(--fg-mute);
+    text-decoration: none;
+    border-bottom: 1px solid var(--hairline);
+    padding-bottom: 0.2rem;
+    font-size: 1.05rem;
+  }
+  .quiet-outbound a:hover { color: var(--fg); }
+</style>

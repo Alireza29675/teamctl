@@ -1,0 +1,33 @@
+---
+// §4 — Quiet typographic. NO animation. P-9 GATED:
+// structural placeholder ONLY in the scaffold. Real prose
+// lands after the Alireza interview (P-9). Hard rule from spec:
+// do NOT ship placeholder prose to main.
+---
+<section class="why-i-built-this">
+  <div class="wibt-inner">
+    <h2>Why I built this.</h2>
+    <p class="wibt-placeholder" data-p9-gated="true">
+      [Placeholder — replaced by P-9 interview prose before merge to main.]
+    </p>
+  </div>
+</section>
+
+<style>
+  .why-i-built-this { padding: 11rem 2rem; }
+  .wibt-inner {
+    max-width: 44rem;
+    margin: 0 auto;
+    text-align: left;
+  }
+  .why-i-built-this h2 {
+    font-size: clamp(1.6rem, 2.6vw, 2.2rem);
+    margin: 0 0 1.5rem;
+  }
+  .wibt-placeholder {
+    color: var(--fg-mute);
+    font-style: italic;
+    line-height: 1.7;
+    margin: 0;
+  }
+</style>

@@ -1,0 +1,35 @@
+---
+// §6 — minimal footer. No newsletter, no socials beyond GitHub.
+---
+<footer class="landing-footer">
+  <div class="lf-inner">
+    <span><a href="https://github.com/Alireza29675/teamctl">GitHub</a></span>
+    <span><a href="/getting-started/">Docs</a></span>
+    <span>MIT</span>
+    <span data-version-slot>v0.2.x</span>
+  </div>
+</footer>
+
+<style>
+  .landing-footer {
+    border-top: 1px solid var(--hairline);
+    padding: 2.5rem 2rem;
+    margin-top: 4rem;
+  }
+  .lf-inner {
+    max-width: 72rem;
+    margin: 0 auto;
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+    color: var(--fg-mute);
+    font-size: 0.85rem;
+  }
+  .landing-footer a {
+    color: var(--fg-mute);
+    text-decoration: none;
+    border-bottom: 1px solid var(--hairline);
+    padding-bottom: 0.15rem;
+  }
+  .landing-footer a:hover { color: var(--fg); }
+</style>

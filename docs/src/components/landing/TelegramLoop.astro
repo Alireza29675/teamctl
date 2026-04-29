@@ -1,0 +1,235 @@
+---
+// §3 — 2-col DOM/CSS Telegram loop.
+// Structure follows dev2's storyboard (memory/.../telegram-loop-script.md):
+//   13s cycle, 9 log-lines + 3 bubbles + 2 typing indicators + accent pulse
+//   on log line 5 at t=5.4. Looped via GSAP timeline {repeat: -1}.
+//
+// Strings are PLACEHOLDERS deliberately matched to dev2's lengths so the
+// column widths land where the real strings will. Content swap is one
+// edit per [data-step] node once marketing signs off.
+//
+// Reduce-motion branch: hold full-state, cross-fade whole panel over
+// 600ms, no per-line stagger.
+---
+<section class="telegram-loop" data-telegram-loop>
+  <div class="tl-grid">
+    <!-- Left: tmux-style supervisor log (9 lines) -->
+    <pre class="tl-log" aria-label="manager and worker activity log"><span data-log="1">[mailbox]  dm    user → manager</span>
+<span data-log="2">[manager]  route user → worker-1</span>
+<span data-log="3">[mailbox]  dm    manager → worker-1</span>
+<span data-log="4">[worker-1] picked up</span>
+<span data-log="5" class="tl-pulse-line">[worker-1] migration: 4 of 6 batches complete</span>
+<span data-log="6">[worker-1] reply → manager</span>
+<span data-log="7">[mailbox]  dm    worker-1 → manager</span>
+<span data-log="8">[manager]  reply → user</span>
+<span data-log="9">[mailbox]  dm    manager → user</span></pre>
+
+    <!-- Right: Telegram phone frame with bubbles + typing indicators. -->
+    <div class="tl-phone" aria-label="Telegram conversation">
+      <div class="tl-phone-frame">
+        <div class="tl-bubble tl-bubble-out" data-bubble="B1">
+          Where are we on the migration?
+        </div>
+        <div class="tl-typing tl-bubble-in" data-typing="T1" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <div class="tl-bubble tl-bubble-in" data-bubble="B2">
+          Checking with worker-1.
+        </div>
+        <div class="tl-typing tl-bubble-in" data-typing="T2" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <div class="tl-bubble tl-bubble-in" data-bubble="B3">
+          worker-1: 4 of 6 batches done. ETA 12 minutes.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="caption">DM the team like you DM a person.</p>
+</section>
+
+<style>
+  .telegram-loop { padding: 9rem 2rem; }
+  .tl-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 3rem;
+    max-width: 72rem;
+    margin: 0 auto;
+  }
+  @media (min-width: 900px) {
+    .tl-grid { grid-template-columns: 1.1fr 0.9fr; gap: 4rem; align-items: center; }
+  }
+
+  .tl-log {
+    background: var(--bg-soft);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 1.5rem 1.75rem;
+    font-family: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    font-size: 0.86rem;
+    line-height: 1.9;
+    color: var(--fg-mute);
+    overflow-x: auto;
+    margin: 0;
+    white-space: pre;
+  }
+  .tl-log span {
+    display: block;
+    /* JS sets initial state on mount; fail-open to visible if JS fails. */
+    will-change: opacity, transform;
+    border-left: 2px solid transparent;
+    padding-left: 0.5rem;
+    margin-left: -0.5rem;
+  }
+
+  /* §2 accent reserved system-wide; §3's pulse re-uses the same token by
+     spec ("accent pulse at t=5.4 ... 60% → 100% → 60% on left-edge marker").
+     This is the documented exception — see SPEC §3 Easing + reveal style. */
+  .tl-pulse-line.tl-pulse-active {
+    border-left-color: var(--accent);
+    animation: tl-line-pulse 800ms ease-in-out 1;
+  }
+  @keyframes tl-line-pulse {
+    0%, 100% { border-left-color: rgba(214, 161, 90, 0.6); }
+    50%      { border-left-color: rgba(214, 161, 90, 1.0); }
+  }
+
+  .tl-phone-frame {
+    background: var(--bg-soft);
+    border: 1px solid var(--hairline);
+    border-radius: 28px;
+    padding: 2rem 1.25rem;
+    max-width: 22rem;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+  .tl-bubble, .tl-typing {
+    padding: 0.75rem 1rem;
+    border-radius: 18px;
+    line-height: 1.45;
+    font-size: 0.95rem;
+    max-width: 85%;
+    will-change: opacity, transform;
+  }
+  .tl-bubble-out {
+    background: #1d2026;
+    color: var(--fg);
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+  }
+  .tl-bubble-in {
+    background: #14161a;
+    color: var(--fg-mute);
+    align-self: flex-start;
+    border: 1px solid var(--hairline);
+    border-bottom-left-radius: 4px;
+  }
+  .tl-typing { display: inline-flex; gap: 4px; padding: 0.9rem 1rem; }
+  .tl-typing span {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--fg-mute); opacity: 0.4;
+    animation: tl-dot 1.2s ease-in-out infinite;
+  }
+  .tl-typing span:nth-child(2) { animation-delay: 0.15s; }
+  .tl-typing span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes tl-dot {
+    0%, 100% { opacity: 0.3; transform: translateY(0); }
+    50%      { opacity: 1;   transform: translateY(-2px); }
+  }
+
+  .telegram-loop .caption {
+    text-align: center;
+    margin-top: 3rem;
+    color: var(--fg-mute);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tl-typing span { animation: none; }
+  }
+</style>
+
+<script>
+  import gsap from 'gsap';
+  import { ScrollTrigger } from 'gsap/ScrollTrigger';
+  import { withMotion } from '../../lib/motion';
+
+  gsap.registerPlugin(ScrollTrigger);
+
+  const root = document.querySelector<HTMLElement>('[data-telegram-loop]');
+  if (root) {
+    const logLines = root.querySelectorAll<HTMLElement>('[data-log]');
+    const bubbles = root.querySelectorAll<HTMLElement>('[data-bubble]');
+    const typings = root.querySelectorAll<HTMLElement>('[data-typing]');
+    const pulseLine = root.querySelector<HTMLElement>('[data-log="5"]');
+
+    // Initial hidden state — set in JS so users without JS still see content.
+    gsap.set([...logLines, ...bubbles, ...typings], { opacity: 0, y: 8 });
+
+    // Per dev2 timing table; dev3 may tune ±100ms without re-signoff.
+    type Step = { t: number; el: Element | null; fade?: boolean };
+    const reveals: Step[] = [
+      { t: 0.4,  el: bubbles[0] },                 // B1
+      { t: 1.4,  el: logLines[0] },                // log 1
+      { t: 2.0,  el: typings[0] },                 // typing T1
+      { t: 2.6,  el: bubbles[1] },                 // B2 (typing crossfades)
+      { t: 3.2,  el: logLines[1] },
+      { t: 3.8,  el: logLines[2] },
+      { t: 4.4,  el: logLines[3] },
+      { t: 5.4,  el: logLines[4] },                // pulse beat
+      { t: 6.2,  el: logLines[5] },
+      { t: 6.8,  el: logLines[6] },
+      { t: 7.6,  el: typings[1] },                 // typing T2
+      { t: 8.2,  el: bubbles[2] },                 // B3
+      { t: 9.0,  el: logLines[7] },
+      { t: 9.6,  el: logLines[8] },
+    ];
+
+    withMotion(gsap, ({ full, reduce }) => {
+      full(() => {
+        const tl = gsap.timeline({
+          repeat: -1,
+          repeatDelay: 0.5, // breath between cycles
+          scrollTrigger: { trigger: root, start: 'top 80%' },
+        });
+
+        for (const step of reveals) {
+          if (!step.el) continue;
+          tl.to(step.el, { opacity: 1, y: 0, duration: 0.35, ease: 'power2.out' }, step.t);
+        }
+
+        // Crossfade typing indicators out as their bubbles arrive.
+        tl.to(typings[0], { opacity: 0, duration: 0.3 }, 2.6);
+        tl.to(typings[1], { opacity: 0, duration: 0.3 }, 8.2);
+
+        // Accent pulse at t=5.4 on log line 5 (CSS keyframe one-shot).
+        tl.call(() => pulseLine?.classList.add('tl-pulse-active'), [], 5.4);
+        tl.call(() => pulseLine?.classList.remove('tl-pulse-active'), [], 6.3);
+
+        // Hold full scene 10s → 12s, then fade-down.
+        tl.to([...logLines, ...bubbles], {
+          opacity: 0,
+          duration: 0.35,
+          ease: 'power1.in',
+        }, 12.0);
+        // Reset for next cycle (12.5 → 13.0 buffer).
+        tl.set([...logLines, ...bubbles, ...typings], { y: 8 }, 12.6);
+      });
+
+      reduce(() => {
+        // Reveal full state on intersection; cross-fade whole panel.
+        const tl = gsap.timeline({
+          repeat: -1,
+          scrollTrigger: { trigger: root, start: 'top 80%' },
+        });
+        tl.to([...logLines, ...bubbles, ...typings], { opacity: 1, y: 0, duration: 0.6 }, 0);
+        // Hold 4s, cross-fade out 0.6s, fade in 0.6s.
+        tl.to([...logLines, ...bubbles, ...typings], { opacity: 0, duration: 0.6 }, 4.6);
+        tl.set([...logLines, ...bubbles, ...typings], { y: 0 });
+      });
+    });
+  }
+</script>

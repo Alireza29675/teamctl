@@ -1,9 +1,11 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import react from '@astrojs/react';
 
 export default defineConfig({
   site: 'https://teamctl.run',
   integrations: [
+    react(),
     starlight({
       title: 'teamctl',
       description: 'docker-compose for persistent AI agent teams.',

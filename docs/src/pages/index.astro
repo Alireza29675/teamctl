@@ -1,0 +1,79 @@
+---
+// T-021 v2 landing — root route owned outside of Starlight's content
+// pipeline so heavy animation deps stay off /docs/* pages.
+//
+// Section ownership:
+//   §1 Hero        → dev1 (HeroAmbient.tsx, R3F single canvas)
+//   §2 OrgChart    → dev3 (SVG sticky-pin)
+//   §3 TelegramLoop→ dev3 (DOM/CSS)
+//   §4 WhyIBuilt   → dev3 placeholder, P-9 prose lands later
+//   §5 Outbound    → dev3
+//   §6 Footer      → dev3
+
+import OrgChart from '../components/landing/OrgChart.astro';
+import TelegramLoop from '../components/landing/TelegramLoop.astro';
+import WhyIBuiltThis from '../components/landing/WhyIBuiltThis.astro';
+import QuietOutbound from '../components/landing/QuietOutbound.astro';
+import Footer from '../components/landing/Footer.astro';
+import '../styles/landing.css';
+---
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>teamctl — persistent AI coworkers, supervised like services</title>
+    <meta
+      name="description"
+      content="Declare a team of persistent AI agents in YAML. teamctl supervises them like services."
+    />
+  </head>
+  <body class="landing">
+    <!-- §1 Hero — dev1 owns. Slot reserved as <HeroAmbient client:visible>.
+         Wired in once dev1's branch lands. Until then, a quiet placeholder
+         keeps the page renderable without R3F glue. -->
+    <section class="hero hero-placeholder">
+      <div class="hero-copy">
+        <h1>Persistent AI coworkers,<br />supervised like services.</h1>
+        <p class="cta"><a href="/getting-started/">Read the docs →</a></p>
+      </div>
+      <p class="hero-slot-note" aria-hidden="true">[ HeroAmbient slot — dev1 ]</p>
+    </section>
+
+    <OrgChart />
+    <TelegramLoop />
+    <WhyIBuiltThis />
+    <QuietOutbound />
+    <Footer />
+  </body>
+</html>
+
+<style>
+  .hero-placeholder {
+    min-height: 92vh;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    padding: 0 2rem;
+    position: relative;
+  }
+  .hero-placeholder h1 {
+    font-size: clamp(2.4rem, 5vw, 4.4rem);
+    line-height: 1.08;
+    margin: 0 0 2rem;
+  }
+  .hero-placeholder .cta a {
+    color: var(--fg-mute);
+    text-decoration: none;
+    border-bottom: 1px solid var(--hairline);
+    padding-bottom: 0.2rem;
+  }
+  .hero-placeholder .cta a:hover { color: var(--fg); }
+  .hero-slot-note {
+    position: absolute;
+    bottom: 1.5rem;
+    color: var(--fg-mute);
+    font-family: ui-monospace, monospace;
+    font-size: 0.75rem;
+    opacity: 0.5;
+  }
+</style>
