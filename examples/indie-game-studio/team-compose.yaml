@@ -1,0 +1,31 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: studio-
+
+budget:
+  daily_usd_limit: 15.0
+  message_ttl_hours: 168           # design conversations live longer than a day
+
+hitl:
+  globally_sensitive_actions:
+    - publish
+    - release
+    - external_email
+    - external_api_post
+
+interfaces:
+  - type: telegram
+    name: tg-director
+    config:
+      bot_token_env: DIRECTOR_BOT_TOKEN
+      authorized_chat_ids_env: DIRECTOR_CHAT_IDS
+      manager: studio:director
+
+projects:
+  - file: projects/studio.yaml
