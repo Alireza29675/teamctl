@@ -6,6 +6,9 @@
 // T-021 component plumbing left on disk for future revisit; this page
 // does not import any of it.
 
+import { Picture } from 'astro:assets';
+import heroJpg from '../../assets/hero.jpg';
+
 const installCmd = 'curl -sSf https://teamctl.run/install | sh';
 const upCmd = 'teamctl up';
 
@@ -68,12 +71,21 @@ const yamlHtml = yaml
   </head>
   <body>
     <main>
+      <figure class="hero">
+        <Picture
+          src={heroJpg}
+          alt=""
+          loading="eager"
+          decoding="async"
+          formats={['avif', 'webp']}
+          fallbackFormat="jpg"
+          quality={80}
+        />
+      </figure>
+
       <header class="lede">
-        <h1>
-          Persistent AI coworkers —<br />
-          declared in YAML, supervised like services.
-        </h1>
-        <p class="subline">Docker-compose for persistent AI agent teams.</p>
+        <h1>Autonomous Teams of Agents</h1>
+        <p class="subline">declared in YAML, supervised like docker-compose and accessed via Telegram.</p>
       </header>
 
       <figure class="demo" aria-label="Example team.yaml and the command to start it">
@@ -93,9 +105,13 @@ const yamlHtml = yaml
         </div>
       </section>
 
-      <p class="docs">
+      <nav class="outbound" aria-label="Outbound links">
         <a href="/getting-started/">Read the docs →</a>
-      </p>
+        <span class="sep" aria-hidden="true">·</span>
+        <a href="https://github.com/Alireza29675/teamctl">Star on GitHub</a>
+        <span class="sep" aria-hidden="true">·</span>
+        <a href="https://github.com/Alireza29675/teamctl/tree/main/examples">Examples</a>
+      </nav>
     </main>
 
     <script>
@@ -149,6 +165,20 @@ const yamlHtml = yaml
         padding: 14vh 2rem 8rem;
         display: grid;
         gap: 3rem;
+      }
+
+      /* Hero image — contained in the same column. Static, no motion. */
+      .hero {
+        margin: 0;
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid var(--hairline);
+        background: var(--bg-soft);
+      }
+      .hero img {
+        display: block;
+        width: 100%;
+        height: auto;
       }
 
       /* Lede */
@@ -246,15 +276,31 @@ const yamlHtml = yaml
       }
 
       /* Docs link */
-      .docs { margin: 0; }
-      .docs a {
+      /* Outbound links — three quiet anchors in a row, fg-mute → fg on
+         hover, never accent (strict accent rule). */
+      .outbound {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.85rem;
+        font-size: 0.98rem;
+      }
+      .outbound a {
         color: var(--fg-mute);
         text-decoration: none;
         border-bottom: 1px solid var(--hairline);
         padding-bottom: 0.15rem;
-        font-size: 0.98rem;
+        transition: color 200ms ease, border-color 200ms ease;
       }
-      .docs a:hover { color: var(--fg); }
+      .outbound a:hover {
+        color: var(--fg);
+        border-color: rgba(233, 231, 223, 0.32);
+      }
+      .outbound .sep {
+        color: var(--fg-mute);
+        opacity: 0.45;
+        user-select: none;
+      }
     </style>
   </body>
 </html>
