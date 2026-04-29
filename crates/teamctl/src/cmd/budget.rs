@@ -18,7 +18,7 @@ pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
     }
     let conn = Connection::open(&db)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    conn.execute_batch(team_core::mailbox::SCHEMA)?;
+    team_core::mailbox::ensure(&conn)?;
 
     let today_start = midnight_utc();
 

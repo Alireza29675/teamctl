@@ -64,7 +64,7 @@ fn seed(mailbox: &std::path::Path) {
     let conn = Connection::open(mailbox).unwrap();
     conn.busy_timeout(Duration::from_secs(5)).unwrap();
     conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-    conn.execute_batch(team_core::mailbox::SCHEMA).unwrap();
+    team_core::mailbox::ensure(&conn).unwrap();
     conn.execute(
         "INSERT OR IGNORE INTO projects (id, name) VALUES ('p','P')",
         [],
@@ -159,6 +159,48 @@ fn request_approval_expires_after_ttl() {
     let mailbox = tmp.path().join("m.db");
     seed(&mailbox);
 
+    // Mark a synthetic delivery before the TTL elapses so the row resolves as
+    // `expired` (delivered but no human decision) rather than `undeliverable`.
+    let bin = bin();
+    let mbx = mailbox.clone();
+    let caller = thread::spawn(move || {
+        let mut p = Peer::spawn(&bin, "p:mgr", &mbx);
+        let _ = p.call("initialize", json!({}));
+        let r = p.call(
+            "tools/call",
+            json!({
+                "name": "request_approval",
+                "arguments": {
+                    "action": "deploy",
+                    "summary": "risky deploy",
+                    "ttl_seconds": 1
+                }
+            }),
+        );
+        p.shutdown();
+        r
+    });
+
+    thread::sleep(Duration::from_millis(200));
+    let conn = Connection::open(&mailbox).unwrap();
+    conn.execute(
+        "UPDATE approvals SET delivered_at=strftime('%s','now')
+         WHERE delivered_at IS NULL",
+        [],
+    )
+    .unwrap();
+
+    let r = caller.join().unwrap();
+    let sc = &r["result"]["structuredContent"];
+    assert_eq!(sc["status"], "expired", "got: {r:?}");
+}
+
+#[test]
+fn request_approval_undeliverable_after_ttl() {
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("m.db");
+    seed(&mailbox);
+
     let mut p = Peer::spawn(&bin(), "p:mgr", &mailbox);
     let _ = p.call("initialize", json!({}));
     let r = p.call(
@@ -167,15 +209,45 @@ fn request_approval_expires_after_ttl() {
             "name": "request_approval",
             "arguments": {
                 "action": "deploy",
-                "summary": "risky deploy",
+                "summary": "no human surface to receive this",
                 "ttl_seconds": 1
             }
         }),
     );
-    // Note: ttl=1 clamps to the schema min of 30; the request_approval path
-    // honors the literal value. Sleep 2s on top of the long-poll budget is
-    // not needed — the poll loop itself waits out the ttl.
     let sc = &r["result"]["structuredContent"];
-    assert_eq!(sc["status"], "expired", "got: {r:?}");
+    assert_eq!(sc["status"], "undeliverable", "got: {r:?}");
+    assert!(sc["delivered_at"].is_null(), "got: {r:?}");
+    p.shutdown();
+}
+
+#[test]
+fn request_approval_wait_false_returns_pending_immediately() {
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("m.db");
+    seed(&mailbox);
+
+    let mut p = Peer::spawn(&bin(), "p:mgr", &mailbox);
+    let _ = p.call("initialize", json!({}));
+    let start = std::time::Instant::now();
+    let r = p.call(
+        "tools/call",
+        json!({
+            "name": "request_approval",
+            "arguments": {
+                "action": "deploy",
+                "summary": "non-blocking diagnostic",
+                "ttl_seconds": 60,
+                "wait": false
+            }
+        }),
+    );
+    let elapsed = start.elapsed();
+    let sc = &r["result"]["structuredContent"];
+    assert_eq!(sc["status"], "pending", "got: {r:?}");
+    assert!(sc["delivered_at"].is_null(), "got: {r:?}");
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "wait:false should not block; took {elapsed:?}"
+    );
     p.shutdown();
 }

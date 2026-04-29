@@ -1830,6 +1830,7 @@ name = "team-core"
 version = "0.2.9"
 dependencies = [
  "anyhow",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",

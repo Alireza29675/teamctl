@@ -121,7 +121,7 @@ pub fn schema() -> Value {
         },
         {
             "name": "request_approval",
-            "description": "Request human approval for a brand-sensitive action. Blocks until approved/denied/expired (long-poll). Use before any tool call that publishes, deploys, pays, or sends externally.",
+            "description": "Request human approval for a brand-sensitive action. Blocks until approved/denied/expired/undeliverable (long-poll). Use before any tool call that publishes, deploys, pays, or sends externally. Terminal `undeliverable` means the prompt was never marked delivered to a human surface — distinct from `expired` (delivered but no decision in time).",
             "inputSchema": {
                 "type": "object",
                 "required": ["action", "summary"],
@@ -130,7 +130,8 @@ pub fn schema() -> Value {
                     "scope_tag":  { "type": "string", "description": "Optional narrower tag for auto-approval matching." },
                     "summary":    { "type": "string" },
                     "payload":    { "type": "object" },
-                    "ttl_seconds":{ "type": "integer", "minimum": 30, "maximum": 3600, "default": 900 }
+                    "ttl_seconds":{ "type": "integer", "minimum": 30, "maximum": 3600, "default": 900 },
+                    "wait":       { "type": "boolean", "default": true, "description": "When false, return immediately after inserting the row (status=pending, delivered_at=null). Useful for diagnostics and non-blocking flows." }
                 },
                 "additionalProperties": false
             }
@@ -410,9 +411,14 @@ struct ApprovalArgs {
     payload: Value,
     #[serde(default = "default_approval_ttl")]
     ttl_seconds: u64,
+    #[serde(default = "default_approval_wait")]
+    wait: bool,
 }
 fn default_approval_ttl() -> u64 {
     900
+}
+fn default_approval_wait() -> bool {
+    true
 }
 
 async fn request_approval(ctx: &Ctx, args: Value) -> Result<Value, String> {
@@ -431,23 +437,42 @@ async fn request_approval(ctx: &Ctx, args: Value) -> Result<Value, String> {
         )
         .map_err(|e| e.to_string())?;
 
+    if !a.wait {
+        let (status, note, delivered_at) =
+            ctx.store.approval_status(id).map_err(|e| e.to_string())?;
+        return Ok(content_json(&json!({
+            "id": id,
+            "status": status,
+            "note": note,
+            "delivered_at": delivered_at,
+        })));
+    }
+
     // Poll every 500 ms until decided or expired.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(a.ttl_seconds);
     loop {
         let _ = ctx.store.expire_stale_approvals();
-        let (status, note) = ctx.store.approval_status(id).map_err(|e| e.to_string())?;
+        let (status, note, delivered_at) =
+            ctx.store.approval_status(id).map_err(|e| e.to_string())?;
         if status != "pending" {
-            return Ok(content_json(
-                &json!({ "id": id, "status": status, "note": note }),
-            ));
+            return Ok(content_json(&json!({
+                "id": id,
+                "status": status,
+                "note": note,
+                "delivered_at": delivered_at,
+            })));
         }
         if std::time::Instant::now() >= deadline {
             // Force-expire one last time.
             let _ = ctx.store.expire_stale_approvals();
-            let (status, note) = ctx.store.approval_status(id).map_err(|e| e.to_string())?;
-            return Ok(content_json(
-                &json!({ "id": id, "status": status, "note": note }),
-            ));
+            let (status, note, delivered_at) =
+                ctx.store.approval_status(id).map_err(|e| e.to_string())?;
+            return Ok(content_json(&json!({
+                "id": id,
+                "status": status,
+                "note": note,
+                "delivered_at": delivered_at,
+            })));
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }

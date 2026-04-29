@@ -468,7 +468,7 @@ fn on_hit(
     let conn = Connection::open(db_path)?;
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.execute_batch(team_core::mailbox::SCHEMA)?;
+    team_core::mailbox::ensure(&conn)?;
     let hit_at = now();
     conn.execute(
         "INSERT INTO rate_limits (agent_id, runtime, hit_at, resets_at, raw_match)

@@ -14,7 +14,7 @@ pub fn run(root: &Path) -> Result<()> {
     }
     let conn = Connection::open(&db)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    conn.execute_batch(team_core::mailbox::SCHEMA)?;
+    team_core::mailbox::ensure(&conn)?;
 
     let ttl_hours = compose.global.budget.message_ttl_hours.unwrap_or(24) as f64;
     let horizon = now() - ttl_hours * 3600.0;
@@ -22,12 +22,20 @@ pub fn run(root: &Path) -> Result<()> {
         "DELETE FROM messages WHERE sent_at < ?1 AND acked_at IS NOT NULL",
         params![horizon],
     )?;
-    let approvals = conn.execute(
-        "UPDATE approvals SET status='expired', decided_at=?1
-         WHERE status='pending' AND expires_at < ?1",
-        params![now()],
+    let now_ts = now();
+    let undeliverable = conn.execute(
+        "UPDATE approvals SET status='undeliverable', decided_at=?1
+         WHERE status='pending' AND expires_at < ?1 AND delivered_at IS NULL",
+        params![now_ts],
     )?;
-    println!("gc · {msgs} acked messages removed · {approvals} approvals expired");
+    let expired = conn.execute(
+        "UPDATE approvals SET status='expired', decided_at=?1
+         WHERE status='pending' AND expires_at < ?1 AND delivered_at IS NOT NULL",
+        params![now_ts],
+    )?;
+    println!(
+        "gc · {msgs} acked messages removed · {expired} approvals expired · {undeliverable} undeliverable"
+    );
     Ok(())
 }
 

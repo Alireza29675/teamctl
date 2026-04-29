@@ -15,6 +15,7 @@ serde_yaml.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 tracing.workspace = true
+rusqlite.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
