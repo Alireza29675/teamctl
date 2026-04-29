@@ -53,5 +53,5 @@ Adapters ship as small standalone binaries next to `teamctl` — `team-interface
 
 ## Related
 
-- [HITL](./hitl.md)
-- [Guide: Telegram bot](../guides/telegram-bot.md)
+- [HITL](/concepts/hitl/)
+- [Guide: Telegram bot](/guides/telegram-bot/)

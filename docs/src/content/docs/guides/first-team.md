@@ -37,6 +37,6 @@ Edit `roles/manager.md` and run `teamctl reload` — only the manager restarts. 
 
 ## What's next
 
-- Add a [Telegram bot](./telegram-bot.md) so you can DM the manager from your phone.
-- Read about [channels](../concepts/channels.md) to wire up broadcast groups.
+- Add a [Telegram bot](/guides/telegram-bot/) so you can DM the manager from your phone.
+- Read about [channels](/concepts/channels/) to wire up broadcast groups.
 - See the bigger `multi-agent`, `multi-runtime`, `two-projects` examples for more realistic shapes.

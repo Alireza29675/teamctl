@@ -2,7 +2,7 @@
 title: Projects
 ---
 
-A **project** is an isolated team of agents with its own channels, roster, and working directory. Messages from one project cannot reach another without an explicit, time-boxed [bridge](./bridges.md).
+A **project** is an isolated team of agents with its own channels, roster, and working directory. Messages from one project cannot reach another without an explicit, time-boxed [bridge](/concepts/bridges/).
 
 ```
 projects:
@@ -21,5 +21,5 @@ Why isolation matters: running one fleet across many unrelated projects is the w
 
 ## Related
 
-- [Channels](./channels.md)
-- [Bridges](./bridges.md)
+- [Channels](/concepts/channels/)
+- [Bridges](/concepts/bridges/)

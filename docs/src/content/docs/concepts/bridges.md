@@ -35,5 +35,5 @@ teamctl bridge log <id>   # full transcript
 
 ## Related
 
-- [Projects](./projects.md)
-- [Guide: Bridges and HITL](../guides/bridges-and-hitl.md)
+- [Projects](/concepts/projects/)
+- [Guide: Bridges and HITL](/guides/bridges-and-hitl/)

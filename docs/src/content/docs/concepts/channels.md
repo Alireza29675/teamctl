@@ -37,5 +37,5 @@ dev1 → broadcast("internal", "WIP: refactor auth handler")
 
 ## Related
 
-- [Projects](./projects.md)
-- [Reference: team-compose.yaml](../reference/team-compose-yaml.md)
+- [Projects](/concepts/projects/)
+- [Reference: team-compose.yaml](/reference/team-compose-yaml/)

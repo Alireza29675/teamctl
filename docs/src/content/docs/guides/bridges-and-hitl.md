@@ -6,7 +6,7 @@ This guide covers the two mechanisms that keep teamctl safe: **project bridges**
 
 ## Bridges
 
-See [Concepts · Bridges](../concepts/bridges.md) for the full reference. TL;DR:
+See [Concepts · Bridges](/concepts/bridges/) for the full reference. TL;DR:
 
 ```bash
 teamctl bridge open \
@@ -24,7 +24,7 @@ Only the two named managers can DM across while the bridge is open. Every messag
 
 ## HITL
 
-See [Concepts · HITL](../concepts/hitl.md). The agent calls `request_approval` before acting:
+See [Concepts · HITL](/concepts/hitl/). The agent calls `request_approval` before acting:
 
 ```
 agent → request_approval({ action: "publish", summary: "Post morning brief",
