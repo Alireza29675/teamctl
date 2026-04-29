@@ -11,23 +11,28 @@ const upCmd = 'teamctl up';
 
 // Frozen YAML demo — drafted by dev3, awaiting marketing tone signoff.
 // Lines split for the muted 2-tone highlighter below.
+// Frozen 2026-04-29 (eng_lead msg 569). Marketing-approved, strict-
+// runnable; model pins mirror canonical examples (hello-team for the
+// claude pins, multi-runtime for the codex pin). Edit only after
+// re-routing through marketing.
 const yaml = [
   'project:',
   '  id: writing',
-  '  name: Writing Team',
   '',
   'managers:',
   '  editor:',
   '    runtime: claude-code',
-  '    interface: telegram',
-  '    can_dm: [writer, researcher]',
+  '    model: claude-opus-4-7',
+  '    telegram_inbox: true',
   '',
   'workers:',
   '  writer:',
   '    runtime: codex',
+  '    model: gpt-5-codex',
   '    reports_to: editor',
   '  researcher:',
   '    runtime: claude-code',
+  '    model: claude-sonnet-4-6',
   '    reports_to: editor',
 ];
 
