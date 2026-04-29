@@ -1,0 +1,84 @@
+/* §1 — Hero styles, owned by HeroAmbient. Warm-neutral only; the page's
+   --accent token (defined in styles/landing.css) is reserved for §2's
+   live-state pulse and is deliberately not referenced here. */
+
+.hero {
+  position: relative;
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 35%, rgba(255, 240, 215, 0.025), transparent 70%),
+    var(--bg);
+  display: grid;
+  align-items: center;
+  overflow: hidden;
+  padding: 0 2rem;
+}
+
+.hero-stage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.hero-still,
+.hero-still img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+}
+
+.hero-canvas {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 1.6s ease-out;
+}
+
+.hero-canvas[data-faded='true'] { opacity: 1; }
+
+/* Keep the still in the DOM under the live canvas — a context-lost
+   canvas reveals the same artwork instead of a void. */
+.hero-canvas[data-faded='true'] ~ .hero-still,
+.hero-still[aria-hidden='true'] { opacity: 0.55; }
+
+.hero-copy {
+  position: relative;
+  max-width: 36rem;
+  margin: 0 auto;
+  padding: 0 1rem;
+  text-align: center;
+  display: grid;
+  gap: 2.5rem;
+}
+
+.hero-tagline {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(1.9rem, 4.2vw, 3rem);
+  line-height: 1.18;
+  letter-spacing: -0.012em;
+  color: var(--fg);
+  margin: 0;
+  text-shadow: 0 0 28px rgba(13, 14, 16, 0.85), 0 0 60px rgba(13, 14, 16, 0.55);
+}
+
+.hero-cta {
+  justify-self: center;
+  color: var(--fg-mute);
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  border-bottom: 1px solid var(--hairline);
+  padding: 0.25rem 0.1rem;
+  transition: color 240ms ease, border-color 240ms ease;
+}
+.hero-cta:hover { color: var(--fg); border-color: rgba(233, 231, 223, 0.4); }
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-canvas { display: none; }
+  .hero-still { opacity: 1 !important; }
+}

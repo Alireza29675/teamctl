@@ -100,7 +100,86 @@
 </style>
 
 <script>
-  // Scaffold draw-on: GSAP ScrollTrigger wiring lands in the spec phase.
-  // For now we declare the data hooks so the timeline has stable selectors.
-  // (No-op script — left as documentation for the wiring contract.)
+  // §2 draw-on: three-act stroke-dasharray reveal driven by ScrollTrigger
+  // pin + scrub. Once the timeline completes, the cross-project edge keeps
+  // pulsing via the CSS keyframe (`.org-pulse-active` set in markup) — that
+  // pulse is independent of GSAP state, so a freeze post-pin-release is
+  // structurally impossible (marketing's non-negotiable).
+  import gsap from 'gsap';
+  import { ScrollTrigger } from 'gsap/ScrollTrigger';
+  import { withMotion } from '../../lib/motion';
+
+  gsap.registerPlugin(ScrollTrigger);
+
+  const root = document.querySelector<HTMLElement>('[data-org-chart]');
+  if (root) {
+    const pin = root.querySelector<HTMLElement>('.org-pin');
+    const groups = {
+      managerWorkers: root.querySelectorAll<SVGPathElement>(
+        '[data-edge-group="manager-workers"] path',
+      ),
+      workersMailbox: root.querySelectorAll<SVGPathElement>(
+        '[data-edge-group="workers-mailbox"] path',
+      ),
+      crossProject: root.querySelectorAll<SVGPathElement>(
+        '[data-edge-group="cross-project"] path',
+      ),
+    };
+    const allEdges = [
+      ...groups.managerWorkers,
+      ...groups.workersMailbox,
+      ...groups.crossProject,
+    ];
+
+    // Initial dashed-out state. Each path's length seeds dashoffset so the
+    // stroke appears to draw on as offset → 0. Cross-project keeps its 4 6
+    // dash intact (handled by separate dashOffset-only animation).
+    for (const p of allEdges) {
+      const len = p.getTotalLength();
+      p.dataset.len = String(len);
+      if (p.parentElement?.dataset.edgeGroup === 'cross-project') {
+        // Already a dashed line; tween dashoffset only so the dash pattern
+        // is preserved when the line draws on.
+        gsap.set(p, { strokeDashoffset: len });
+      } else {
+        gsap.set(p, { strokeDasharray: len, strokeDashoffset: len });
+      }
+    }
+
+    withMotion(gsap, ({ full, reduce }) => {
+      full(() => {
+        const tl = gsap.timeline({
+          scrollTrigger: {
+            trigger: root,
+            start: 'top top',
+            end: '+=120%',
+            pin: pin,
+            scrub: 0.6,
+            anticipatePin: 1,
+          },
+          defaults: { ease: 'power1.inOut' },
+        });
+
+        // Act 1: manager → workers
+        tl.to(groups.managerWorkers, { strokeDashoffset: 0, duration: 1, stagger: 0.15 }, 0);
+        // Act 2: workers → mailbox
+        tl.to(groups.workersMailbox, { strokeDashoffset: 0, duration: 1, stagger: 0.12 }, 1.2);
+        // Act 3: cross-project bridge
+        tl.to(groups.crossProject, { strokeDashoffset: 0, duration: 1.2 }, 2.4);
+      });
+
+      reduce(() => {
+        // Reduced-motion: reveal all edges immediately on intersection,
+        // no pin, no scrub. The CSS pulse on cross-project still runs.
+        ScrollTrigger.create({
+          trigger: root,
+          start: 'top 75%',
+          once: true,
+          onEnter: () => {
+            gsap.to(allEdges, { strokeDashoffset: 0, duration: 0.6 });
+          },
+        });
+      });
+    });
+  }
 </script>
