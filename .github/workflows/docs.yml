@@ -31,13 +31,13 @@ jobs:
       - name: Link check (internal, fail on broken)
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --offline --include-fragments --no-progress --base "${{ github.workspace }}/docs/dist" 'docs/dist/**/*.html'
+          args: --offline --no-progress --root-dir "${{ github.workspace }}/docs/dist" 'docs/dist/**/*.html'
           fail: true
       - name: Link check (external, warn-only)
         uses: lycheeverse/lychee-action@v2
         continue-on-error: true
         with:
-          args: --no-progress --max-concurrency 4 --base "${{ github.workspace }}/docs/dist" 'docs/dist/**/*.html'
+          args: --no-progress --max-concurrency 4 --root-dir "${{ github.workspace }}/docs/dist" 'docs/dist/**/*.html'
           fail: false
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/pages-action@v1
