@@ -15,7 +15,11 @@ mod cmd;
 struct Cli {
     /// Compose root (the directory holding `team-compose.yaml`). When unset,
     /// teamctl walks up from CWD looking for `.team/team-compose.yaml`.
-    #[arg(long, short = 'C', env = "TEAMCTL_ROOT")]
+    //
+    // Note: `TEAMCTL_ROOT` is read manually in `resolve_root_with_source` so
+    // we can distinguish a CLI-supplied `--root` from an env-supplied one
+    // (T-010: env-as-source emits a stderr warning, CLI does not).
+    #[arg(long, short = 'C')]
     root: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -211,7 +215,18 @@ fn main() -> Result<()> {
         };
     }
 
-    let root = resolve_root(cli.root)?;
+    let (root, source) = resolve_root_with_source(cli.root)?;
+
+    // T-010: warn when an introspection command resolves a root that didn't
+    // come from CWD walk-up or an explicit `--root`. Read-side only — write
+    // commands have a different blast-radius story (see T-010b).
+    let warns_on_override = matches!(
+        cli.command,
+        Command::Validate | Command::Ps | Command::Mail { .. } | Command::Inspect { .. }
+    );
+    if warns_on_override {
+        cmd::warn::maybe_warn_root_source(&source, &root);
+    }
 
     match cli.command {
         Command::Validate => cmd::validate::run(&root),
@@ -258,17 +273,32 @@ fn main() -> Result<()> {
     }
 }
 
-/// Resolution order: `--root` flag > `TEAMCTL_ROOT` env > current context >
-/// walk up from CWD looking for `.team/`.
-fn resolve_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
+/// Resolve the compose root and report which input it came from. Resolution
+/// order: `--root` flag > `TEAMCTL_ROOT` env > current registered context >
+/// walk up from CWD looking for `.team/`. The returned [`cmd::warn::RootSource`]
+/// drives the T-010 override-warning on read-side commands.
+fn resolve_root_with_source(
+    explicit: Option<PathBuf>,
+) -> Result<(PathBuf, cmd::warn::RootSource)> {
+    use cmd::warn::RootSource;
+
     if let Some(p) = explicit {
-        return p
+        let canon = p
             .canonicalize()
-            .with_context(|| format!("canonicalize --root {}", p.display()));
+            .with_context(|| format!("canonicalize --root {}", p.display()))?;
+        return Ok((canon, RootSource::CliFlag));
     }
-    if let Some(p) = cmd::context::root_for_current()? {
-        return Ok(p);
+    if let Some(raw) = std::env::var_os("TEAMCTL_ROOT") {
+        let p = PathBuf::from(raw);
+        let canon = p
+            .canonicalize()
+            .with_context(|| format!("canonicalize $TEAMCTL_ROOT {}", p.display()))?;
+        return Ok((canon, RootSource::Env));
+    }
+    if let Some((name, p)) = cmd::context::root_for_current_named()? {
+        return Ok((p, RootSource::Context(name)));
     }
     let cwd = std::env::current_dir().context("get cwd")?;
-    team_core::compose::Compose::discover(&cwd)
+    let p = team_core::compose::Compose::discover(&cwd)?;
+    Ok((p, RootSource::WalkUp))
 }

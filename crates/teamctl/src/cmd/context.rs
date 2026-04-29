@@ -54,13 +54,15 @@ fn save(store: &ContextStore) -> Result<()> {
     Ok(())
 }
 
-/// Resolve `name` (or current) to a root path. Used by `--root` fallback.
-pub fn root_for_current() -> Result<Option<PathBuf>> {
+/// Resolve the active context to its root path and name. Used by the
+/// CLI's root-resolution fallback; the name is surfaced in the T-010
+/// override-warning so the operator knows which context is in effect.
+pub fn root_for_current_named() -> Result<Option<(String, PathBuf)>> {
     let store = load()?;
     let Some(name) = store.current else {
         return Ok(None);
     };
-    Ok(store.contexts.get(&name).cloned())
+    Ok(store.contexts.get(&name).cloned().map(|p| (name, p)))
 }
 
 /// Auto-register a root when `teamctl up` runs against it. Idempotent.
