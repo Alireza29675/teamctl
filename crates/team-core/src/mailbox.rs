@@ -89,12 +89,13 @@ CREATE TABLE IF NOT EXISTS approvals (
     scope_tag      TEXT,                   -- optional narrower tag
     summary        TEXT NOT NULL,
     payload_json   TEXT,
-    status         TEXT NOT NULL,          -- pending | approved | denied | expired
+    status         TEXT NOT NULL,          -- pending | approved | denied | expired | undeliverable
     requested_at   REAL NOT NULL,
     decided_at     REAL,
     decided_by     TEXT,
     decision_note  TEXT,
-    expires_at     REAL NOT NULL
+    expires_at     REAL NOT NULL,
+    delivered_at   REAL                    -- NULL until an interface adapter confirms surfacing to a human
 );
 
 CREATE INDEX IF NOT EXISTS approvals_pending_idx
@@ -132,3 +133,22 @@ CREATE TABLE IF NOT EXISTS rate_limits (
 CREATE INDEX IF NOT EXISTS rate_limits_agent_idx
     ON rate_limits(agent_id, hit_at);
 "#;
+
+/// Bootstrap the schema and apply additive migrations. Idempotent — safe on
+/// every connect. Replaces direct `execute_batch(SCHEMA)` calls so that
+/// existing databases pick up new columns without a destructive reset.
+pub fn ensure(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(SCHEMA)?;
+    // Additive migrations. SQLite has no `ADD COLUMN IF NOT EXISTS`, so each
+    // migration tolerates the "duplicate column name" error to stay idempotent.
+    let migrations: &[&str] = &["ALTER TABLE approvals ADD COLUMN delivered_at REAL"];
+    for stmt in migrations {
+        if let Err(e) = conn.execute(stmt, []) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
+}

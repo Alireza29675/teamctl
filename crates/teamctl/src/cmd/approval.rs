@@ -14,7 +14,7 @@ pub fn open_db(root: &Path) -> Result<Connection> {
     let conn = Connection::open(&db)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.execute_batch(team_core::mailbox::SCHEMA)?;
+    team_core::mailbox::ensure(&conn)?;
     Ok(conn)
 }
 
@@ -48,6 +48,14 @@ pub fn pending(root: &Path) -> Result<()> {
 pub fn decide(root: &Path, id: i64, approved: bool, note: Option<&str>) -> Result<()> {
     let conn = open_db(root)?;
     let status = if approved { "approved" } else { "denied" };
+    // A CLI decision is itself a delivery acknowledgement: the operator saw
+    // the prompt on some surface (otherwise they couldn't decide). Flip
+    // delivered_at when null so the row's lifecycle stays truthful.
+    conn.execute(
+        "UPDATE approvals SET delivered_at=strftime('%s','now')
+         WHERE id=?1 AND delivered_at IS NULL",
+        params![id],
+    )?;
     let n = conn.execute(
         "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='cli', decision_note=?2
          WHERE id=?3 AND status='pending'",

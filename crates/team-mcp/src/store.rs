@@ -17,7 +17,7 @@ fn try_open(path: &Path) -> Result<Connection> {
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.execute_batch(team_core::mailbox::SCHEMA)?;
+    team_core::mailbox::ensure(&conn)?;
     Ok(conn)
 }
 
@@ -311,26 +311,50 @@ impl Store {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Read status + optional note for one approval request.
-    pub fn approval_status(&self, id: i64) -> Result<(String, Option<String>)> {
+    /// Read status + optional note + delivered_at for one approval request.
+    pub fn approval_status(&self, id: i64) -> Result<(String, Option<String>, Option<f64>)> {
         let conn = self.conn.lock().unwrap();
-        let (status, note): (String, Option<String>) = conn.query_row(
-            "SELECT status, decision_note FROM approvals WHERE id = ?1",
+        let (status, note, delivered_at): (String, Option<String>, Option<f64>) = conn.query_row(
+            "SELECT status, decision_note, delivered_at FROM approvals WHERE id = ?1",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
-        Ok((status, note))
+        Ok((status, note, delivered_at))
     }
 
-    /// Auto-expire pending approvals whose `expires_at` has passed.
+    /// Auto-expire pending approvals whose `expires_at` has passed. Rows that
+    /// were never marked delivered transition to `undeliverable` so callers
+    /// can distinguish "human didn't respond" from "the prompt never reached
+    /// any human surface" — see decisions.md (T-031).
     pub fn expire_stale_approvals(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
-        let n = conn.execute(
-            "UPDATE approvals SET status='expired', decided_at=?1
-             WHERE status='pending' AND expires_at < ?1",
-            params![Self::now()],
+        let now = Self::now();
+        let undeliverable = conn.execute(
+            "UPDATE approvals SET status='undeliverable', decided_at=?1
+             WHERE status='pending' AND expires_at < ?1 AND delivered_at IS NULL",
+            params![now],
         )?;
-        Ok(n)
+        let expired = conn.execute(
+            "UPDATE approvals SET status='expired', decided_at=?1
+             WHERE status='pending' AND expires_at < ?1 AND delivered_at IS NOT NULL",
+            params![now],
+        )?;
+        Ok(undeliverable + expired)
+    }
+
+    /// Mark an approval as delivered (i.e. surfaced to a human via some
+    /// interface adapter). No-op if `delivered_at` is already set. Returns
+    /// `true` when this call performed the flip. Wired up by interface
+    /// adapters (`team-bot` et al.) in T-029/T-027 follow-up work.
+    #[allow(dead_code)]
+    pub fn mark_delivered(&self, id: i64) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE approvals SET delivered_at=?1
+             WHERE id=?2 AND delivered_at IS NULL",
+            params![Self::now(), id],
+        )?;
+        Ok(n > 0)
     }
 
     /// Decide one approval. Used by interface adapters (`team-bot` et al.);

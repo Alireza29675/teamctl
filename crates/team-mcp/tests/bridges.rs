@@ -64,7 +64,7 @@ fn seed_two_projects(mailbox: &std::path::Path) {
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .unwrap();
     conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-    conn.execute_batch(team_core::mailbox::SCHEMA).unwrap();
+    team_core::mailbox::ensure(&conn).unwrap();
 
     for (pid, pname) in [("alpha", "Alpha"), ("beta", "Beta")] {
         conn.execute(

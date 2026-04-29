@@ -15,7 +15,7 @@ pub fn open_db(root: &Path) -> Result<Connection> {
     let conn = Connection::open(&db)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.execute_batch(team_core::mailbox::SCHEMA)?;
+    team_core::mailbox::ensure(&conn)?;
     Ok(conn)
 }
 

@@ -136,7 +136,7 @@ fn open_mailbox(path: &std::path::Path) -> Result<Connection> {
     let conn = Connection::open(path).context("open mailbox")?;
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.execute_batch(team_core::mailbox::SCHEMA)?;
+    team_core::mailbox::ensure(&conn)?;
     Ok(conn)
 }
 
@@ -224,6 +224,11 @@ async fn handle_callback(bot: Bot, q: CallbackQuery, state: Arc<State>) -> Respo
         if let Ok(id) = id_str.parse::<i64>() {
             let approved = verb == "approve";
             let c = state.conn.lock().await;
+            let _ = c.execute(
+                "UPDATE approvals SET delivered_at=strftime('%s','now')
+                 WHERE id=?1 AND delivered_at IS NULL",
+                params![id],
+            );
             let _ = c.execute(
                 "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='user:telegram'
                  WHERE id=?2 AND status='pending'",

@@ -143,7 +143,7 @@ pub fn register_all_public(compose: &Compose) -> Result<()> {
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.execute_batch(team_core::mailbox::SCHEMA)?;
+    team_core::mailbox::ensure(&conn)?;
     for p in &compose.projects {
         conn.execute(
             "INSERT OR IGNORE INTO projects (id, name) VALUES (?1, ?2)",

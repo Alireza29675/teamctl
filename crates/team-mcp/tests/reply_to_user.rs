@@ -63,7 +63,7 @@ fn seed(mailbox: &std::path::Path) {
     let conn = Connection::open(mailbox).unwrap();
     conn.busy_timeout(Duration::from_secs(5)).unwrap();
     conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-    conn.execute_batch(team_core::mailbox::SCHEMA).unwrap();
+    team_core::mailbox::ensure(&conn).unwrap();
     conn.execute(
         "INSERT OR IGNORE INTO projects (id, name) VALUES ('p','P')",
         [],
