@@ -56,6 +56,14 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Cookbook',
+          items: [
+            { label: 'Multi-agent ACLs in one project', link: '/cookbook/multi-agent/' },
+            { label: 'Mixing runtimes in one team', link: '/cookbook/multi-runtime/' },
+            { label: 'Two projects, one teamctl, with bridges', link: '/cookbook/two-projects/' },
+          ],
+        },
+        {
           label: 'ADRs',
           autogenerate: { directory: 'adrs' },
         },
