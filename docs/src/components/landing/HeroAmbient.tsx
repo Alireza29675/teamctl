@@ -1,7 +1,10 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { hasWebGL, prefersReducedMotion } from '../../lib/motion';
-import stillPng from '../../assets/landing/hero-still.png';
-import stillWebp from '../../assets/landing/hero-still.webp';
+// `?url` forces Vite/Astro to return plain string URLs rather than the
+// image-metadata object Astro 5 hands to .astro files — React's <source>
+// and <img> need strings or they render `[object Object]`.
+import stillPng from '../../assets/landing/hero-still.png?url';
+import stillWebp from '../../assets/landing/hero-still.webp?url';
 import './hero.css';
 
 // §1 — Ambient hero composition.
