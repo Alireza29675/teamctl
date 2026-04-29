@@ -1,0 +1,43 @@
+---
+// T-021 v2 landing — root route owned outside of Starlight's content
+// pipeline so heavy animation deps stay off /docs/* pages.
+//
+// Section ownership:
+//   §1 Hero        → dev1 (HeroAmbient.tsx, R3F single canvas)
+//   §2 OrgChart    → dev3 (SVG sticky-pin)
+//   §3 TelegramLoop→ dev3 (DOM/CSS)
+//   §4 WhyIBuilt   → dev3 placeholder, P-9 prose lands later
+//   §5 Outbound    → dev3
+//   §6 Footer      → dev3
+
+import HeroAmbient from '../components/landing/HeroAmbient.tsx';
+import OrgChart from '../components/landing/OrgChart.astro';
+import TelegramLoop from '../components/landing/TelegramLoop.astro';
+// §4 WhyIBuiltThis intentionally hidden until P-9 interview prose lands.
+// import WhyIBuiltThis from '../components/landing/WhyIBuiltThis.astro';
+import QuietOutbound from '../components/landing/QuietOutbound.astro';
+import Footer from '../components/landing/Footer.astro';
+import '../styles/landing.css';
+---
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>teamctl — persistent AI coworkers, supervised like services</title>
+    <meta
+      name="description"
+      content="Declare a team of persistent AI agents in YAML. teamctl supervises them like services."
+    />
+  </head>
+  <body class="landing">
+    <HeroAmbient client:visible />
+
+
+    <OrgChart />
+    <TelegramLoop />
+    {/* §4 WhyIBuiltThis hidden — restore after P-9 interview lands. */}
+    <QuietOutbound />
+    <Footer />
+  </body>
+</html>
+

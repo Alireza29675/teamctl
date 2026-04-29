@@ -1,0 +1,151 @@
+---
+// /compare/ — comparative-positioning page (T-021 §5 target).
+// Lifted verbatim from the v1 _legacy-landing.mdx "How it compares" section
+// so the morning preview has a working round-trip from the landing's
+// "Quiet outbound" line. Real treatment lands in a follow-up.
+import '../styles/landing.css';
+---
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>How teamctl compares</title>
+    <meta
+      name="description"
+      content="How teamctl compares to claude-squad, claude-flow, mcp_agent_mail, and tmux + scripts. Plain comparison, no put-downs."
+    />
+  </head>
+  <body class="landing">
+    <main class="compare">
+      <header>
+        <p class="compare-eyebrow">
+          <a href="/">← Back to teamctl</a>
+        </p>
+        <h1>How teamctl compares.</h1>
+        <p class="compare-lede">
+          Plain comparison. No put-downs. We respect every tool here.
+        </p>
+      </header>
+
+      <div class="compare-table-wrap">
+        <table class="compare-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>teamctl</th>
+              <th>claude-squad</th>
+              <th>claude-flow</th>
+              <th>mcp_agent_mail</th>
+              <th>tmux + scripts</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">YAML-declared <code>reports_to</code> org chart</th>
+              <td>✅</td><td>❌</td><td>❌</td><td>n/a</td><td>❌</td>
+            </tr>
+            <tr>
+              <th scope="row">Multi-runtime (CC + Codex + Gemini)</th>
+              <td>✅</td><td>✅ (also Aider)</td><td>partial (CC + Codex)</td><td>n/a</td><td>manual</td>
+            </tr>
+            <tr>
+              <th scope="row">Persistent across reboots</th>
+              <td>✅</td><td>❌</td><td>❌</td><td>n/a</td><td>manual</td>
+            </tr>
+            <tr>
+              <th scope="row">HITL approvals (Telegram)</th>
+              <td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td>
+            </tr>
+            <tr>
+              <th scope="row">Inter-agent mailbox bundled</th>
+              <td>✅</td>
+              <td>❌ (shared workspaces)</td>
+              <td>partial (MCP tools, no mail layer)</td>
+              <td>✅ (it <em>is</em> the mailbox)</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <th scope="row">
+                System-native supervision
+                <sup><a href="#fn1">1</a></sup>
+              </th>
+              <td>planned</td><td>❌</td><td>❌</td><td>n/a</td><td>❌</td>
+            </tr>
+            <tr>
+              <th scope="row">Rust</th>
+              <td>✅</td><td>❌ (Go)</td><td>❌ (TS)</td><td>mixed</td><td>n/a</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <footer class="compare-footnote">
+        <p id="fn1">
+          <strong>1.</strong> teamctl's persistent supervisor is tmux today;
+          <code>systemd</code> and <code>launchd</code> back-ends are designed
+          and on the roadmap. We mark this row "planned" rather than ✅ to
+          keep the table honest.
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>
+
+<style>
+  .compare {
+    max-width: 56rem;
+    margin: 0 auto;
+    padding: 6rem 2rem 8rem;
+    color: var(--fg);
+  }
+  .compare-eyebrow a {
+    color: var(--fg-mute);
+    text-decoration: none;
+    font-size: 0.9rem;
+    border-bottom: 1px solid var(--hairline);
+    padding-bottom: 0.15rem;
+  }
+  .compare-eyebrow a:hover { color: var(--fg); }
+  .compare h1 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: clamp(2rem, 4vw, 3rem);
+    margin: 2rem 0 1rem;
+    letter-spacing: -0.012em;
+  }
+  .compare-lede { color: var(--fg-mute); margin: 0 0 3rem; }
+
+  .compare-table-wrap { overflow-x: auto; }
+  .compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+  }
+  .compare-table th, .compare-table td {
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--hairline);
+    text-align: left;
+    vertical-align: top;
+  }
+  .compare-table thead th {
+    color: var(--fg-mute);
+    font-weight: 500;
+    font-family: var(--sans);
+    border-bottom: 1px solid rgba(233, 231, 223, 0.18);
+  }
+  .compare-table tbody th { font-weight: 400; color: var(--fg); }
+  .compare-table tbody td { color: var(--fg-mute); }
+  .compare-table code {
+    background: var(--bg-soft);
+    padding: 0.05rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.85em;
+  }
+
+  .compare-footnote {
+    margin-top: 4rem;
+    color: var(--fg-mute);
+    font-size: 0.86rem;
+    line-height: 1.7;
+  }
+</style>

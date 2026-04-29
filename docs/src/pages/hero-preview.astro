@@ -1,0 +1,19 @@
+---
+// Standalone preview of §1 HeroAmbient — useful for art-directing the
+// hero without scrolling past the full landing or pulling in §2/§3.
+// Route: /__hero-preview/. Not linked from anywhere; remove or gate
+// before production if you don't want it crawled.
+import HeroAmbient from '../components/landing/HeroAmbient';
+import '../styles/landing.css';
+---
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>hero — preview</title>
+    <meta name="robots" content="noindex" />
+  </head>
+  <body class="landing">
+    <HeroAmbient client:visible />
+  </body>
+</html>
