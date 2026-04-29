@@ -10,6 +10,7 @@
 //   §5 Outbound    → dev3
 //   §6 Footer      → dev3
 
+import HeroAmbient from '../components/landing/HeroAmbient.tsx';
 import OrgChart from '../components/landing/OrgChart.astro';
 import TelegramLoop from '../components/landing/TelegramLoop.astro';
 import WhyIBuiltThis from '../components/landing/WhyIBuiltThis.astro';
@@ -28,16 +29,8 @@ import '../styles/landing.css';
     />
   </head>
   <body class="landing">
-    <!-- §1 Hero — dev1 owns. Slot reserved as <HeroAmbient client:visible>.
-         Wired in once dev1's branch lands. Until then, a quiet placeholder
-         keeps the page renderable without R3F glue. -->
-    <section class="hero hero-placeholder">
-      <div class="hero-copy">
-        <h1>Persistent AI coworkers,<br />supervised like services.</h1>
-        <p class="cta"><a href="/getting-started/">Read the docs →</a></p>
-      </div>
-      <p class="hero-slot-note" aria-hidden="true">[ HeroAmbient slot — dev1 ]</p>
-    </section>
+    <HeroAmbient client:visible />
+
 
     <OrgChart />
     <TelegramLoop />
@@ -47,33 +40,3 @@ import '../styles/landing.css';
   </body>
 </html>
 
-<style>
-  .hero-placeholder {
-    min-height: 92vh;
-    display: grid;
-    place-items: center;
-    text-align: center;
-    padding: 0 2rem;
-    position: relative;
-  }
-  .hero-placeholder h1 {
-    font-size: clamp(2.4rem, 5vw, 4.4rem);
-    line-height: 1.08;
-    margin: 0 0 2rem;
-  }
-  .hero-placeholder .cta a {
-    color: var(--fg-mute);
-    text-decoration: none;
-    border-bottom: 1px solid var(--hairline);
-    padding-bottom: 0.2rem;
-  }
-  .hero-placeholder .cta a:hover { color: var(--fg); }
-  .hero-slot-note {
-    position: absolute;
-    bottom: 1.5rem;
-    color: var(--fg-mute);
-    font-family: ui-monospace, monospace;
-    font-size: 0.75rem;
-    opacity: 0.5;
-  }
-</style>
