@@ -39,8 +39,8 @@ cp -r /path/to/teamctl/examples/oss-maintainer ~/oss
 cd ~/oss
 
 # 4. Fill in token + chat id.
-cp .env.example .env
-$EDITOR .env
+cp .team/.env.example .team/.env
+$EDITOR .team/.env
 
 # 5. Workspace dir (where the agents read your project from).
 mkdir -p workspace
@@ -51,7 +51,7 @@ mkdir -p workspace
 ## Run
 
 ```bash
-set -a; . ./.env; set +a
+set -a; . ./.team/.env; set +a
 
 teamctl validate
 teamctl up
@@ -91,7 +91,7 @@ release-critical actions**. Three patterns layer:
    becomes a Telegram approval prompt; the maintainer's tap is the
    audit trail.
 
-The release plan template lives in `roles/release_manager.md` — it's
+The release plan template lives in `.team/roles/release_manager.md` — it's
 the thing that makes plan-mode useful instead of frustrating, because
 it gives the agent a concrete artifact to produce.
 
