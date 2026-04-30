@@ -595,16 +595,13 @@ fn handle_event<D: ApprovalDecider>(app: &mut App, ev: Event, decider: &D) {
                 _ => {}
             },
             Stage::ApprovalsModal => match k.code {
-                // Capital Y / N to commit a decision — single-key
-                // chord-style, no modifier needed but the
-                // uppercase letter avoids collision with lowercase
-                // `n` which we use for "next approval" elsewhere.
-                KeyCode::Char('Y') | KeyCode::Char('y') => {
-                    app.apply_decision(decider, Decision::Approve, "")
-                }
-                KeyCode::Char('N') | KeyCode::Char('n') => {
-                    app.apply_decision(decider, Decision::Deny, "")
-                }
+                // Uppercase-only Y / N to commit a decision —
+                // requires deliberate Shift, which raises the bar
+                // on a destructive deny (and keeps approve on the
+                // same chord shape for consistency). Lowercase y/n
+                // are intentionally not accepted.
+                KeyCode::Char('Y') => app.apply_decision(decider, Decision::Approve, ""),
+                KeyCode::Char('N') => app.apply_decision(decider, Decision::Deny, ""),
                 KeyCode::Char('j') | KeyCode::Down => app.cycle_approval_next(),
                 KeyCode::Char('k') | KeyCode::Up => app.cycle_approval_prev(),
                 KeyCode::Esc | KeyCode::Char('q') => app.close_approvals_modal(),
