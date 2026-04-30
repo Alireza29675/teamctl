@@ -4,6 +4,79 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-30
+
+### Added
+
+- Per-manager bot scoping for Telegram approval routing. Approval
+  cards now reach exactly one chat — the bot scoped to the manager
+  that the requesting agent reports to — instead of fanning out to
+  every connected bot. Multi-hop manager chains walk up to two
+  levels today; deeper chains are tracked as a follow-up.
+- Approval delivery state on the broker. The `approvals` table
+  grows a nullable `delivered_at REAL` column and a new terminal
+  status `undeliverable`. When `expires_at` elapses, rows with
+  `delivered_at IS NULL` end as `undeliverable`; rows that were
+  surfaced to a human end as `expired` (existing behaviour).
+  Callers can now distinguish "the human never saw the prompt"
+  from "the human declined to respond."
+- `wait: bool` argument on the `request_approval` MCP tool
+  (default `true`). `wait: false` returns the freshly inserted
+  row's status immediately, skipping the long-poll — useful for
+  fire-and-forget callers and diagnostic tooling.
+- Telegram approval cards now resolve in place. Tapping Approve
+  or Reject edits the message to show the outcome and removes the
+  buttons. Stale taps on a duplicate copy answer with
+  `#<id> already resolved` and leave the row untouched.
+- Plain-text rendering for outbound Telegram messages. Markdown
+  syntax (`**bold**`, `_italic_`, `- bullets`) is stripped before
+  send so chat surfaces don't render literal punctuation. Buttons
+  (approval cards) are unaffected.
+- Context-override warning on read-side commands. `teamctl ps`,
+  `mail`, and `inspect` now print a stderr note when active
+  context or `TEAMCTL_ROOT` overrides walk-up resolution, with the
+  source of the override called out (CLI flag vs environment).
+- `oss-maintainer` example. Pipeline workflow + cross-channel ACLs
+  + plan-mode HITL on release-critical actions. Demonstrates a
+  triage / bug-fix / docs / release-manager team for an open-source
+  maintainer.
+- `indie-game-studio` example. Plan-mode dissenter on a creative
+  team + private critique channel. Demonstrates a director /
+  designer / writer / playtest-critic team where the critic vetoes
+  privately rather than publicly.
+- Cookbook section under `docs/cookbook/`. Captures patterns from
+  examples that are too narrow to ship as their own example folder
+  (multi-agent ACL composition, multi-runtime cohabitation,
+  cross-project bridges).
+- Lychee link-checker on the docs CI. Internal link breakage fails
+  PRs that touch `docs/`; external links warn-only to keep the
+  check stable against third-party HTTP flakiness.
+
+### Changed
+
+- Author voice across source code, doc-comments, operator-references,
+  example fixtures, and landing copy is now project-voice — the
+  project speaks as itself rather than through a personal first-person
+  maker. Author attribution metadata (LICENSE copyright, Cargo
+  authors, ADR `Author:` lines) is preserved as factual.
+- Cookbook prose for the `oss-maintainer` example softened to match
+  what the example actually demonstrates (single-project) rather
+  than the cross-project framing that lived in earlier drafts.
+- Docs deploy workflow's deploy step now runs on both `push` to
+  `main` and `workflow_dispatch`, so manual redeploys via
+  `gh workflow run docs.yml` actually deploy.
+
+### Removed
+
+- Deprecated example folders: `multi-agent`, `multi-runtime`,
+  `two-projects`. The patterns they demonstrated (channels + ACL
+  composition, multi-runtime cohabitation, project bridges) survive
+  in `startup-team`, `newsletter-office`, `oss-maintainer`,
+  `indie-game-studio`, and the new cookbook recipes.
+- `WhyIBuiltThis.astro` landing-page section. Was a placeholder
+  waiting on a personal-voice interview that the project-voice shift
+  retired.
+
 ## [0.2.9] — 2026-04-26
 
 ### Added
