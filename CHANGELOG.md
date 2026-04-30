@@ -17,6 +17,24 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   overwrites an existing `.team/` at the target path; the
   pre-existing in-place flow (`teamctl init` with no name) still
   works.
+- `teamctl reload --dry-run` prints the reload plan without
+  rendering, registering, or touching any agent. Output mirrors a
+  real reload's per-line format (`removed`, `changed`, `added`)
+  with a `(dry run)` annotation; the plan is computed via the
+  same `ReloadPlan` object the apply path uses, so preview and
+  apply cannot drift.
+- Graceful drain at the supervisor layer. `Supervisor::drain` —
+  used by reload for the prior-side teardown of `change` and
+  `remove` entities — sends SIGINT (Ctrl-C into the tmux pane),
+  polls for `Stopped` up to `compose.global.supervisor.drain_timeout_secs`,
+  and falls through to a hard `kill-session` if the agent
+  doesn't exit in time. Entities killed by the fallthrough get a
+  `[drain timed out — killed]` annotation in the per-line log so
+  operators can tune the timeout.
+- `compose.global.supervisor.drain_timeout_secs` field. Default
+  10s; set to 0 to disable graceful drain (matches pre-PR-B hard
+  kill). Validation rejects values above 600 to catch typo'd
+  large numbers (e.g. 86400) that would stall reload.
 - First-class `effort` field on the per-agent `team-compose.yaml`
   schema (T-048). Accepts the five values claude-code's
   `--effort` understands — `low` / `medium` / `high` / `xhigh`

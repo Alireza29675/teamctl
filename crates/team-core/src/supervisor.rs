@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -42,10 +44,30 @@ pub enum AgentState {
     Unknown,
 }
 
+/// Outcome of a graceful drain. `Graceful` means the agent observed
+/// `Stopped` before the timeout elapsed; `TimedOutKilled` means the
+/// poll fell through and `down()` was used as a hard stop. Surfaced
+/// to the caller so reload can annotate which agents were forcibly
+/// killed — operator signal that a drain budget needs tuning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainOutcome {
+    Graceful,
+    TimedOutKilled,
+}
+
 pub trait Supervisor {
     fn up(&self, spec: &AgentSpec) -> Result<()>;
     fn down(&self, spec: &AgentSpec) -> Result<()>;
     fn state(&self, spec: &AgentSpec) -> Result<AgentState>;
+
+    /// Stop an agent gracefully. The default implementation falls
+    /// back to `down()` for back-ends that don't implement signal
+    /// delivery (or where graceful shutdown isn't meaningful — e.g.
+    /// a `MockSupervisor` in tests).
+    fn drain(&self, spec: &AgentSpec, _timeout: Duration) -> Result<DrainOutcome> {
+        self.down(spec)?;
+        Ok(DrainOutcome::TimedOutKilled)
+    }
 }
 
 /// Portable supervisor: one detached `tmux` session per agent.
@@ -97,6 +119,88 @@ impl Supervisor for TmuxSupervisor {
             Ok(_) => AgentState::Stopped,
             Err(_) => AgentState::Unknown,
         })
+    }
+
+    /// Send Ctrl-C to the pane (kernel delivers SIGINT to the
+    /// foreground process), then poll for `Stopped` up to `timeout`.
+    /// Falls through to `kill-session` if the agent doesn't exit in
+    /// time. Used by `reload` so in-flight tool calls and partial
+    /// assistant responses get a chance to flush instead of being
+    /// SIGKILL'd by the prior `down()`.
+    fn drain(&self, spec: &AgentSpec, timeout: Duration) -> Result<DrainOutcome> {
+        let _ = Command::new("tmux")
+            .args(["send-keys", "-t", &spec.tmux_session, "C-c"])
+            .status();
+        let outcome = poll_for_stopped(timeout, POLL_INTERVAL, || {
+            self.state(spec).unwrap_or(AgentState::Unknown)
+        });
+        if outcome == DrainOutcome::TimedOutKilled {
+            self.down(spec)?;
+        }
+        Ok(outcome)
+    }
+}
+
+const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Poll `observe_state` every `interval` for up to `timeout`, returning
+/// `Graceful` if `Stopped` is observed in time and `TimedOutKilled`
+/// otherwise. Pulled out as a free function so it can be tested with
+/// fake observers — neither tmux nor real time is involved.
+fn poll_for_stopped<F: FnMut() -> AgentState>(
+    timeout: Duration,
+    interval: Duration,
+    mut observe_state: F,
+) -> DrainOutcome {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if observe_state() == AgentState::Stopped {
+            return DrainOutcome::Graceful;
+        }
+        if Instant::now() >= deadline {
+            return DrainOutcome::TimedOutKilled;
+        }
+        thread::sleep(interval);
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn poll_returns_graceful_when_stopped_observed_in_time() {
+        let calls = RefCell::new(0u32);
+        let outcome = poll_for_stopped(Duration::from_millis(50), Duration::from_millis(1), || {
+            let mut n = calls.borrow_mut();
+            *n += 1;
+            if *n >= 2 {
+                AgentState::Stopped
+            } else {
+                AgentState::Running
+            }
+        });
+        assert_eq!(outcome, DrainOutcome::Graceful);
+    }
+
+    #[test]
+    fn poll_falls_through_to_kill_when_agent_never_stops() {
+        let outcome = poll_for_stopped(Duration::from_millis(8), Duration::from_millis(2), || {
+            AgentState::Running
+        });
+        assert_eq!(outcome, DrainOutcome::TimedOutKilled);
+    }
+
+    #[test]
+    fn poll_zero_timeout_only_checks_once_then_kills() {
+        let mut calls: u32 = 0;
+        let outcome = poll_for_stopped(Duration::from_millis(0), Duration::from_millis(1), || {
+            calls += 1;
+            AgentState::Running
+        });
+        assert_eq!(outcome, DrainOutcome::TimedOutKilled);
+        assert_eq!(calls, 1, "single state observation before timeout");
     }
 }
 

@@ -188,6 +188,14 @@ pub struct SupervisorCfg {
     pub r#type: String,
     #[serde(default = "default_tmux_prefix")]
     pub tmux_prefix: String,
+    /// Seconds reload waits for an agent to exit gracefully after
+    /// SIGINT before falling through to a hard `kill-session`. Default
+    /// 10 — enough for an in-flight Claude Code tool call to finish
+    /// in the common case, short enough that operators don't sit
+    /// staring at a frozen reload. Set to 0 to disable graceful
+    /// drain (matches pre-PR-B hard-kill behaviour).
+    #[serde(default = "default_drain_timeout_secs")]
+    pub drain_timeout_secs: u64,
 }
 
 impl Default for SupervisorCfg {
@@ -195,12 +203,17 @@ impl Default for SupervisorCfg {
         Self {
             r#type: default_supervisor_type(),
             tmux_prefix: default_tmux_prefix(),
+            drain_timeout_secs: default_drain_timeout_secs(),
         }
     }
 }
 
 fn default_supervisor_type() -> String {
     "tmux".into()
+}
+
+fn default_drain_timeout_secs() -> u64 {
+    10
 }
 
 fn default_tmux_prefix() -> String {

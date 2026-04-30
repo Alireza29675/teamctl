@@ -136,6 +136,61 @@ fn send_injects_into_mailbox() {
     assert_eq!(text, "hi there");
 }
 
+// ── T-035 PR B: reload --dry-run ────────────────────────────────────────
+
+#[test]
+fn reload_dry_run_with_no_prior_lists_added_and_does_not_apply() {
+    // No `state/applied.json` on disk → every agent in the compose
+    // shows up as `added (dry run)`. Crucially, the dry-run path
+    // must not write `state/applied.json`, must not render env/mcp
+    // files, and must not invoke tmux. We assert all four.
+    let tmp = tempdir().unwrap();
+    seed_compose(tmp.path());
+
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("added") && stdout.contains("(dry run)"),
+        "expected added/(dry run) lines, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("hello:manager"),
+        "expected hello:manager in plan, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("hello:dev"),
+        "expected hello:dev in plan, got: {stdout}"
+    );
+
+    // Side-effect-free: applied.json must not exist after dry-run.
+    let applied = tmp.path().join("state/applied.json");
+    assert!(
+        !applied.exists(),
+        "dry-run wrote applied.json at {}",
+        applied.display()
+    );
+    // Render outputs also must not have been written.
+    let envs = tmp.path().join("state/envs");
+    assert!(
+        !envs.exists(),
+        "dry-run rendered env files at {}",
+        envs.display()
+    );
+}
+
 // ── T-010: source-aware override warning ─────────────────────────────────
 
 /// Run `teamctl validate` against `cwd` with a clean env, returning stderr.

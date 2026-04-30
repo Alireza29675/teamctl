@@ -60,7 +60,13 @@ enum Command {
     /// Stop every agent's tmux session. State is preserved.
     Down,
     /// Apply compose changes. Restarts changed agents only.
-    Reload,
+    Reload {
+        /// Print the reload plan without rendering, registering, or
+        /// touching any agent. Same per-line format as a real reload,
+        /// annotated with `(dry run)`.
+        #[arg(long)]
+        dry_run: bool,
+    },
 
     // ── Inspection ───────────────────────────────────────────────────
     /// Wide table: agents, supervisor state, inbox depth.
@@ -244,7 +250,7 @@ fn main() -> Result<()> {
         Command::Validate => cmd::validate::run(&root),
         Command::Up => cmd::up::run(&root),
         Command::Down => cmd::down::run(&root),
-        Command::Reload => cmd::reload::run(&root),
+        Command::Reload { dry_run } => cmd::reload::run(&root, dry_run),
         Command::Ps => cmd::status::run(&root),
         Command::Logs { target } => cmd::logs::run(&root, &target),
         Command::Tail { target, follow } => cmd::tail::run(&root, &target, follow),
