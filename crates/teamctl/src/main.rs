@@ -31,7 +31,7 @@ enum Command {
     // ── Setup ────────────────────────────────────────────────────────
     /// Scaffold a fresh `.team/` directory.
     ///
-    /// With `name`: creates `<name>/<name>/.team/...` so a fresh
+    /// With `name`: creates `<cwd>/<name>/.team/...` so a fresh
     /// `cd <name> && teamctl up` Just Works. Without `name`: scaffolds
     /// `.team/` in the current directory.
     Init {
