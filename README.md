@@ -11,10 +11,34 @@ Declare a team of long-lived Claude Code, Codex CLI, or Gemini CLI sessions in Y
 ```bash
 curl -fsSL https://teamctl.run/install | sh
 teamctl init hello-team
+cd hello-team
 teamctl up
 ```
 
 > Prefer to build from source? `cargo install teamctl team-mcp team-bot` works too. A Homebrew tap is on the way — see the [ROADMAP](./ROADMAP.md).
+
+## Getting started
+
+teamctl scaffolds a `.team/` folder, brings the agents up in `tmux`, and supervises them. Four commands take a fresh checkout to a running team:
+
+```bash
+teamctl init my-team        # 1. scaffold
+cd my-team                  # 2. enter it
+teamctl up                  # 3. bring the team up
+teamctl reload              # 4. apply edits to .team/team-compose.yaml
+```
+
+**1. `teamctl init my-team`** writes a `.team/` directory next to your call-site with a starter `team-compose.yaml`, role prompts for a manager and a dev, and a `.env.example`. The contents are plain YAML and Markdown — nothing hidden, nothing generated at runtime that you can't read.
+
+**2. `cd my-team`** puts you inside the team's tree. From here, every `teamctl` subcommand walks up to find `.team/team-compose.yaml`; no `-C` flag, no environment variable.
+
+**3. `teamctl up`** brings the team up. Each agent gets its own `tmux` pane running its CLI (Claude Code by default), wired to a shared SQLite mailbox over MCP. Runtime state — the database, rendered env files, supervisor records — lives in `.team/state/`, gitignored.
+
+**4. `teamctl reload`** picks up edits to `.team/team-compose.yaml` and restarts only the agents whose config actually changed. No full teardown, no lost mailbox state.
+
+**Talking to the team.** Copy `.team/.env.example` to `.team/.env`, fill in `TEAMCTL_TELEGRAM_TOKEN` and `TEAMCTL_TELEGRAM_CHATS`, and the manager bot will introduce itself when you DM it on Telegram. Brand-sensitive actions (`publish`, `deploy`, `release`, …) pause for inline Approve / Deny.
+
+The full onboarding tutorial lives at [teamctl.run/getting-started](https://teamctl.run/getting-started/); curated example teams (`startup-team`, `oss-maintainer`, `indie-game-studio`, `newsletter-office`, `market-analysts`) ship under [`examples/`](https://github.com/Alireza29675/teamctl/tree/main/examples).
 
 ## What's in a team
 
