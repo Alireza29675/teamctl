@@ -1,14 +1,14 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-assertion_line: 56
+assertion_line: 126
 expression: buffer_to_string(&buf)
 ---
-┌ROSTER────────────────────┐┌DETAIL────────────────────────────────────────────────────┐┌MAILBOX───────────────────────┐
-│        (no agents)       ││    (select an agent on the left to follow its session)   ││         (no mailbox)         │
-│                          ││                                                          ││                              │
-│                          ││                                                          ││                              │
-│                          ││                                                          ││                              │
-│                          ││                                                          ││                              │
+┌ROSTER────────────────────┐┌DETAIL · writing:manager──────────────────────────────────┐┌MAILBOX───────────────────────┐
+│ *  manager               ││      (no scrollback yet — agent may be starting up)      ││         (no mailbox)         │
+│ @  worker-1              ││                                                          ││                              │
+│ !  worker-2              ││                                                          ││                              │
+│ x  critic                ││                                                          ││                              │
+│ ?  scout                 ││                                                          ││                              │
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
@@ -32,4 +32,4 @@ expression: buffer_to_string(&buf)
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
 └──────────────────────────┘└──────────────────────────────────────────────────────────┘└──────────────────────────────┘
-/ filter · w wall · @ send · esc back · q quit                                                       ? help · t tutorial
+/ search · ⏎ open · @ send · q quit                                                                  ? help · t tutorial

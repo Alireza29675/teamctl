@@ -8,7 +8,9 @@
 //! glyph layout is what we're pinning, not colour fidelity.
 
 use ratatui::buffer::Buffer;
+use team_core::supervisor::AgentState;
 use teamctl_ui::app::{render_to_buffer, App, Stage};
+use teamctl_ui::data::{AgentInfo, TeamSnapshot};
 use teamctl_ui::triptych::Pane;
 
 fn buffer_to_string(buf: &Buffer) -> String {
@@ -79,6 +81,77 @@ fn statusline_renders_tutorial_hint_at_right() {
         last_line.contains("t tutorial"),
         "statusline missing tutorial hint at 80 cols: {last_line:?}"
     );
+}
+
+fn synth_agent(id: &str, state: AgentState, unread: u32, pending: u32) -> AgentInfo {
+    let (project, agent) = id.split_once(':').unwrap_or(("p", id));
+    AgentInfo {
+        id: id.into(),
+        agent: agent.into(),
+        project: project.into(),
+        tmux_session: format!("t-{}-{}", project, agent),
+        state,
+        unread_mail: unread,
+        pending_approvals: pending,
+        is_manager: false,
+    }
+}
+
+fn fixture_team(team_name: &str, agents: Vec<AgentInfo>) -> TeamSnapshot {
+    TeamSnapshot {
+        root: std::path::PathBuf::from("/fixture"),
+        team_name: team_name.into(),
+        agents,
+    }
+}
+
+#[test]
+fn roster_renders_agents_with_glyphs_at_120x30() {
+    // PR-UI-2: roster pulls from `app.team.agents` with state-glyph
+    // mapping. Pin one of each glyph: running, working/unread,
+    // pending-approval, stopped, unknown.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![
+            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            synth_agent("writing:worker-1", AgentState::Running, 3, 0),
+            synth_agent("writing:worker-2", AgentState::Running, 0, 1),
+            synth_agent("writing:critic", AgentState::Stopped, 0, 0),
+            synth_agent("writing:scout", AgentState::Unknown, 0, 0),
+        ],
+    ));
+    let buf = render_to_buffer(&app, 120, 30);
+    insta::assert_snapshot!("roster_with_agents_120x30", buffer_to_string(&buf));
+}
+
+#[test]
+fn detail_pane_streams_buffer_for_selected_agent() {
+    // With an agent selected and a non-empty detail_buffer the
+    // detail pane should show the buffer's tail; the title carries
+    // the focused agent id so the operator knows which session.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![
+            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            synth_agent("writing:worker-1", AgentState::Running, 0, 0),
+        ],
+    ));
+    app.set_detail_buffer(
+        [
+            "[12:00] user: draft a release plan",
+            "[12:01] assistant: Sure — I'll outline the cascade.",
+            "[12:01] tool: teamctl validate",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+    );
+    let buf = render_to_buffer(&app, 120, 30);
+    insta::assert_snapshot!("detail_streams_120x30", buffer_to_string(&buf));
 }
 
 #[test]
