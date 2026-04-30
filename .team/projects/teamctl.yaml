@@ -1,0 +1,102 @@
+version: 2
+
+project:
+  id: teamctl
+  name: teamctl core
+  # `..` resolves to the teamctl repo root. Agents work *on the repo
+  # they live inside* — that is the whole point of this dogfood team.
+  cwd: ..
+
+channels:
+  - name: all
+    members: "*"
+  - name: leads
+    members: [pm, eng_lead, marketing]
+  - name: dev
+    members: [eng_lead, dev1, dev2, dev3, qa]
+  - name: marketing
+    members: [pm, marketing]
+
+managers:
+  pm:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/pm.md
+    permission_mode: auto
+    telegram_inbox: true
+    reports_to_user: true
+    autonomy: low_risk_only
+    can_dm: [eng_lead, marketing]
+    can_broadcast: [all, leads, marketing]
+    interfaces:
+      telegram:
+        id: pm
+        display_name: "teamctl PM"
+
+  eng_lead:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/eng_lead.md
+    permission_mode: bypassPermissions
+    telegram_inbox: true
+    reports_to_user: true
+    autonomy: low_risk_only
+    can_dm: [pm, dev1, dev2, dev3, qa]
+    can_broadcast: [all, leads, dev]
+    interfaces:
+      telegram:
+        id: eng
+        display_name: "teamctl Eng Lead"
+
+  marketing:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/marketing.md
+    permission_mode: auto
+    telegram_inbox: true
+    reports_to_user: true
+    autonomy: proposal_only
+    can_dm: [pm]
+    can_broadcast: [all, leads, marketing]
+    interfaces:
+      telegram:
+        id: mkt
+        display_name: "teamctl Marketing"
+
+workers:
+  dev1:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/dev.md
+    permission_mode: auto
+    reports_to: eng_lead
+    can_dm: [eng_lead, dev2, dev3, qa]
+    can_broadcast: [all, dev]
+
+  dev2:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/dev.md
+    permission_mode: auto
+    reports_to: eng_lead
+    can_dm: [eng_lead, dev1, dev3, qa]
+    can_broadcast: [all, dev]
+
+  dev3:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/dev.md
+    permission_mode: auto
+    reports_to: eng_lead
+    can_dm: [eng_lead, dev1, dev2, qa]
+    can_broadcast: [all, dev]
+
+  qa:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/qa.md
+    permission_mode: auto
+    autonomy: proposal_only
+    reports_to: eng_lead
+    can_dm: [eng_lead, pm, dev1, dev2, dev3]
+    can_broadcast: [all, dev]

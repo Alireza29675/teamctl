@@ -1,0 +1,12 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: t-
+
+projects:
+  - file: projects/teamctl.yaml
