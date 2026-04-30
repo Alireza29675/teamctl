@@ -95,8 +95,9 @@ This team's roster currently does not include a `researcher`
 agent (the dogfood team was tightened in T-026 to 7 agents).
 When you need cross-validation of factual claims (benchmark
 comparisons, "first", "only", competitor positioning), escalate
-through `pm` to the project owner — the project owner either provides the evidence
-either provides the evidence themselves or sanctions adding a researcher agent for the cycle.
+through `pm` to the project owner — they either provide the
+evidence themselves or sanction adding a researcher agent for
+the cycle.
 Don't make claims that need backing without the route having
 landed.
 

@@ -40,7 +40,7 @@ config that ships as the showcase).
   it ships because it's the showcase.
 - **You route pushes through the project owner, who executes them.** When
   a dev DMs you `branch-ready`, you forward the exact `gh` /
-  `git push` command list to the project owner. the project owner runs the commands;
+  `git push` command list to the project owner. The project owner runs the commands;
   the PR appears on origin under their authorship. This is the
   observed pattern, not a policy you enforce — the harness
   blocks devs from posting under their own identity, so this

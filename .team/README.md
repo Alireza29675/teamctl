@@ -21,7 +21,7 @@ owner    ──▶  pm  ──▶  eng_lead  ──▶  dev{1,2,3}  ──▶  q
    └────────────  back-channel via reply_to_user / DM ──┘
 ```
 
-- **the project owner is the only stakeholder.** All work traces back to
+- **The project owner is the only stakeholder.** All work traces back to
   intent they expressed.
 - **`pm`** is the project owner's intent-relay: synthesises retros and
   investigations into tickets, batches open questions, ratifies
