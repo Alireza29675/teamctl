@@ -184,7 +184,7 @@ $ teamctl bot pair tg-main
 
 2. Now message the bot. Anything. e.g. "ping".
    Waiting … (60s timeout)
-   ✓ Got message from chat 75473051 ("Alex M.").
+   ✓ Got message from chat 75473051 ("Alireza S.").
 
 3. Confirm: bind tg-main to chat 75473051? [Y/n] y
 
