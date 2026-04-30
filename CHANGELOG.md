@@ -18,6 +18,13 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 - The legacy flat-layout fallback (a `team-compose.yaml` at cwd or
   found by walk-up without a `.team/` wrapper) is gone from CLI
   discovery. The convention is `.team/`, no exceptions.
+- **Migration:** projects that kept `team-compose.yaml` at the
+  project root should move it (along with `projects/`, `roles/`,
+  `runtimes/`, `.env.example`, `.gitignore`) into a new `.team/`
+  directory at the same level — `teamctl` then walks up to the
+  first `.team/` from any subdirectory. Operators who relied on
+  the registered-context flow should switch to `cd <project>`
+  before running `teamctl`, or pass `-C <path>` explicitly.
 
 ### Deprecated
 
