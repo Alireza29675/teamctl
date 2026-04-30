@@ -35,8 +35,8 @@ cp -r /path/to/teamctl/examples/indie-game-studio ~/studio
 cd ~/studio
 
 # 4. Fill in token + chat id.
-cp .env.example .env
-$EDITOR .env
+cp .team/.env.example .team/.env
+$EDITOR .team/.env
 
 # 5. Workspace dir (where design docs and prototype notes will live).
 mkdir -p workspace
@@ -45,7 +45,7 @@ mkdir -p workspace
 ## Run
 
 ```bash
-set -a; . ./.env; set +a
+set -a; . ./.team/.env; set +a
 
 teamctl validate
 teamctl up
