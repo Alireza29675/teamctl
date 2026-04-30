@@ -208,6 +208,63 @@ fn mailbox_pane_cycles_to_channel_tab_when_focused() {
     insta::assert_snapshot!("mailbox_channel_focused_120x30", buffer_to_string(&buf));
 }
 
+fn approval(id: i64, action: &str, summary: &str) -> teamctl_ui::approvals::Approval {
+    teamctl_ui::approvals::Approval {
+        id,
+        project_id: "writing".into(),
+        agent_id: "writing:manager".into(),
+        action: action.into(),
+        summary: summary.into(),
+        payload_json: String::new(),
+    }
+}
+
+#[test]
+fn approvals_stripe_renders_when_pending() {
+    // PR-UI-4: the conditional stripe at the top of Triptych
+    // appears only when `pending_approvals` is non-empty.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    app.replace_approvals(vec![
+        approval(7, "publish", "post the morning brief"),
+        approval(8, "deploy", "ship docs"),
+    ]);
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    let first_line = s.lines().next().expect("non-empty buffer");
+    assert!(
+        first_line.contains("approvals: 2 pending") && first_line.contains("`a` to review"),
+        "stripe missing or malformed: {first_line:?}"
+    );
+    insta::assert_snapshot!("approvals_stripe_120x30", s);
+}
+
+#[test]
+fn approvals_modal_renders_action_summary_and_hint() {
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    app.replace_approvals(vec![approval(
+        7,
+        "publish",
+        "Post the morning brief to r/yourcity",
+    )]);
+    app.enter_approvals_modal();
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(s.contains("approvals · 1/1"), "modal title missing");
+    assert!(s.contains("publish"), "action missing");
+    assert!(s.contains("[Y] approve"), "action hint missing");
+    insta::assert_snapshot!("approvals_modal_120x30", s);
+}
+
 #[test]
 fn render_at_minimum_terminal_does_not_panic() {
     // Small terminal — ratatui swallows over-large constraints, so as

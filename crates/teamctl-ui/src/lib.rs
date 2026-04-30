@@ -4,6 +4,7 @@
 //! terminal. The thin `main.rs` binary owns terminal lifecycle only.
 
 pub mod app;
+pub mod approvals;
 pub mod data;
 pub mod mailbox;
 pub mod pane;
@@ -12,3 +13,4 @@ pub mod statusline;
 pub mod theme;
 pub mod triptych;
 pub mod tutorial;
+pub mod watch;

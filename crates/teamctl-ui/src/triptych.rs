@@ -39,6 +39,18 @@ impl Pane {
             Pane::Mailbox => Pane::Roster,
         }
     }
+
+    /// `Shift+Tab` cycles backward — roster → mailbox → detail →
+    /// roster. Closes the no-easy-exit-from-mailbox UX gap PR-UI-3
+    /// surfaced: operator Tabs into mailbox, then with Shift+Tab
+    /// they back out cleanly without the `q`-confirm round-trip.
+    pub fn prev(self) -> Self {
+        match self {
+            Pane::Roster => Pane::Mailbox,
+            Pane::Detail => Pane::Roster,
+            Pane::Mailbox => Pane::Detail,
+        }
+    }
 }
 
 pub fn draw(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
@@ -51,15 +63,17 @@ pub struct Triptych<'a> {
 
 impl Widget for Triptych<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // The approvals stripe takes one line at the top *only* when
-        // there's a pending approval. PR-UI-2 still leaves the
-        // stripe hidden — wiring lands in PR-UI-4.
-        let stripe_visible = false;
+        // PR-UI-4: the approvals stripe takes one line at the top
+        // when there's at least one pending approval. The
+        // `stripe_visible` const PR-UI-1 scaffolded as `false` is
+        // now `app.has_pending_approvals()`.
+        let stripe_visible = self.app.has_pending_approvals();
         let body = if stripe_visible {
             let v = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(1), Constraint::Min(0)])
                 .split(area);
+            render_approvals_stripe(buf, v[0], self.app);
             v[1]
         } else {
             area
@@ -78,6 +92,22 @@ impl Widget for Triptych<'_> {
         render_detail(buf, columns[1], self.app);
         render_mailbox(buf, columns[2], self.app);
     }
+}
+
+fn render_approvals_stripe(buf: &mut Buffer, area: Rect, app: &App) {
+    let n = app.pending_approvals.len();
+    let plural = if n == 1 { "" } else { "s" };
+    let text = format!("⚠  approvals: {n} pending{plural} — `a` to review");
+    // Bright accent + reversed for the stripe — same affordance
+    // pattern as the focused-pane border, applied to a full row so
+    // the warning reads in any colour mode.
+    let style = Style::default()
+        .fg(app.capabilities.accent())
+        .add_modifier(Modifier::REVERSED | Modifier::BOLD);
+    Paragraph::new(text)
+        .style(style)
+        .alignment(Alignment::Left)
+        .render(area, buf);
 }
 
 fn render_roster(buf: &mut Buffer, area: Rect, app: &App) {

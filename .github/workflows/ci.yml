@@ -29,5 +29,15 @@ jobs:
         if: matrix.rust == 'stable'
       - run: cargo build --all-targets --locked
       - run: cargo test --all --locked
+      # `teamctl-ui` is excluded from `default-members` (it pulls
+      # the ratatui dep tree that the release flow doesn't need)
+      # but its tests must still gate on green. Build + test +
+      # clippy it explicitly so the workspace exclusion never
+      # hides regressions from CI (T-T058a, qa observation
+      # across PR #34/#35/#36).
+      - run: cargo build -p teamctl-ui --all-targets --locked
+      - run: cargo test -p teamctl-ui --locked
       - run: cargo clippy --all-targets --locked -- -D warnings
+        if: matrix.rust == 'stable'
+      - run: cargo clippy -p teamctl-ui --all-targets --locked -- -D warnings
         if: matrix.rust == 'stable'

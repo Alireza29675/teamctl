@@ -16,6 +16,7 @@ crossterm.workspace = true
 dirs = "5"
 team-core.workspace = true
 rusqlite.workspace = true
+notify.workspace = true
 
 [dev-dependencies]
 insta = "1"
