@@ -31,8 +31,8 @@ cp -r /path/to/teamctl/examples/startup-team ~/startup
 cd ~/startup
 
 # 4. Fill in tokens + chat ids.
-cp .env.example .env
-$EDITOR .env
+cp .team/.env.example .team/.env
+$EDITOR .team/.env
 
 # 5. Workspace dir.
 mkdir -p workspace
@@ -41,7 +41,7 @@ mkdir -p workspace
 ## Run
 
 ```bash
-set -a; . ./.env; set +a
+set -a; . ./.team/.env; set +a
 
 teamctl validate
 teamctl up
