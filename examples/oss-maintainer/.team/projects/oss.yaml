@@ -68,6 +68,7 @@ workers:
     model: claude-opus-4-7
     role_prompt: roles/release_manager.md
     permission_mode: plan
+    effort: max
     reports_to: maintainer
     can_dm: [maintainer]
     can_broadcast: [release]
