@@ -198,7 +198,10 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
         } else {
             let mut out = String::from("Pending approvals:\n");
             for (id, agent, action, summary) in rows {
-                out.push_str(&format!("#{id} {agent} · {action}: {summary}\n"));
+                out.push_str(&format!(
+                    "#{id} {agent} · {action}: {}\n",
+                    render_plain(&summary)
+                ));
             }
             bot.send_message(msg.chat.id, out).await?;
         }
@@ -219,27 +222,70 @@ async fn handle_callback(bot: Bot, q: CallbackQuery, state: Arc<State>) -> Respo
     if !state.is_authorized(chat_id) {
         return Ok(());
     }
-    let Some(data) = q.data else { return Ok(()) };
-    if let Some((verb, id_str)) = data.split_once(':') {
-        if let Ok(id) = id_str.parse::<i64>() {
-            let approved = verb == "approve";
-            let c = state.conn.lock().await;
-            let _ = c.execute(
-                "UPDATE approvals SET delivered_at=strftime('%s','now')
-                 WHERE id=?1 AND delivered_at IS NULL",
-                params![id],
-            );
-            let _ = c.execute(
-                "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='user:telegram'
-                 WHERE id=?2 AND status='pending'",
-                params![if approved { "approved" } else { "denied" }, id],
-            );
-            drop(c);
-            bot.answer_callback_query(q.id)
-                .text(format!("{} {id}", if approved { "✅" } else { "❌" }))
-                .await?;
-        }
+    let Some(data) = q.data.clone() else {
+        return Ok(());
+    };
+    let Some((verb, id_str)) = data.split_once(':') else {
+        return Ok(());
+    };
+    let Ok(id) = id_str.parse::<i64>() else {
+        return Ok(());
+    };
+    let approved = verb == "approve";
+
+    // Atomic decision: only update if still pending. Returned row count tells
+    // us whether this tap was the live decision or a stale duplicate.
+    let decided_now = {
+        let c = state.conn.lock().await;
+        let _ = c.execute(
+            "UPDATE approvals SET delivered_at=strftime('%s','now')
+             WHERE id=?1 AND delivered_at IS NULL",
+            params![id],
+        );
+        c.execute(
+            "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='user:telegram'
+             WHERE id=?2 AND status='pending'",
+            params![if approved { "approved" } else { "denied" }, id],
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false)
+    };
+
+    if !decided_now {
+        // Stale tap: row already terminal. Friendly toast, leave the message.
+        bot.answer_callback_query(q.id)
+            .text(format!("#{id} already resolved"))
+            .await?;
+        return Ok(());
     }
+
+    // Live decision: edit the original message in-place to (a) append the
+    // outcome line and (b) drop the inline buttons so the card can't be
+    // re-clicked.
+    if let Some(msg) = q.message.as_ref() {
+        let chat = msg.chat().id;
+        let mid = msg.id();
+        let original = msg.regular_message().and_then(|m| m.text()).unwrap_or("");
+        let outcome = if approved {
+            "✅ Approved by Alireza"
+        } else {
+            "❌ Rejected by Alireza"
+        };
+        let new_text = if original.is_empty() {
+            outcome.to_string()
+        } else {
+            format!("{original}\n\n{outcome}")
+        };
+        let _ = bot.edit_message_text(chat, mid, new_text).await;
+        let _ = bot
+            .edit_message_reply_markup(chat, mid)
+            .reply_markup(InlineKeyboardMarkup::new(Vec::<Vec<_>>::new()))
+            .await;
+    }
+
+    bot.answer_callback_query(q.id)
+        .text(format!("{} #{id}", if approved { "✅" } else { "❌" }))
+        .await?;
     Ok(())
 }
 
@@ -255,6 +301,9 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
     loop {
         tokio::time::sleep(Duration::from_millis(500)).await;
 
+        // Project-scope filter only — manager-level routing happens in Rust
+        // below so that scoped bots only surface approvals filed by agents
+        // that roll up to *their* manager (T-027 single-channel).
         let approvals: Vec<(i64, String, String, String)> = {
             let c = state.conn.lock().await;
             let rows: Vec<(i64, String, String, String)> = match state.manager_project() {
@@ -292,12 +341,35 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
         };
         for (id, agent, action, summary) in approvals {
             last_approval_id = last_approval_id.max(id);
+            // T-027: when scoped to a manager, only surface approvals filed by
+            // agents that report up to *this* bot's manager. With a manager
+            // bot per tier (eng_lead, pm) Alireza sees one prompt per agent.
+            if let Some(scoped) = state.manager.as_deref() {
+                let routed = {
+                    let c = state.conn.lock().await;
+                    manager_of(&c, &agent).unwrap_or_else(|| agent.clone())
+                };
+                if routed != scoped {
+                    continue;
+                }
+            }
             let kb = InlineKeyboardMarkup::new(vec![vec![
                 InlineKeyboardButton::callback("Approve", format!("approve:{id}")),
                 InlineKeyboardButton::callback("Deny", format!("deny:{id}")),
             ]]);
-            let text = format!("🔐 #{id}  {agent}\naction: {action}\n{summary}");
-            let _ = bot.send_message(chat, text).reply_markup(kb).await;
+            let text = format!(
+                "🔐 #{id}  {agent}\naction: {action}\n{}",
+                render_plain(&summary)
+            );
+            let send_ok = bot.send_message(chat, text).reply_markup(kb).await.is_ok();
+            if send_ok {
+                let c = state.conn.lock().await;
+                let _ = c.execute(
+                    "UPDATE approvals SET delivered_at=strftime('%s','now')
+                     WHERE id=?1 AND delivered_at IS NULL",
+                    params![id],
+                );
+            }
         }
 
         // Forward replies addressed to the human. The agent-side `reply_to_user`
@@ -346,7 +418,9 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
         };
         for (id, sender, text) in forwardable {
             last_msg_id = last_msg_id.max(id);
-            let _ = bot.send_message(chat, format!("[{sender}] {text}")).await;
+            let _ = bot
+                .send_message(chat, format!("[{sender}] {}", render_plain(&text)))
+                .await;
             let c = state.conn.lock().await;
             let _ = c.execute(
                 "UPDATE messages SET acked_at = strftime('%s','now') WHERE id = ?1",
@@ -360,4 +434,156 @@ async fn current_max(state: &Arc<State>, table: &str) -> i64 {
     let sql = format!("SELECT COALESCE(MAX(id), 0) FROM {table}");
     let c = state.conn.lock().await;
     c.query_row(&sql, [], |r| r.get(0)).unwrap_or(0)
+}
+
+/// Resolve the `<project>:<manager>` an agent rolls up to, used by T-027 to
+/// route an approval to exactly one Telegram bot. Managers report to themselves
+/// (no walk needed); non-managers resolve via `agents.reports_to`. Returns
+/// `None` if the agent isn't registered.
+fn manager_of(conn: &Connection, agent_id: &str) -> Option<String> {
+    let row: Option<(String, i64, Option<String>)> = conn
+        .query_row(
+            "SELECT project_id, is_manager, reports_to FROM agents WHERE id = ?1",
+            params![agent_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .ok();
+    let (project, is_manager, reports_to) = row?;
+    if is_manager == 1 {
+        return Some(agent_id.to_string());
+    }
+    let role = reports_to?;
+    Some(format!("{project}:{role}"))
+}
+
+/// Strip lightweight markdown so Telegram renders clean prose with emoji
+/// accents instead of literal `**bold**` / `_italic_` / `- bullet` syntax.
+/// We deliberately do not translate to MarkdownV2 — Alireza prefers plain
+/// text, and stripping is failure-mode-symmetric (no escaping landmines).
+fn render_plain(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for (idx, line) in s.lines().enumerate() {
+        if idx > 0 {
+            out.push('\n');
+        }
+        let trimmed = line.trim_start();
+        let leading = &line[..line.len() - trimmed.len()];
+        let body = if let Some(rest) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| trimmed.strip_prefix("+ "))
+        {
+            format!("• {rest}")
+        } else {
+            trimmed.to_string()
+        };
+        out.push_str(leading);
+        out.push_str(&strip_inline_markdown(&body));
+    }
+    out
+}
+
+/// Drop `**`, `__`, single `*` / `_` emphasis, and inline-code backticks.
+/// Keeps URL text intact (we never see `[label](url)` rendered as a link
+/// anyway in plain Telegram messages).
+fn strip_inline_markdown(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if (c == '*' || c == '_') && chars.peek() == Some(&c) {
+            // Paired `**` / `__` emphasis → drop both.
+            chars.next();
+            continue;
+        }
+        if c == '*' || c == '_' || c == '`' {
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn seed(conn: &Connection) {
+        team_core::mailbox::ensure(conn).unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO projects (id, name) VALUES ('p','P')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO agents (id, project_id, role, runtime, is_manager, reports_to)
+             VALUES ('p:eng_lead','p','eng_lead','claude-code',1,NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO agents (id, project_id, role, runtime, is_manager, reports_to)
+             VALUES ('p:dev1','p','dev1','claude-code',0,'eng_lead')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO agents (id, project_id, role, runtime, is_manager, reports_to)
+             VALUES ('p:pm','p','pm','claude-code',1,NULL)",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn manager_of_returns_self_for_a_manager() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        assert_eq!(
+            manager_of(&conn, "p:eng_lead").as_deref(),
+            Some("p:eng_lead")
+        );
+        assert_eq!(manager_of(&conn, "p:pm").as_deref(), Some("p:pm"));
+    }
+
+    #[test]
+    fn manager_of_resolves_reports_to_for_a_worker() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        assert_eq!(manager_of(&conn, "p:dev1").as_deref(), Some("p:eng_lead"));
+    }
+
+    #[test]
+    fn manager_of_returns_none_for_unknown_agent() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        assert!(manager_of(&conn, "p:ghost").is_none());
+    }
+
+    #[test]
+    fn render_plain_strips_paired_emphasis() {
+        assert_eq!(render_plain("**bold** text"), "bold text");
+        assert_eq!(render_plain("__also bold__"), "also bold");
+        assert_eq!(render_plain("plain `code` here"), "plain code here");
+    }
+
+    #[test]
+    fn render_plain_strips_single_emphasis() {
+        assert_eq!(render_plain("*italic* text"), "italic text");
+        assert_eq!(render_plain("_underscored_"), "underscored");
+    }
+
+    #[test]
+    fn render_plain_translates_list_bullets() {
+        let input = "- one\n- two\n  * nested\n+ three";
+        let expected = "• one\n• two\n  • nested\n• three";
+        assert_eq!(render_plain(input), expected);
+    }
+
+    #[test]
+    fn render_plain_preserves_emoji_and_plain_prose() {
+        let input = "🔐 deploy\nrouting prompt to one channel — the **right** one";
+        let expected = "🔐 deploy\nrouting prompt to one channel — the right one";
+        assert_eq!(render_plain(input), expected);
+    }
 }
