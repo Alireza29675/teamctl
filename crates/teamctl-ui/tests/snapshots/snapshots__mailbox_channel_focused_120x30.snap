@@ -1,11 +1,11 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-assertion_line: 48
+assertion_line: 208
 expression: buffer_to_string(&buf)
 ---
-┌ROSTER────────────────────┐┌DETAIL────────────────────────────────────────────────────┐┌MAILBOX───────────────────────┐
-│        (no agents)       ││    (select an agent on the left to follow its session)   ││ Inbox    Channel    Wire     │
-│                          ││                                                          ││       (select an agent)      │
+┌ROSTER────────────────────┐┌DETAIL · writing:manager──────────────────────────────────┐┌MAILBOX───────────────────────┐
+│ *  manager               ││      (no scrollback yet — agent may be starting up)      ││ Inbox    Channel    Wire     │
+│                          ││                                                          ││     (no channel traffic)     │
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
@@ -32,4 +32,4 @@ expression: buffer_to_string(&buf)
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
 └──────────────────────────┘└──────────────────────────────────────────────────────────┘└──────────────────────────────┘
-/ search · ⏎ open · @ send · q quit                                                                  ? help · t tutorial
+Tab tabs · ⏎ open · ! broadcast · q quit                                                             ? help · t tutorial

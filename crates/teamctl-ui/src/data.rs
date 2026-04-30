@@ -164,6 +164,16 @@ fn mailbox_counts(mailbox: &Path) -> Result<MailboxCounts> {
     // Unread mail per recipient agent (channels excluded — channel
     // messages ack independently per subscriber and would require a
     // join we don't need in PR-UI-2).
+    //
+    // INVARIANT: every `messages.recipient` value falls into exactly
+    // one of three prefix classes — `<project>:<agent>` (DM, no
+    // scheme prefix; the channel-or-user split here relies on that
+    // absence), `channel:<channel_id>`, or `user:<handle>`. The two
+    // `NOT LIKE` clauses below treat anything outside the channel /
+    // user prefixes as a per-agent DM. If a fourth prefix class
+    // ever lands, every site that splits recipients (here,
+    // `mailbox::BrokerMailboxSource::*` queries, and the tail.rs
+    // follow loop) needs to learn it.
     let mut stmt = conn.prepare(
         "SELECT recipient, COUNT(*) FROM messages
          WHERE acked_at IS NULL

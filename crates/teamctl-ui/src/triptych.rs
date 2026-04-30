@@ -20,6 +20,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::app::App;
 use crate::data::{state_glyph, AgentInfo};
+use crate::mailbox::{render_row, MailboxTab};
 use crate::theme::ColorMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,14 +76,7 @@ impl Widget for Triptych<'_> {
 
         render_roster(buf, columns[0], self.app);
         render_detail(buf, columns[1], self.app);
-        render_pane_empty(
-            buf,
-            columns[2],
-            "MAILBOX",
-            "(no mailbox)",
-            self.app,
-            Pane::Mailbox,
-        );
+        render_mailbox(buf, columns[2], self.app);
     }
 }
 
@@ -168,22 +162,79 @@ fn render_detail(buf: &mut Buffer, area: Rect, app: &App) {
     Paragraph::new(lines).render(inner, buf);
 }
 
-fn render_pane_empty(
-    buf: &mut Buffer,
-    area: Rect,
-    title: &str,
-    empty: &str,
-    app: &App,
-    which: Pane,
-) {
-    let focused = app.focused_pane == which;
-    let block = pane_block(title, focused, app);
+fn render_mailbox(buf: &mut Buffer, area: Rect, app: &App) {
+    let focused = app.focused_pane == Pane::Mailbox;
+    let block = pane_block("MAILBOX", focused, app);
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    // Reserve the top line for the tab indicator; everything below
+    // is rows from the active tab's buffer.
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    render_mailbox_tabs(buf, layout[0], app);
+    render_mailbox_body(buf, layout[1], app);
+}
+
+fn render_mailbox_tabs(buf: &mut Buffer, area: Rect, app: &App) {
+    // `Inbox  Channel  Wire` — active tab gets the focus accent
+    // (REVERSED so it reads as a highlight bar even in monochrome
+    // terminals where colour alone wouldn't carry the signal).
+    let active_style = Style::default()
+        .fg(app.capabilities.accent())
+        .add_modifier(Modifier::REVERSED);
     let muted = Style::default().fg(app.capabilities.muted());
-    Paragraph::new(empty)
-        .style(muted)
-        .alignment(Alignment::Center)
-        .block(block)
-        .render(area, buf);
+    let mut spans: Vec<ratatui::text::Span<'_>> = Vec::with_capacity(7);
+    for (i, tab) in MailboxTab::ALL.iter().enumerate() {
+        if i > 0 {
+            spans.push(ratatui::text::Span::styled("  ", muted));
+        }
+        let label = format!(" {} ", tab.label());
+        let style = if app.mailbox_tab == *tab {
+            active_style
+        } else {
+            muted
+        };
+        spans.push(ratatui::text::Span::styled(label, style));
+    }
+    Paragraph::new(Line::from(spans)).render(area, buf);
+}
+
+fn render_mailbox_body(buf: &mut Buffer, area: Rect, app: &App) {
+    if app.selected_agent_id().is_none() {
+        let muted = Style::default().fg(app.capabilities.muted());
+        Paragraph::new("(select an agent)")
+            .style(muted)
+            .alignment(Alignment::Center)
+            .render(area, buf);
+        return;
+    }
+
+    let rows = app.mailbox.rows(app.mailbox_tab);
+    if rows.is_empty() {
+        let muted = Style::default().fg(app.capabilities.muted());
+        Paragraph::new(app.mailbox_tab.empty_hint())
+            .style(muted)
+            .alignment(Alignment::Center)
+            .render(area, buf);
+        return;
+    }
+
+    // Tail to whatever fits — same shape as the detail pane.
+    let cap = area.height as usize;
+    let start = rows.len().saturating_sub(cap);
+    let lines: Vec<Line<'_>> = rows[start..]
+        .iter()
+        .map(|r| Line::raw(render_row(r)))
+        .collect();
+    Paragraph::new(lines).render(area, buf);
 }
 
 fn pane_block<'a>(title: &'a str, focused: bool, app: &App) -> Block<'a> {

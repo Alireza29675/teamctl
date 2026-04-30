@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod data;
+pub mod mailbox;
 pub mod pane;
 pub mod splash;
 pub mod statusline;

@@ -154,6 +154,60 @@ fn detail_pane_streams_buffer_for_selected_agent() {
     insta::assert_snapshot!("detail_streams_120x30", buffer_to_string(&buf));
 }
 
+fn message(id: i64, sender: &str, recipient: &str, text: &str) -> teamctl_ui::mailbox::MessageRow {
+    teamctl_ui::mailbox::MessageRow {
+        id,
+        sender: sender.into(),
+        recipient: recipient.into(),
+        text: text.into(),
+        sent_at: 0.0,
+    }
+}
+
+#[test]
+fn mailbox_pane_renders_inbox_tab_with_rows() {
+    // PR-UI-3: mailbox pane shows the active tab's buffer rows.
+    // Inbox is the default tab; the active-tab indicator gets the
+    // REVERSED highlight (visible even in monochrome).
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    app.mailbox.extend(
+        teamctl_ui::mailbox::MailboxTab::Inbox,
+        vec![
+            message(11, "writing:dev1", "writing:manager", "ready for review"),
+            message(12, "user:telegram", "writing:manager", "any blockers?"),
+        ],
+    );
+    let buf = render_to_buffer(&app, 120, 30);
+    insta::assert_snapshot!("mailbox_inbox_120x30", buffer_to_string(&buf));
+}
+
+#[test]
+fn mailbox_pane_cycles_to_channel_tab_when_focused() {
+    // Tab from the mailbox pane should advance the active tab; the
+    // pane itself stays focused. Channel tab's empty hint shows
+    // when the channel buffer has nothing yet.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    // Cycle focus to Mailbox (Roster → Detail → Mailbox).
+    app.cycle_focus();
+    app.cycle_focus();
+    assert_eq!(app.focused_pane, Pane::Mailbox);
+    // Tab on Mailbox cycles tabs.
+    app.cycle_mailbox_tab();
+    assert_eq!(app.mailbox_tab, teamctl_ui::mailbox::MailboxTab::Channel);
+    let buf = render_to_buffer(&app, 120, 30);
+    insta::assert_snapshot!("mailbox_channel_focused_120x30", buffer_to_string(&buf));
+}
+
 #[test]
 fn render_at_minimum_terminal_does_not_panic() {
     // Small terminal — ratatui swallows over-large constraints, so as
