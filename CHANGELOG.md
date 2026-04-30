@@ -11,8 +11,9 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 - Per-manager bot scoping for Telegram approval routing. Approval
   cards now reach exactly one chat — the bot scoped to the manager
   that the requesting agent reports to — instead of fanning out to
-  every connected bot. Multi-hop manager chains walk up to two
-  levels today; deeper chains are tracked as a follow-up.
+  every connected bot. Routing follows the worker's direct
+  `reports_to` only; deeper manager hierarchies (worker →
+  team-lead → manager) are tracked as a follow-up.
 - Approval delivery state on the broker. The `approvals` table
   grows a nullable `delivered_at REAL` column and a new terminal
   status `undeliverable`. When `expires_at` elapses, rows with
