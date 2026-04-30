@@ -33,8 +33,8 @@ cp -r /path/to/teamctl/examples/newsletter-office ~/newsroom
 cd ~/newsroom
 
 # 3. Seed credentials.
-cp .env.example .env
-$EDITOR .env
+cp .team/.env.example .team/.env
+$EDITOR .team/.env
 
 # 4. Workspace dirs for the two projects' CWDs.
 mkdir -p newsroom-workspace blog-site-workspace
@@ -43,7 +43,7 @@ mkdir -p newsroom-workspace blog-site-workspace
 ## Run
 
 ```bash
-set -a; . ./.env; set +a
+set -a; . ./.team/.env; set +a
 
 teamctl validate
 teamctl up
@@ -55,7 +55,7 @@ The seven agents are now running in `tmux` sessions named
 
 ## Email interface
 
-The `email` interface type is declared in `team-compose.yaml` and scoped
+The `email` interface type is declared in `.team/team-compose.yaml` and scoped
 to `newsroom:head_editor`. The email adapter is on the near-term roadmap
 and isn't in the shipping v0.1 binaries — until it lands, drive the head
 editor with:
