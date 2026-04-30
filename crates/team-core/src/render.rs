@@ -60,6 +60,12 @@ fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
     if let Some(pm) = &h.spec.permission_mode {
         s.push_str(&format!("PERMISSION_MODE={pm}\n"));
     }
+    // T-048: per-agent reasoning effort flows through to the runtime
+    // via the wrapper. Workspace-level `.env` `EFFORT=` still wins for
+    // operators not yet on the YAML form (back-compat).
+    if let Some(effort) = h.spec.effort {
+        s.push_str(&format!("EFFORT={}\n", effort.as_str()));
+    }
     s.push_str(&format!("TEAMCTL_MAILBOX={}\n", mailbox.display()));
     s.push_str(&format!("MCP_CONFIG={}\n", mcp.display()));
     s.push_str(&format!("SYSTEM_PROMPT_PATH={prompt}\n"));
@@ -114,6 +120,7 @@ mod tests {
                 can_broadcast: vec![],
                 reports_to: None,
                 on_rate_limit: None,
+                effort: None,
             },
         );
         Compose {
@@ -156,6 +163,23 @@ mod tests {
         assert!(env.contains("AGENT_ID=hello:mgr"));
         assert!(env.contains("TEAMCTL_MAILBOX=/teamctl/state/mailbox.db"));
         assert!(env.contains("TMUX_SESSION=a-hello-mgr"));
+    }
+
+    #[test]
+    fn env_omits_effort_when_unset() {
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(!env.contains("EFFORT="), "env was: {env}");
+    }
+
+    #[test]
+    fn env_emits_effort_when_set() {
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().effort = Some(EffortLevel::Max);
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(env.contains("EFFORT=max\n"), "env was: {env}");
     }
 
     #[test]

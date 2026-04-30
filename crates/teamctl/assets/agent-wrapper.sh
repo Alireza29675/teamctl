@@ -57,6 +57,11 @@ while :; do
             # human-in-loop ring instead.
             set -- "$@" --dangerously-skip-permissions
             [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
+            # T-048: per-agent reasoning effort. Source order is YAML
+            # (rendered into this env file) > workspace `.env` (env
+            # inherited from the operator shell) > unset (claude's own
+            # default). Empty string is treated as unset.
+            [ -n "$EFFORT" ] && set -- "$@" --effort "$EFFORT"
             [ -n "$MCP_CONFIG" ] && set -- "$@" --mcp-config "$MCP_CONFIG"
             [ -n "$SYSTEM_PROMPT_PATH" ] && [ -f "$SYSTEM_PROMPT_PATH" ] && \
                 set -- "$@" --append-system-prompt "$(cat "$SYSTEM_PROMPT_PATH")"
