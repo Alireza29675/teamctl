@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod approvals;
+pub mod compose;
 pub mod data;
 pub mod mailbox;
 pub mod pane;

@@ -22,6 +22,7 @@ use ratatui::{Frame, Terminal};
 use crate::approvals::{
     Approval, ApprovalDecider, ApprovalSource, BrokerApprovalSource, CliApprovalDecider, Decision,
 };
+use crate::compose::{CliMessageSender, ComposeTarget, Editor, EditorAction, MessageSender};
 use crate::data::TeamSnapshot;
 use crate::mailbox::{BrokerMailboxSource, MailboxBuffers, MailboxSource, MailboxTab};
 use crate::pane::{PaneSource, TmuxPaneSource};
@@ -48,6 +49,11 @@ pub enum Stage {
     /// `teamctl approve|deny` CLI so T-031's `delivered_at`
     /// contract stays honored.
     ApprovalsModal,
+    /// Compose modal — opens on `@` (DM-to-focused-agent) or `!`
+    /// (broadcast-to-current-channel). Routes through `teamctl
+    /// send|broadcast` so the channel-ACL + ratelimit + delivery
+    /// hooks the CLI already runs through ride for free.
+    ComposeModal,
 }
 
 pub struct App {
@@ -94,6 +100,18 @@ pub struct App {
     /// inline in the modal so the operator sees why a decision
     /// didn't take.
     pub approval_error: Option<String>,
+    /// Open compose target — `Some` while `Stage::ComposeModal`
+    /// is the active stage, `None` otherwise. Stored on App so
+    /// the editor's contents survive rerenders.
+    pub compose_target: Option<ComposeTarget>,
+    /// Editor backing the compose modal. Reset to `default()` each
+    /// time the modal opens so an old draft from a prior
+    /// invocation can't leak into a new send.
+    pub compose_editor: Editor,
+    /// Last error from a CLI-routed send call — surfaced inline
+    /// in the modal so the operator sees rate-limit / ACL-block
+    /// errors without leaving the UI.
+    pub compose_error: Option<String>,
 }
 
 const MAX_DETAIL_LINES: usize = 2000;
@@ -123,6 +141,9 @@ impl App {
             pending_approvals: Vec::new(),
             selected_approval: 0,
             approval_error: None,
+            compose_target: None,
+            compose_editor: Editor::default(),
+            compose_error: None,
         }
     }
 
@@ -214,6 +235,97 @@ impl App {
             }
             Err(err) => {
                 self.approval_error = Some(err.to_string());
+            }
+        }
+    }
+
+    /// Open the compose modal for the focused agent (if any). The
+    /// `@` chord. No-op when no agent is focused.
+    pub fn enter_compose_dm_for_focused(&mut self) {
+        let Some(info) = self
+            .selected_agent
+            .and_then(|i| self.team.agents.get(i))
+            .cloned()
+        else {
+            return;
+        };
+        self.previous_stage = self.stage;
+        self.stage = Stage::ComposeModal;
+        self.compose_target = Some(ComposeTarget::Dm {
+            agent_id: info.id.clone(),
+            project_id: info.project.clone(),
+        });
+        self.compose_editor = Editor::default();
+        self.compose_error = None;
+    }
+
+    /// Open the compose modal targeting the project's `all`
+    /// channel — the broadcast wire. The `!` chord. PR-UI-5 ships
+    /// with channel scoping limited to `all` (the Wire tab is the
+    /// only channel context the mailbox pane currently surfaces);
+    /// PR-UI-6's mailbox UI work will widen the scope to per-channel
+    /// targets when individual channels become first-class in the
+    /// pane.
+    pub fn enter_compose_broadcast(&mut self) {
+        let project_id = self
+            .selected_agent
+            .and_then(|i| self.team.agents.get(i))
+            .map(|a| a.project.clone())
+            .or_else(|| self.team.agents.first().map(|a| a.project.clone()));
+        let Some(project_id) = project_id else {
+            return;
+        };
+        let channel_id = format!("{project_id}:all");
+        self.previous_stage = self.stage;
+        self.stage = Stage::ComposeModal;
+        self.compose_target = Some(ComposeTarget::Broadcast {
+            channel_id,
+            project_id,
+        });
+        self.compose_editor = Editor::default();
+        self.compose_error = None;
+    }
+
+    pub fn close_compose_modal(&mut self) {
+        self.stage = self.previous_stage;
+        self.compose_target = None;
+        self.compose_editor = Editor::default();
+        self.compose_error = None;
+    }
+
+    /// Send the current compose body via the injected message
+    /// sender. Routes through `teamctl send|broadcast` in
+    /// production; tests inject a recorder. Closes the modal +
+    /// triggers a mailbox refresh on success; surfaces error
+    /// inline on failure.
+    pub fn apply_send<S: MessageSender, M: MailboxSource>(
+        &mut self,
+        sender: &S,
+        mailbox_source: &M,
+    ) {
+        let Some(target) = self.compose_target.clone() else {
+            return;
+        };
+        let body = self.compose_editor.body();
+        if body.is_empty() {
+            self.compose_error = Some("body is empty".into());
+            return;
+        }
+        let result = match &target {
+            ComposeTarget::Dm { agent_id, .. } => sender.send_dm(&self.team.root, agent_id, &body),
+            ComposeTarget::Broadcast { channel_id, .. } => {
+                sender.broadcast(&self.team.root, channel_id, &body)
+            }
+        };
+        match result {
+            Ok(()) => {
+                self.close_compose_modal();
+                // Refresh the mailbox so the just-sent row appears
+                // in the relevant tab on the next paint.
+                refresh_mailbox(self, mailbox_source);
+            }
+            Err(err) => {
+                self.compose_error = Some(err.to_string());
             }
         }
     }
@@ -392,6 +504,7 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
     let mut app = App::new();
     let pane_source = TmuxPaneSource;
     let decider = CliApprovalDecider;
+    let sender = CliMessageSender;
     // First refresh resolves the team root; only then can we
     // bring up the file-watcher, which keys on `<root>/state/`.
     refresh_with_default_sources(&mut app, &pane_source);
@@ -399,7 +512,12 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
     while app.running {
         terminal.draw(|f| draw(f, &app))?;
         if event::poll(POLL_INTERVAL)? {
-            handle_event(&mut app, event::read()?, &decider);
+            // The mailbox source for handle_event mirrors the
+            // refresh path; the same db_path key avoids divergence
+            // between read + write fanout.
+            let db_path = app.team.root.join("state/mailbox.db");
+            let mailbox_source = BrokerMailboxSource::new(db_path);
+            handle_event(&mut app, event::read()?, &decider, &sender, &mailbox_source);
         }
         if matches!(app.stage, Stage::Splash) && app.splash_started.elapsed() >= SPLASH_AUTO_DISMISS
         {
@@ -461,6 +579,10 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
             draw_main(f, area, app);
             draw_approvals_modal(f, area, app);
         }
+        Stage::ComposeModal => {
+            draw_main(f, area, app);
+            draw_compose_modal(f, area, app);
+        }
     }
 }
 
@@ -476,6 +598,93 @@ fn draw_main(f: &mut Frame<'_>, area: Rect, app: &App) {
 fn draw_approvals_modal(f: &mut Frame<'_>, area: Rect, app: &App) {
     let buf = f.buffer_mut();
     render_approvals_modal(area, buf, app);
+}
+
+fn draw_compose_modal(f: &mut Frame<'_>, area: Rect, app: &App) {
+    let buf = f.buffer_mut();
+    render_compose_modal(area, buf, app);
+}
+
+fn render_compose_modal(area: Rect, buf: &mut Buffer, app: &App) {
+    let popup_w = 80u16.min(area.width.saturating_sub(4));
+    let popup_h = 16u16.min(area.height.saturating_sub(2));
+    let popup = centered_rect(popup_w, popup_h, area);
+    Clear.render(popup, buf);
+    let title = app
+        .compose_target
+        .as_ref()
+        .map(|t| t.title())
+        .unwrap_or_else(|| "→ ?".into());
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.capabilities.accent()));
+    let inner = block.inner(popup);
+    block.render(popup, buf);
+
+    if inner.height < 3 {
+        return;
+    }
+    // Reserve the bottom two rows: an error line (rendered when
+    // present, blank otherwise) and the footer with key hints.
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),    // editor body
+            Constraint::Length(1), // error / status
+            Constraint::Length(1), // footer
+        ])
+        .split(inner);
+
+    // Body — render lines with a `▏` cursor marker on the active
+    // row when in Insert. Skip cursor cell in Normal/Ex modes so
+    // the operator's eye finds the row by row context, not a
+    // blinking caret.
+    let muted = Style::default().fg(app.capabilities.muted());
+    let body_lines: Vec<ratatui::text::Line<'_>> = app
+        .compose_editor
+        .lines
+        .iter()
+        .enumerate()
+        .map(|(row, line)| {
+            if row == app.compose_editor.cursor_row
+                && app.compose_editor.mode == crate::compose::VimMode::Insert
+            {
+                let col = app.compose_editor.cursor_col.min(line.len());
+                let (head, tail) = line.split_at(col);
+                ratatui::text::Line::from(vec![
+                    ratatui::text::Span::raw(head.to_string()),
+                    ratatui::text::Span::styled(
+                        "▏",
+                        Style::default().fg(app.capabilities.accent()),
+                    ),
+                    ratatui::text::Span::raw(tail.to_string()),
+                ])
+            } else {
+                ratatui::text::Line::raw(line.clone())
+            }
+        })
+        .collect();
+    Paragraph::new(body_lines).render(chunks[0], buf);
+
+    let error_line = match (&app.compose_error, app.compose_editor.mode) {
+        (Some(e), _) => format!("error: {e}"),
+        (None, crate::compose::VimMode::Ex) => format!(":{}", app.compose_editor.ex_buffer),
+        (None, crate::compose::VimMode::Normal) => "-- NORMAL --".into(),
+        (None, crate::compose::VimMode::Insert) => "-- INSERT --".into(),
+    };
+    let style = if app.compose_error.is_some() {
+        Style::default().fg(app.capabilities.accent())
+    } else {
+        muted
+    };
+    Paragraph::new(error_line)
+        .style(style)
+        .render(chunks[1], buf);
+
+    Paragraph::new("Ctrl+Enter send · Esc Esc cancel · Tab attach (TODO #32)")
+        .style(muted)
+        .render(chunks[2], buf);
 }
 
 fn render_approvals_modal(area: Rect, buf: &mut Buffer, app: &App) {
@@ -555,7 +764,13 @@ fn centered_rect(w: u16, h: u16, area: Rect) -> Rect {
     }
 }
 
-fn handle_event<D: ApprovalDecider>(app: &mut App, ev: Event, decider: &D) {
+fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
+    app: &mut App,
+    ev: Event,
+    decider: &D,
+    sender: &S,
+    mailbox_source: &M,
+) {
     use crossterm::event::KeyModifiers;
     match ev {
         Event::Key(k) if k.kind == KeyEventKind::Press => match app.stage {
@@ -566,6 +781,12 @@ fn handle_event<D: ApprovalDecider>(app: &mut App, ev: Event, decider: &D) {
                 // at least one pending row. No-op otherwise so the
                 // chord doesn't surprise anyone hammering keys.
                 KeyCode::Char('a') => app.enter_approvals_modal(),
+                // PR-UI-5: `@` opens DM compose to focused agent;
+                // `!` opens broadcast compose to project's `all`
+                // channel. Both no-op when there's no agent /
+                // project to scope to.
+                KeyCode::Char('@') => app.enter_compose_dm_for_focused(),
+                KeyCode::Char('!') => app.enter_compose_broadcast(),
                 // PR-UI-4: Shift+Tab cycles panes backward. Some
                 // terminals send `BackTab`, others send `Tab` with
                 // SHIFT — handle both.
@@ -607,6 +828,16 @@ fn handle_event<D: ApprovalDecider>(app: &mut App, ev: Event, decider: &D) {
                 KeyCode::Esc | KeyCode::Char('q') => app.close_approvals_modal(),
                 _ => {}
             },
+            Stage::ComposeModal => {
+                // Route every keypress through the editor; the
+                // editor returns Send / Cancel / Continue. Modal
+                // close + send wiring lives on App.
+                match app.compose_editor.apply_key(k) {
+                    EditorAction::Continue => {}
+                    EditorAction::Send => app.apply_send(sender, mailbox_source),
+                    EditorAction::Cancel => app.close_compose_modal(),
+                }
+            }
         },
         Event::Resize(_, _) => {
             // ratatui redraws on the next loop iteration; nothing to do.
@@ -631,6 +862,10 @@ pub fn render_to_buffer(app: &App, width: u16, height: u16) -> Buffer {
         Stage::ApprovalsModal => {
             render_main(app, area, &mut buf);
             render_approvals_modal(area, &mut buf, app);
+        }
+        Stage::ComposeModal => {
+            render_main(app, area, &mut buf);
+            render_compose_modal(area, &mut buf, app);
         }
     }
     buf
@@ -695,10 +930,50 @@ mod tests {
         }
     }
 
+    /// Noop sender for tests that don't exercise compose-send.
+    struct NoopSender;
+    impl crate::compose::MessageSender for NoopSender {
+        fn send_dm(
+            &self,
+            _root: &std::path::Path,
+            _agent: &str,
+            _body: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn broadcast(
+            &self,
+            _root: &std::path::Path,
+            _channel: &str,
+            _body: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Mailbox source that returns nothing — refresh_mailbox after
+    /// a successful send becomes a no-op.
+    struct EmptyMailbox;
+    impl crate::mailbox::MailboxSource for EmptyMailbox {
+        fn inbox(&self, _id: &str, _after: i64) -> anyhow::Result<Vec<crate::mailbox::MessageRow>> {
+            Ok(Vec::new())
+        }
+        fn channel_feed(
+            &self,
+            _id: &str,
+            _after: i64,
+        ) -> anyhow::Result<Vec<crate::mailbox::MessageRow>> {
+            Ok(Vec::new())
+        }
+        fn wire(&self, _id: &str, _after: i64) -> anyhow::Result<Vec<crate::mailbox::MessageRow>> {
+            Ok(Vec::new())
+        }
+    }
+
     /// Boilerplate-free dispatcher for tests not exercising the
-    /// decision path.
+    /// decision / send paths.
     fn dispatch(app: &mut App, ev: Event) {
-        super::handle_event(app, ev, &NoopDecider);
+        super::handle_event(app, ev, &NoopDecider, &NoopSender, &EmptyMailbox);
     }
 
     fn agent(id: &str, state: AgentState) -> AgentInfo {
@@ -1031,7 +1306,13 @@ mod tests {
         app.dismiss_splash();
         app.replace_approvals(vec![ap(7), ap(8)]);
         app.enter_approvals_modal();
-        super::handle_event(&mut app, key(KeyCode::Char('Y')), &dec);
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Char('Y')),
+            &dec,
+            &NoopSender,
+            &EmptyMailbox,
+        );
         let calls = dec.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, 7);
@@ -1049,7 +1330,13 @@ mod tests {
         app.dismiss_splash();
         app.replace_approvals(vec![ap(7)]);
         app.enter_approvals_modal();
-        super::handle_event(&mut app, key(KeyCode::Char('N')), &dec);
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Char('N')),
+            &dec,
+            &NoopSender,
+            &EmptyMailbox,
+        );
         let calls = dec.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, crate::approvals::Decision::Deny);
@@ -1080,6 +1367,140 @@ mod tests {
         // Some terminals send Tab + SHIFT instead of BackTab.
         dispatch(&mut app, key_with(KeyCode::Tab, KeyModifiers::SHIFT));
         assert_eq!(app.focused_pane, Pane::Detail);
+    }
+
+    #[test]
+    fn at_chord_opens_compose_dm_to_focused_agent() {
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![
+            agent("writing:manager", AgentState::Running),
+            agent("writing:dev1", AgentState::Running),
+        ]));
+        app.dismiss_splash();
+        app.select_next();
+        dispatch(&mut app, key(KeyCode::Char('@')));
+        assert_eq!(app.stage, Stage::ComposeModal);
+        match app.compose_target.as_ref() {
+            Some(crate::compose::ComposeTarget::Dm { agent_id, .. }) => {
+                assert_eq!(agent_id, "writing:dev1");
+            }
+            other => panic!("expected DM target, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bang_chord_opens_compose_broadcast_to_all_channel() {
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent(
+            "writing:manager",
+            AgentState::Running,
+        )]));
+        app.dismiss_splash();
+        dispatch(&mut app, key(KeyCode::Char('!')));
+        assert_eq!(app.stage, Stage::ComposeModal);
+        match app.compose_target.as_ref() {
+            Some(crate::compose::ComposeTarget::Broadcast { channel_id, .. }) => {
+                assert_eq!(channel_id, "writing:all");
+            }
+            other => panic!("expected Broadcast target, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_routes_dm_through_mock_sender() {
+        use crate::compose::test_support::MockMessageSender;
+        let sender = MockMessageSender::default();
+        let mailbox = EmptyMailbox;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent(
+            "writing:dev1",
+            AgentState::Running,
+        )]));
+        app.dismiss_splash();
+        app.enter_compose_dm_for_focused();
+        for c in "ship it".chars() {
+            super::handle_event(
+                &mut app,
+                key(KeyCode::Char(c)),
+                &NoopDecider,
+                &sender,
+                &mailbox,
+            );
+        }
+        super::handle_event(
+            &mut app,
+            key_with(KeyCode::Enter, crossterm::event::KeyModifiers::CONTROL),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+        );
+        let calls = sender.dm_calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "writing:dev1");
+        assert_eq!(calls[0].1, "ship it");
+        assert_eq!(app.stage, Stage::Triptych, "modal closes on send");
+    }
+
+    #[test]
+    fn esc_esc_cancels_compose_without_send() {
+        use crate::compose::test_support::MockMessageSender;
+        let sender = MockMessageSender::default();
+        let mailbox = EmptyMailbox;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent(
+            "writing:dev1",
+            AgentState::Running,
+        )]));
+        app.dismiss_splash();
+        app.enter_compose_dm_for_focused();
+        for c in "draft".chars() {
+            super::handle_event(
+                &mut app,
+                key(KeyCode::Char(c)),
+                &NoopDecider,
+                &sender,
+                &mailbox,
+            );
+        }
+        super::handle_event(&mut app, key(KeyCode::Esc), &NoopDecider, &sender, &mailbox);
+        super::handle_event(&mut app, key(KeyCode::Esc), &NoopDecider, &sender, &mailbox);
+        assert_eq!(app.stage, Stage::Triptych);
+        assert!(sender.dm_calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn send_failure_surfaces_error_inline_keeps_modal_open() {
+        use crate::compose::test_support::MockMessageSender;
+        let sender = MockMessageSender::default();
+        *sender.fail_next.lock().unwrap() = Some("rate limit".into());
+        let mailbox = EmptyMailbox;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent(
+            "writing:dev1",
+            AgentState::Running,
+        )]));
+        app.dismiss_splash();
+        app.enter_compose_dm_for_focused();
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Char('x')),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+        );
+        super::handle_event(
+            &mut app,
+            key_with(KeyCode::Enter, crossterm::event::KeyModifiers::CONTROL),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+        );
+        assert_eq!(app.stage, Stage::ComposeModal, "modal stays open on err");
+        assert!(app
+            .compose_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("rate limit"));
     }
 
     #[test]

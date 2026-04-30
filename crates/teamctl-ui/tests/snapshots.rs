@@ -266,6 +266,52 @@ fn approvals_modal_renders_action_summary_and_hint() {
 }
 
 #[test]
+fn compose_modal_renders_target_body_and_attach_todo_footer() {
+    // PR-UI-5: compose modal opens with the DM target in the
+    // title bar, the editor body in the middle, and a footer
+    // referencing attach issue #32 (so the missing affordance is
+    // visible to operators, not silent).
+    let mut app = fresh_app();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![
+            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            synth_agent("writing:dev1", AgentState::Running, 0, 0),
+        ],
+    ));
+    app.dismiss_splash();
+    app.select_next(); // focus dev1
+    app.enter_compose_dm_for_focused();
+    // Type two lines into the editor.
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    let press = |code: KeyCode| KeyEvent {
+        code,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    };
+    for c in "line one".chars() {
+        app.compose_editor.apply_key(press(KeyCode::Char(c)));
+    }
+    app.compose_editor.apply_key(press(KeyCode::Enter));
+    for c in "line two".chars() {
+        app.compose_editor.apply_key(press(KeyCode::Char(c)));
+    }
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(s.contains("→ writing:dev1"), "title missing: {s}");
+    assert!(
+        s.contains("line one") && s.contains("line two"),
+        "body missing"
+    );
+    assert!(
+        s.contains("Tab attach (TODO #32)"),
+        "footer attach hint missing: {s}"
+    );
+    insta::assert_snapshot!("compose_modal_120x30", s);
+}
+
+#[test]
 fn render_at_minimum_terminal_does_not_panic() {
     // Small terminal — ratatui swallows over-large constraints, so as
     // long as the call doesn't panic we're good. (Smaller than ~16 wide
