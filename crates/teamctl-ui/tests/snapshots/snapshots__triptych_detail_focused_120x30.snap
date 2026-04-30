@@ -1,11 +1,11 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-assertion_line: 56
+assertion_line: 58
 expression: buffer_to_string(&buf)
 ---
 ┌ROSTER────────────────────┐┌DETAIL────────────────────────────────────────────────────┐┌MAILBOX───────────────────────┐
-│        (no agents)       ││    (select an agent on the left to follow its session)   ││         (no mailbox)         │
-│                          ││                                                          ││                              │
+│        (no agents)       ││    (select an agent on the left to follow its session)   ││ Inbox    Channel    Wire     │
+│                          ││                                                          ││       (select an agent)      │
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
