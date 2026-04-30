@@ -61,6 +61,7 @@ export default defineConfig({
             { label: 'Multi-agent ACLs in one project', link: '/cookbook/multi-agent/' },
             { label: 'Mixing runtimes in one team', link: '/cookbook/multi-runtime/' },
             { label: 'Two projects, one teamctl, with bridges', link: '/cookbook/two-projects/' },
+            { label: 'Per-agent reasoning effort', link: '/cookbook/effort/' },
           ],
         },
         {
