@@ -33,7 +33,7 @@ channels:
     members: [pm, marketing]
 
 managers:
-  # PM owns ticket synthesis and is Alireza's intent-relay. Runs
+  # PM owns ticket synthesis and is the project owner's intent-relay. Runs
   # `auto` because PM never edits code or runs builds; the
   # default permission set fits without surprising prompts.
   # `low_risk_only` autonomy reflects PM's role as
@@ -80,7 +80,7 @@ managers:
 
   # Marketing owns the public surface (README hero, docs/
   # landing, release announcements). `proposal_only` autonomy
-  # is load-bearing: marketing proposes, Alireza approves,
+  # is load-bearing: marketing proposes, the project owner approves,
   # eng_lead routes the eventual edits through dev tickets.
   # `can_dm` excludes engineering on purpose — this is the
   # dogfooded project-isolation principle in action.
@@ -136,7 +136,7 @@ workers:
 
   # QA holds the merge-to-main gate. `proposal_only` because qa
   # never merges or pushes; the verdict is what `eng_lead`
-  # waits on before routing the merge to Alireza. `can_dm:
+  # waits on before routing the merge to the project owner. `can_dm:
   # [pm]` is unusual for a worker but lets qa raise quality
   # patterns directly to PM without going via eng_lead — one
   # short-circuit, on purpose, for the dogfood team's
