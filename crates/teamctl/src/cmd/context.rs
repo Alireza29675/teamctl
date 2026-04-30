@@ -1,6 +1,13 @@
 //! `teamctl context` — name multiple `.team/` roots so you can jump
 //! between them without typing `-C <path>` every time.
 //!
+//! **Deprecated in 0.4.0.** T-008 retired registered-context root
+//! resolution: `teamctl` now finds `.team/` only via walk-up from cwd or
+//! an explicit `-C <path>` / `TEAMCTL_ROOT`. The subcommands here remain
+//! as a stub for one release so existing scripts don't break, but every
+//! invocation prints a deprecation note to stderr and the registered
+//! context is no longer consulted by root resolution.
+//!
 //! State lives at `~/.config/teamctl/contexts.json`:
 //!
 //! ```json
@@ -54,9 +61,20 @@ fn save(store: &ContextStore) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the active context to its root path and name. Used by the
-/// CLI's root-resolution fallback; the name is surfaced in the T-010
-/// override-warning so the operator knows which context is in effect.
+/// Print the one-line deprecation notice. Called from every public
+/// subcommand entry point so an operator running any `teamctl context …`
+/// invocation sees the upcoming-removal note.
+fn deprecation_notice() {
+    eprintln!(
+        "warning: `teamctl context` is deprecated and will be removed in 0.4.x. \
+         teamctl now resolves `.team/` via walk-up from cwd or `-C <path>` only."
+    );
+}
+
+/// Resolve the active context to its root path and name. Retained as a
+/// stub for the deprecation window; no longer consulted by CLI root
+/// resolution after T-008.
+#[allow(dead_code)]
 pub fn root_for_current_named() -> Result<Option<(String, PathBuf)>> {
     let store = load()?;
     let Some(name) = store.current else {
@@ -66,6 +84,9 @@ pub fn root_for_current_named() -> Result<Option<(String, PathBuf)>> {
 }
 
 /// Auto-register a root when `teamctl up` runs against it. Idempotent.
+/// Retained as a stub for the deprecation window; no longer invoked
+/// after T-008 (the `Up` command path stopped calling it).
+#[allow(dead_code)]
 pub fn auto_register(root: &Path) -> Result<()> {
     let mut store = load()?;
     let abs = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -106,6 +127,7 @@ pub fn auto_register(root: &Path) -> Result<()> {
 }
 
 pub fn ls() -> Result<()> {
+    deprecation_notice();
     let store = load()?;
     if store.contexts.is_empty() {
         println!("(no contexts registered yet — `teamctl up` auto-registers one)");
@@ -124,6 +146,7 @@ pub fn ls() -> Result<()> {
 }
 
 pub fn current() -> Result<()> {
+    deprecation_notice();
     let store = load()?;
     match store.current {
         Some(n) => println!("{n}"),
@@ -133,6 +156,7 @@ pub fn current() -> Result<()> {
 }
 
 pub fn use_(name: &str) -> Result<()> {
+    deprecation_notice();
     let mut store = load()?;
     if !store.contexts.contains_key(name) {
         bail!("no context named `{name}`. `teamctl context ls` to see options.");
@@ -144,6 +168,7 @@ pub fn use_(name: &str) -> Result<()> {
 }
 
 pub fn add(name: &str, path: &Path) -> Result<()> {
+    deprecation_notice();
     let abs = path
         .canonicalize()
         .with_context(|| format!("canonicalize {}", path.display()))?;
@@ -164,6 +189,7 @@ pub fn add(name: &str, path: &Path) -> Result<()> {
 }
 
 pub fn rm(name: &str) -> Result<()> {
+    deprecation_notice();
     let mut store = load()?;
     if store.contexts.remove(name).is_none() {
         bail!("no context named `{name}`");

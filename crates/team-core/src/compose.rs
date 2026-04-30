@@ -304,41 +304,25 @@ pub struct Compose {
 }
 
 impl Compose {
-    /// Walk up from `start` looking for the nearest `.team/team-compose.yaml`,
-    /// then fall back to a flat `team-compose.yaml` in `start` itself. Returns
-    /// the directory containing the compose file (the "root"), suitable for
-    /// passing to [`Compose::load`].
+    /// Walk up from `start` looking for the **first** `.team/team-compose.yaml`
+    /// and return the directory containing the compose file (the "root"),
+    /// suitable for passing to [`Compose::load`]. The first hit wins; we do
+    /// not keep walking past it to look for a parent `.team/`.
     ///
     /// This is the equivalent of git's `.git/` discovery — once a repo carries
     /// a `.team/` folder, every `teamctl` subcommand finds it from anywhere
-    /// inside the tree.
+    /// inside the tree. T-008 retired the legacy flat-layout fallback and
+    /// the second-hit / parent-`.team/` walk: the convention is `.team/` and
+    /// the nearest one wins, no exceptions.
     pub fn discover(start: &Path) -> anyhow::Result<PathBuf> {
         let start = start
             .canonicalize()
             .map_err(|e| anyhow::anyhow!("canonicalize {}: {e}", start.display()))?;
-        // 1. Walk up looking for .team/team-compose.yaml.
         let mut cur: Option<&Path> = Some(&start);
         while let Some(dir) = cur {
             let candidate = dir.join(".team").join("team-compose.yaml");
             if candidate.is_file() {
                 return Ok(dir.join(".team"));
-            }
-            cur = dir.parent();
-        }
-        // 2. Flat layout in `start`.
-        if start.join("team-compose.yaml").is_file() {
-            return Ok(start);
-        }
-        // 3. Walk up for a flat layout (legacy convenience).
-        let mut cur: Option<&Path> = start.parent();
-        while let Some(dir) = cur {
-            if dir.join("team-compose.yaml").is_file() {
-                eprintln!(
-                    "warning: using legacy flat layout at {}; consider migrating to {}",
-                    dir.display(),
-                    dir.join(".team").display()
-                );
-                return Ok(dir.to_path_buf());
             }
             cur = dir.parent();
         }
@@ -455,11 +439,32 @@ mod tests {
     }
 
     #[test]
-    fn discover_falls_back_to_flat_layout() {
+    fn discover_no_longer_falls_back_to_flat_layout() {
+        // T-008: a flat `team-compose.yaml` at cwd (no `.team/` wrapper) is
+        // not discoverable. The convention is `.team/`. Operators must
+        // either `init` a `.team/` or pass `--root` explicitly.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("team-compose.yaml"), "version: 2\n").unwrap();
-        let found = Compose::discover(tmp.path()).unwrap();
-        assert_eq!(found, tmp.path().canonicalize().unwrap());
+        let err = Compose::discover(tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("no `.team/team-compose.yaml`"));
+    }
+
+    #[test]
+    fn discover_returns_first_dot_team_walking_up() {
+        // T-008 boundary: nested `.team/`s win over outer ones. We do NOT
+        // keep walking past the first hit.
+        let tmp = tempfile::tempdir().unwrap();
+        let outer = tmp.path();
+        let inner = outer.join("packages/inner");
+        std::fs::create_dir_all(outer.join(".team")).unwrap();
+        std::fs::write(outer.join(".team/team-compose.yaml"), "version: 2\n").unwrap();
+        std::fs::create_dir_all(inner.join(".team")).unwrap();
+        std::fs::write(inner.join(".team/team-compose.yaml"), "version: 2\n").unwrap();
+
+        let from_inner = inner.join("src/deep");
+        std::fs::create_dir_all(&from_inner).unwrap();
+        let found = Compose::discover(&from_inner).unwrap();
+        assert_eq!(found, inner.canonicalize().unwrap().join(".team"));
     }
 
     #[test]

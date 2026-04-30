@@ -253,13 +253,15 @@ fn warn_c_explicit_root_silent() {
 }
 
 #[test]
-fn warn_d_registered_context_warns() {
+fn warn_d_registered_context_no_longer_resolves_root() {
+    // T-008: the registered-context fallback was retired. With no `.team/`
+    // walked up to from cwd and a registered context pointing at a real
+    // `.team/`, root resolution must error rather than silently fall back.
     let tmp = tempdir().unwrap();
-    let unrelated_cwd = tempdir().unwrap(); // no .team here, no walk-up hit
+    let unrelated_cwd = tempdir().unwrap();
     let home = tempdir().unwrap();
     let root = seed_dot_team(tmp.path());
 
-    // Pre-populate the contexts store at $HOME/.config/teamctl/contexts.json.
     let cfg_dir = home.path().join(".config/teamctl");
     fs::create_dir_all(&cfg_dir).unwrap();
     let store = format!(
@@ -268,11 +270,44 @@ fn warn_d_registered_context_warns() {
     );
     fs::write(cfg_dir.join("contexts.json"), store).unwrap();
 
-    let stderr = run_validate_with_env(unrelated_cwd.path(), home.path(), &[], None);
-    let clean = strip_ansi(&stderr);
+    let mut cmd = Command::new(bin());
+    cmd.env_clear()
+        .env("HOME", home.path())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .current_dir(unrelated_cwd.path())
+        .arg("validate");
+    let out = cmd.output().unwrap();
     assert!(
-        clean.contains("warning:") && clean.contains("context 'demo'"),
-        "expected context warning; stderr was: {clean}"
+        !out.status.success(),
+        "validate must fail when no `.team/` is reachable from cwd"
+    );
+    let stderr = strip_ansi(&String::from_utf8_lossy(&out.stderr));
+    assert!(
+        stderr.contains("no `.team/team-compose.yaml`"),
+        "expected no-team error, not a context fallback; stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn context_subcommand_emits_deprecation_warning() {
+    // T-008: every `teamctl context …` invocation should print a one-line
+    // deprecation note to stderr while still doing its (now-cosmetic) job.
+    let home = tempdir().unwrap();
+    let mut cmd = Command::new(bin());
+    cmd.env_clear()
+        .env("HOME", home.path())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .args(["context", "ls"]);
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "context ls must still succeed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = strip_ansi(&String::from_utf8_lossy(&out.stderr));
+    assert!(
+        stderr.contains("`teamctl context` is deprecated"),
+        "expected deprecation warning; stderr was: {stderr}"
     );
 }
 

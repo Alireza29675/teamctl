@@ -230,12 +230,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Validate => cmd::validate::run(&root),
-        Command::Up => {
-            let r = cmd::up::run(&root);
-            // Auto-register the context on first up.
-            let _ = cmd::context::auto_register(&root);
-            r
-        }
+        Command::Up => cmd::up::run(&root),
         Command::Down => cmd::down::run(&root),
         Command::Reload => cmd::reload::run(&root),
         Command::Ps => cmd::status::run(&root),
@@ -274,9 +269,11 @@ fn main() -> Result<()> {
 }
 
 /// Resolve the compose root and report which input it came from. Resolution
-/// order: `--root` flag > `TEAMCTL_ROOT` env > current registered context >
-/// walk up from CWD looking for `.team/`. The returned [`cmd::warn::RootSource`]
-/// drives the T-010 override-warning on read-side commands.
+/// order: `--root` flag > `TEAMCTL_ROOT` env > walk up from CWD looking for
+/// `.team/`. T-008 removed the registered-context fallback — operators must
+/// `cd` into a tree containing `.team/` or pass `-C <path>`. The returned
+/// [`cmd::warn::RootSource`] drives the T-010 override-warning on read-side
+/// commands.
 fn resolve_root_with_source(explicit: Option<PathBuf>) -> Result<(PathBuf, cmd::warn::RootSource)> {
     use cmd::warn::RootSource;
 
@@ -297,9 +294,6 @@ fn resolve_root_with_source(explicit: Option<PathBuf>) -> Result<(PathBuf, cmd::
                 .with_context(|| format!("canonicalize $TEAMCTL_ROOT {}", p.display()))?;
             return Ok((canon, RootSource::Env));
         }
-    }
-    if let Some((name, p)) = cmd::context::root_for_current_named()? {
-        return Ok((p, RootSource::Context(name)));
     }
     let cwd = std::env::current_dir().context("get cwd")?;
     let p = team_core::compose::Compose::discover(&cwd)?;

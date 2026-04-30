@@ -4,6 +4,28 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Changed
+
+- Root resolution is now `--root` / `-C` flag → `TEAMCTL_ROOT` env →
+  walk-up from cwd to the first `.team/team-compose.yaml`. The
+  registered-context fallback was retired (T-008): `teamctl context`
+  no longer participates in root discovery. Operators must `cd` into
+  a tree containing `.team/` or pass `-C <path>`.
+- `teamctl up` no longer auto-registers a context entry under
+  `~/.config/teamctl/contexts.json` (T-008). Walk-up handles the
+  common case; explicit registration with `teamctl context add`
+  still works during the deprecation window.
+- The legacy flat-layout fallback (a `team-compose.yaml` at cwd or
+  found by walk-up without a `.team/` wrapper) is gone from CLI
+  discovery. The convention is `.team/`, no exceptions.
+
+### Deprecated
+
+- `teamctl context` (`ls`, `current`, `use`, `add`, `rm`) now prints
+  a one-line stderr deprecation note on every invocation. The
+  command stub remains for one release so existing scripts don't
+  break; full removal is scheduled for 0.4.x.
+
 ## [0.3.0] — 2026-04-30
 
 ### Added
