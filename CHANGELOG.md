@@ -4,6 +4,14 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Notes
+
+- `teamctl-ui` splitscreen accepts both `Ctrl+|` and `Ctrl+-`
+  chords (PR-UI-6) but the visual layout collapses both into a
+  shared 2×2 tile grid for now. Vim/tmux operators' muscle memory
+  is preserved on the chord side; lifting the visual to honour
+  vertical-vs-horizontal subdivision is a PR-UI-7 polish item.
+
 ## [0.4.0] — 2026-04-30
 
 ### Added

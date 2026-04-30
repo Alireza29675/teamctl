@@ -1032,6 +1032,15 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 // (yet) distinguish vertical vs horizontal — we
                 // tile splits in a 2×2 grid; the chords just say
                 // "give me one more split."
+                //
+                // TODO(PR-UI-7): lift the visual to honour the
+                // chord pair — `Ctrl+|` subdivides vertically,
+                // `Ctrl+-` horizontally — so vim/tmux operators'
+                // muscle memory matches what they see. The chord
+                // pair itself is preserved here precisely so that
+                // muscle memory stays trained while the visual
+                // catches up. CHANGELOG `[Unreleased]` flags the
+                // temporary collapse.
                 KeyCode::Char('|') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.add_detail_split()
                 }
@@ -1127,7 +1136,18 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                         KeyCode::Down | KeyCode::Char('j') => app.picker_next(),
                         KeyCode::Up | KeyCode::Char('k') => app.picker_prev(),
                         KeyCode::Enter => app.picker_confirm(),
-                        KeyCode::Esc => app.close_compose_modal(),
+                        // PR-UI-6 fixup (Q6, dev2 review): Esc
+                        // dismisses the picker overlay only and
+                        // returns to the editor with whatever the
+                        // operator already typed; the editor's own
+                        // Esc-Esc cancel-the-modal flow handles
+                        // bailing out of the whole compose. Mirrors
+                        // the overlay-vs-modal symmetry vim users
+                        // expect.
+                        KeyCode::Esc => {
+                            app.compose_picker_open = false;
+                            app.compose_picker_index = 0;
+                        }
                         _ => {}
                     }
                 } else {
@@ -1962,6 +1982,140 @@ mod tests {
             key_with(KeyCode::Char('h'), KeyModifiers::CONTROL),
         );
         assert_eq!(app.selected_split, 2);
+    }
+
+    #[test]
+    fn wall_scroll_at_exactly_cap_agents_does_not_scroll() {
+        // PR-UI-6 fixup (qa Gap 1a): with exactly WALL_TILE_CAP=4
+        // agents the entire team fits in one window — scrolling
+        // is a no-op in both directions. Pinning this catches a
+        // future `<` → `<=` slip in `wall_scroll_down`.
+        let mut app = App::new();
+        let agents: Vec<_> = (1..=4)
+            .map(|i| agent(&format!("p:agent-{i}"), AgentState::Running))
+            .collect();
+        app.replace_team(fixture_team(agents));
+        app.dismiss_splash();
+        app.toggle_wall_layout();
+        assert_eq!(app.wall_scroll, 0);
+        app.wall_scroll_down();
+        assert_eq!(app.wall_scroll, 0, "exactly-cap should not advance");
+        app.wall_scroll_up();
+        assert_eq!(app.wall_scroll, 0);
+    }
+
+    #[test]
+    fn wall_scroll_at_cap_plus_one_advances_then_stops() {
+        // PR-UI-6 fixup (qa Gap 1b): exactly 5 agents → 4 fit in
+        // window-0, the 5th lives at window-4. One scroll
+        // advances; the next caps. Pins the off-by-one between 4
+        // and 5 agents.
+        let mut app = App::new();
+        let agents: Vec<_> = (1..=5)
+            .map(|i| agent(&format!("p:agent-{i}"), AgentState::Running))
+            .collect();
+        app.replace_team(fixture_team(agents));
+        app.dismiss_splash();
+        app.toggle_wall_layout();
+        app.wall_scroll_down();
+        assert_eq!(app.wall_scroll, 4, "first scroll exposes agent 5");
+        app.wall_scroll_down();
+        assert_eq!(app.wall_scroll, 4, "second scroll caps; nothing past");
+    }
+
+    #[test]
+    fn esc_in_picker_dismisses_overlay_only_keeps_modal_open() {
+        // PR-UI-6 fixup (Q6 dev2 review + qa Gap 3): Esc inside
+        // the broadcast picker should close the picker overlay
+        // and return to the editor in its current state — NOT
+        // close the whole compose modal. Editor's Esc-Esc
+        // already handles cancel-the-modal.
+        let mut app = App::new();
+        app.replace_team(fixture_team_with_channels(
+            vec![agent("writing:manager", AgentState::Running)],
+            vec![
+                channel("writing:all", "writing"),
+                channel("writing:editorial", "writing"),
+            ],
+        ));
+        app.dismiss_splash();
+        dispatch(&mut app, key(KeyCode::Char('!')));
+        assert!(app.compose_picker_open);
+        assert_eq!(app.stage, Stage::ComposeModal);
+        dispatch(&mut app, key(KeyCode::Esc));
+        assert!(!app.compose_picker_open, "picker dismissed");
+        assert_eq!(app.stage, Stage::ComposeModal, "compose modal stays open");
+    }
+
+    #[test]
+    fn send_routes_broadcast_through_mock_sender_via_picker() {
+        // PR-UI-6 fixup (qa Gap 4): the broadcast path needs the
+        // same MockMessageSender pin the DM path got in PR-UI-5.
+        // Pins both per-channel-correct-id (picker selection
+        // flows through to the send call) AND routes-through-
+        // `broadcast()`-not-`send()` (no DM call recorded).
+        use crate::compose::test_support::MockMessageSender;
+        let sender = MockMessageSender::default();
+        let mailbox = EmptyMailbox;
+        let mut app = App::new();
+        app.replace_team(fixture_team_with_channels(
+            vec![agent("writing:manager", AgentState::Running)],
+            vec![
+                channel("writing:all", "writing"),
+                channel("writing:editorial", "writing"),
+                channel("writing:critique", "writing"),
+            ],
+        ));
+        app.dismiss_splash();
+        // Open picker, walk to channel index 1 (`editorial`),
+        // confirm, type a body, Ctrl+Enter to send.
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Char('!')),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+        );
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Char('j')),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+        );
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Enter),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+        );
+        for c in "ship docs".chars() {
+            super::handle_event(
+                &mut app,
+                key(KeyCode::Char(c)),
+                &NoopDecider,
+                &sender,
+                &mailbox,
+            );
+        }
+        super::handle_event(
+            &mut app,
+            key_with(KeyCode::Enter, crossterm::event::KeyModifiers::CONTROL),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+        );
+        let dm_calls = sender.dm_calls.lock().unwrap().clone();
+        let bcast_calls = sender.broadcast_calls.lock().unwrap().clone();
+        assert!(dm_calls.is_empty(), "broadcast must not route via send_dm");
+        assert_eq!(bcast_calls.len(), 1);
+        assert_eq!(
+            bcast_calls[0].0, "writing:editorial",
+            "channel id from picker selection"
+        );
+        assert_eq!(bcast_calls[0].1, "ship docs");
+        assert_eq!(app.stage, Stage::Triptych, "modal closes on send");
     }
 
     #[test]
