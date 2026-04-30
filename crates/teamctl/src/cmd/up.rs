@@ -27,6 +27,14 @@ pub fn run(root: &Path) -> Result<()> {
         sup.up(&spec)?;
         println!("up · {}", h.id());
     }
+
+    // Persist the applied-state snapshot so a reload immediately
+    // afterwards correctly sees zero diff. Before this, `up` left
+    // `state/applied.json` absent, and the first reload misreported
+    // every agent as `added`.
+    let bin = super::team_mcp_bin().display().to_string();
+    let snap = super::snapshot::compute(&compose, &bin);
+    super::snapshot::write(&compose.root, &snap)?;
     Ok(())
 }
 

@@ -27,6 +27,7 @@ regex = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 portable-pty = "0.9"
 libc = "0.2"
+blake3.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

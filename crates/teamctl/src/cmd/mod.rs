@@ -14,6 +14,7 @@ pub mod mail;
 pub mod reload;
 pub mod rl_watch;
 pub mod send;
+pub mod snapshot;
 pub mod status;
 pub mod tail;
 pub mod up;
