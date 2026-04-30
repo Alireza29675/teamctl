@@ -4,113 +4,75 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-30
+
 ### Added
 
-- `teamctl init <name>` scaffolds a fresh `<name>/.team/` tree
-  with the `solo` template by default (T-045). One manager + one
-  dev, both on Claude Code, with prose-led pedagogy comments
-  inline in `team-compose.yaml` and `projects/main.yaml` so
-  first-time users learn the schema by reading the generated
-  files. `teamctl validate` against the new tree passes
-  immediately. `--template <solo|blank>` picks the template;
-  `--project <id>` overrides the derived project id; `--force`
-  overwrites an existing `.team/` at the target path; the
-  pre-existing in-place flow (`teamctl init` with no name) still
-  works.
-- `teamctl reload --dry-run` prints the reload plan without
-  rendering, registering, or touching any agent. Output mirrors a
-  real reload's per-line format (`removed`, `changed`, `added`)
-  with a `(dry run)` annotation; the plan is computed via the
-  same `ReloadPlan` object the apply path uses, so preview and
-  apply cannot drift.
-- Graceful drain at the supervisor layer. `Supervisor::drain` —
-  used by reload for the prior-side teardown of `change` and
-  `remove` entities — sends SIGINT (Ctrl-C into the tmux pane),
-  polls for `Stopped` up to `compose.global.supervisor.drain_timeout_secs`,
-  and falls through to a hard `kill-session` if the agent
-  doesn't exit in time. Entities killed by the fallthrough get a
-  `[drain timed out — killed]` annotation in the per-line log so
-  operators can tune the timeout.
-- `compose.global.supervisor.drain_timeout_secs` field. Default
-  10s; set to 0 to disable graceful drain (matches pre-PR-B hard
-  kill). Validation rejects values above 600 to catch typo'd
-  large numbers (e.g. 86400) that would stall reload.
-- First-class `effort` field on the per-agent `team-compose.yaml`
-  schema (T-048). Accepts the five values claude-code's
-  `--effort` understands — `low` / `medium` / `high` / `xhigh`
-  / `max`. Renders as `EFFORT=<value>` in the agent's env file
-  and is forwarded to `claude --effort <value>` by the wrapper.
-  Strict enum: typos like `effort: hgih` fail compose
-  validation at parse time with an error enumerating the valid
-  set, rather than silently falling back to the wrapper
-  default. Precedence (highest first): per-agent YAML →
-  workspace `.env` `EFFORT=` → no flag (claude's own default).
+- `teamctl init` subcommand. Drops a `.team/` skeleton into the
+  current directory (or any path passed as a positional). Two
+  templates today — `solo` (single agent, single channel — the
+  default and the right starting point for "drop teamctl into
+  this project") and `blank` (empty `.team/` ready to fill in).
+  Refuses to overwrite an existing non-empty `.team/` without
+  `--force`. Generated files include short prose comments
+  explaining what to edit next.
+- Snapshot v2 + first-class `ReloadPlan`. `teamctl reload --dry-run`
+  now prints the plan that *would* execute — adds, removes,
+  restarts, and skips — without touching anything. Snapshot
+  hashing is deterministic across runs (blake3 over normalised
+  inputs), so "did this agent's config change?" stops flapping
+  on Rust's per-process `DefaultHasher` salt.
+- Reload drain. When an agent gets restarted by reload, its
+  in-flight work is given a chance to finish first. Configurable
+  via `drain_timeout_secs` in `team-compose.yaml` (default: 10
+  seconds; cap 600). `0` short-circuits to instant restart for
+  the cases where you really mean it.
+- First-class `effort` field on the per-agent schema in
+  `team-compose.yaml`. Accepts `low | medium | high | xhigh |
+  max`; renders to `EFFORT=<level>` in the generated agent env
+  and flows through to `claude --effort <level>`. Precedence:
+  per-agent YAML > workspace `.env` > wrapper default. Strict
+  enum — typos like `hgih` fail compose validation loudly with
+  the offending agent named.
+- Reload now persists each agent's tmux session name in the
+  snapshot, so removing or restarting an agent always targets
+  the right session — even if `supervisor.tmux_prefix` was
+  changed between reloads.
 
 ### Changed
 
-- README onboarding refreshed (T-046). Drops the Mermaid topology
-  diagram and adds a four-command Getting-started arc
-  (`cd` → `teamctl init` → `up` → `reload`) that leads with the
-  in-place flow — teamctl integrates into an existing project
-  rather than scaffolding a fresh one. A first-time reader can
-  copy-paste the snippet inside their own repo and end up with
-  a running team without leaving the README.
-- Root resolution is now `--root` / `-C` flag → `TEAMCTL_ROOT` env →
-  walk-up from cwd to the first `.team/team-compose.yaml`. The
-  registered-context fallback was retired (T-008): `teamctl context`
-  no longer participates in root discovery. Operators must `cd` into
-  a tree containing `.team/` or pass `-C <path>`.
-- `teamctl up` no longer auto-registers a context entry under
-  `~/.config/teamctl/contexts.json` (T-008). Walk-up handles the
-  common case; explicit registration with `teamctl context add`
-  still works during the deprecation window.
-- The legacy flat-layout fallback (a `team-compose.yaml` at cwd or
-  found by walk-up without a `.team/` wrapper) is gone from CLI
-  discovery. The convention is `.team/`, no exceptions.
-- **Migration:** projects that kept `team-compose.yaml` at the
-  project root should move it (along with `projects/`, `roles/`,
-  `runtimes/`, `.env.example`, `.gitignore`) into a new `.team/`
-  directory at the same level — `teamctl` then walks up to the
-  first `.team/` from any subdirectory. Operators who relied on
-  the registered-context flow should switch to `cd <project>`
-  before running `teamctl`, or pass `-C <path>` explicitly.
-- `state/applied.json` is now schema v2: a self-describing snapshot
-  with per-entity persisted `tmux_session` + `env_file` paths,
-  per-input fingerprints (`env`, `mcp`, `role_prompt`), a top-level
-  `compose_digest`, and a `global` block capturing the supervisor
-  type, `tmux_prefix`, and broker path that were applied. Schema v1
-  files are treated as "no prior snapshot" — first reload after
-  upgrade is a clean re-apply (one-time mass restart).
-- Reload now drives off a first-class `ReloadPlan`
-  (`add` / `change` / `remove` / `keep`). Output annotates which
-  inputs changed (`changed · p:a (env+role_prompt)`).
-- Removed and changed agents are torn down using their *prior*
-  tmux session name from the snapshot rather than a name
-  reconstructed from the current compose. This fixes a silent
-  session leak when `global.supervisor.tmux_prefix` was rotated
-  between applies.
-- `role_prompt` fingerprinting distinguishes three cases — `None`
-  (path unset), `Missing(path)` (path set but file absent), and
-  `Present(hash)`. The prior behaviour silently treated a missing
-  file as empty bytes, masking typo'd paths and deleted-underneath
-  regressions.
-- All applied-state hashing moved to `blake3`. The previous
-  `DefaultHasher` did not guarantee cross-version stability, so a
-  Rust toolchain upgrade silently invalidated `applied.json` and
-  triggered a full mass-restart on the next reload.
+- `.team/` is now the canonical project root. Discovery walks up
+  from cwd to the **first** `.team/` it finds and runs that team
+  — npm/yarn shape, no auto-register-context magic. Operators
+  `cd` into the project they're working on (or pass `-C <path>`)
+  and `teamctl up` / `reload` / `ps` resolve naturally.
+- Worktree-friendly runtime state. Each `.team/state/` is now
+  intended to be gitignored; per-worktree runtime state lives
+  inside the worktree's own `.team/`, while the `.team/` source
+  layout (compose, roles, projects) is shared via git. Two
+  worktrees of the same repo can run two independent agent
+  teams side by side.
+- `examples/*` restructured to the `.team/` convention. Every
+  example now runs with `cd examples/<name> && teamctl up` —
+  no `-C` flags. The `oss-maintainer` example demonstrates a
+  non-default `effort:` field; new cookbook entry at
+  `/cookbook/effort/` documents the field, the five accepted
+  values, and the precedence rule.
+- README rewritten with a project-voice "Getting started" arc
+  showing the canonical flow: `cd /path/to/your/project`,
+  `teamctl init`, `teamctl up`, `teamctl reload`. Frames teamctl
+  as the team-of-agents that fits *into* your existing project,
+  not a project scaffolder. The Mermaid diagram is gone.
 
 ### Deprecated
 
-- `teamctl context` (`ls`, `current`, `use`, `add`, `rm`) now prints
-  a one-line stderr deprecation note on every invocation. The
-  command stub remains for one release so existing scripts don't
-  break; full removal is scheduled for 0.4.x.
-
-### Fixed
-
-- `teamctl up` now writes the applied snapshot. The first reload
-  after `up` is a no-op rather than misreporting every agent as
-  `added`.
+- `teamctl context`. The `.team/` walk-up replaces every shape
+  the registered-context model used to handle. The command still
+  works in 0.4.0 with a stderr deprecation note; **scheduled for
+  removal in 0.5.0**. Migrate by `cd`-ing into the project root
+  (or using `-C <path>`) before running teamctl commands; if you
+  used `teamctl context use <path>` to pin a default, the new
+  shape is to put a `.team/` in that path.
 
 ## [0.3.0] — 2026-04-30
 
