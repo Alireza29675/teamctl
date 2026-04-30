@@ -14,7 +14,7 @@ rust-version = "1.78"
 license = "MIT"
 repository = "https://github.com/Alireza29675/teamctl"
 homepage = "https://teamctl.run"
-authors = ["Alireza Sheikholmolouki <alireza.sheikholmolouki@gmail.com>"]
+authors = ["teamctl contributors"]
 
 [workspace.dependencies]
 anyhow = "1"
