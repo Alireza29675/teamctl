@@ -33,8 +33,8 @@ cp -r /path/to/teamctl/examples/market-analysts ~/markets
 cd ~/markets
 
 # 4. Fill in token + chat id.
-cp .env.example .env
-$EDITOR .env
+cp .team/.env.example .team/.env
+$EDITOR .team/.env
 
 # 5. Workspace for notes, transcripts, research files.
 mkdir -p workspace
@@ -43,7 +43,7 @@ mkdir -p workspace
 ## Run
 
 ```bash
-set -a; . ./.env; set +a
+set -a; . ./.team/.env; set +a
 
 teamctl validate
 teamctl up
