@@ -191,7 +191,8 @@ fn render_channels_list(buf: &mut Buffer, area: Rect, app: &App) {
 }
 
 fn render_channel_feed(buf: &mut Buffer, area: Rect, app: &App) {
-    let title = match app.selected_channel.and_then(|i| app.team.channels.get(i)) {
+    let selected = app.selected_channel.and_then(|i| app.team.channels.get(i));
+    let title = match selected {
         Some(ch) => format!("FEED · #{}", ch.name),
         None => "FEED".into(),
     };
@@ -201,13 +202,18 @@ fn render_channel_feed(buf: &mut Buffer, area: Rect, app: &App) {
         .border_style(Style::default().fg(app.capabilities.muted()));
     let inner = block.inner(area);
     block.render(area, buf);
-    // PR-UI-6 reuses the existing `mailbox.channel` buffer as the
-    // feed surface — same data, re-emphasised. Per-channel filter
-    // narrowing rides on PR-UI-3's existing `channel_feed` query
-    // (filtered server-side); the UI just shows the rolled-up
-    // feed for the focused channel.
-    let rows = app.mailbox.rows(crate::mailbox::MailboxTab::Channel);
-    if rows.is_empty() {
+    // PR-UI-6 fixup (Q3, dev2 review): the rolled-up
+    // `mailbox.channel` buffer carries every channel row the
+    // focused agent receives; filter to the selected channel so
+    // the title's `FEED · #editorial` reads truthfully. Rows
+    // whose `recipient` doesn't match `channel:<channel.id>` get
+    // dropped on the floor.
+    let all_rows = app.mailbox.rows(crate::mailbox::MailboxTab::Channel);
+    let filtered: Vec<&crate::mailbox::MessageRow> = match selected {
+        Some(ch) => filter_rows_for_channel(all_rows, &ch.id),
+        None => all_rows.iter().collect(),
+    };
+    if filtered.is_empty() {
         Paragraph::new("(no channel traffic)")
             .style(Style::default().fg(app.capabilities.muted()))
             .alignment(Alignment::Center)
@@ -215,8 +221,8 @@ fn render_channel_feed(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
     let cap = inner.height as usize;
-    let start = rows.len().saturating_sub(cap);
-    let lines: Vec<Line<'_>> = rows[start..]
+    let start = filtered.len().saturating_sub(cap);
+    let lines: Vec<Line<'_>> = filtered[start..]
         .iter()
         .map(|r| Line::raw(crate::mailbox::render_row(r)))
         .collect();
@@ -254,4 +260,70 @@ fn render_participants(buf: &mut Buffer, area: Rect, app: &App) {
         .map(|info| Line::raw(format!("  {}", info.agent)))
         .collect();
     Paragraph::new(lines).render(inner, buf);
+}
+
+/// Drop every row whose `recipient` doesn't match
+/// `channel:<channel_id>`. Pulled out as a free function so unit
+/// tests can pin the contract without rendering — feed pane Q3
+/// fixup per dev2's PR-UI-6 review.
+pub fn filter_rows_for_channel<'a>(
+    rows: &'a [crate::mailbox::MessageRow],
+    channel_id: &str,
+) -> Vec<&'a crate::mailbox::MessageRow> {
+    let target = format!("channel:{channel_id}");
+    rows.iter().filter(|r| r.recipient == target).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mailbox::MessageRow;
+
+    fn row(id: i64, recipient: &str) -> MessageRow {
+        MessageRow {
+            id,
+            sender: "p:m".into(),
+            recipient: recipient.into(),
+            text: format!("body {id}"),
+            sent_at: 0.0,
+        }
+    }
+
+    #[test]
+    fn filter_keeps_only_matching_channel_rows() {
+        let rows = vec![
+            row(1, "channel:writing:editorial"),
+            row(2, "channel:writing:critique"),
+            row(3, "channel:writing:editorial"),
+            row(4, "channel:writing:all"),
+        ];
+        let kept = filter_rows_for_channel(&rows, "writing:editorial");
+        let ids: Vec<i64> = kept.iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    #[test]
+    fn filter_returns_empty_when_no_rows_match() {
+        let rows = vec![
+            row(1, "channel:writing:critique"),
+            row(2, "channel:writing:all"),
+        ];
+        let kept = filter_rows_for_channel(&rows, "writing:editorial");
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn filter_does_not_match_dm_rows_with_same_id_suffix() {
+        // A DM to `<project>:<agent>` must never leak into a
+        // channel-feed view, even when the agent name happens to
+        // collide with a channel name. The `channel:` prefix in
+        // the target string keeps that disjoint.
+        let rows = vec![
+            row(1, "writing:editorial"), // looks like an agent id
+            row(2, "channel:writing:editorial"),
+        ];
+        let kept = filter_rows_for_channel(&rows, "writing:editorial");
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].id, 2);
+    }
 }
