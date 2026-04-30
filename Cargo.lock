@@ -2233,6 +2233,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "insta",
+ "notify",
  "ratatui",
  "rusqlite",
  "serde",
