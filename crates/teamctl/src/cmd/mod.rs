@@ -13,6 +13,7 @@ pub mod logs;
 pub mod mail;
 pub mod reload;
 pub mod rl_watch;
+pub mod snapshot;
 pub mod send;
 pub mod status;
 pub mod tail;

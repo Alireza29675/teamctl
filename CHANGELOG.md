@@ -25,6 +25,30 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   first `.team/` from any subdirectory. Operators who relied on
   the registered-context flow should switch to `cd <project>`
   before running `teamctl`, or pass `-C <path>` explicitly.
+- `state/applied.json` is now schema v2: a self-describing snapshot
+  with per-entity persisted `tmux_session` + `env_file` paths,
+  per-input fingerprints (`env`, `mcp`, `role_prompt`), a top-level
+  `compose_digest`, and a `global` block capturing the supervisor
+  type, `tmux_prefix`, and broker path that were applied. Schema v1
+  files are treated as "no prior snapshot" — first reload after
+  upgrade is a clean re-apply (one-time mass restart).
+- Reload now drives off a first-class `ReloadPlan`
+  (`add` / `change` / `remove` / `keep`). Output annotates which
+  inputs changed (`changed · p:a (env+role_prompt)`).
+- Removed and changed agents are torn down using their *prior*
+  tmux session name from the snapshot rather than a name
+  reconstructed from the current compose. This fixes a silent
+  session leak when `global.supervisor.tmux_prefix` was rotated
+  between applies.
+- `role_prompt` fingerprinting distinguishes three cases — `None`
+  (path unset), `Missing(path)` (path set but file absent), and
+  `Present(hash)`. The prior behaviour silently treated a missing
+  file as empty bytes, masking typo'd paths and deleted-underneath
+  regressions.
+- All applied-state hashing moved to `blake3`. The previous
+  `DefaultHasher` did not guarantee cross-version stability, so a
+  Rust toolchain upgrade silently invalidated `applied.json` and
+  triggered a full mass-restart on the next reload.
 
 ### Deprecated
 
@@ -32,6 +56,12 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   a one-line stderr deprecation note on every invocation. The
   command stub remains for one release so existing scripts don't
   break; full removal is scheduled for 0.4.x.
+
+### Fixed
+
+- `teamctl up` now writes the applied snapshot. The first reload
+  after `up` is a no-op rather than misreporting every agent as
+  `added`.
 
 ## [0.3.0] — 2026-04-30
 

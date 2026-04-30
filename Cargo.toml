@@ -30,6 +30,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 notify = "6"
 schemars = "0.8"
 team-core = { path = "crates/team-core", version = "0.3.0" }
+blake3 = "1"
 
 [profile.release]
 lto = "thin"
