@@ -131,11 +131,9 @@ impl Supervisor for TmuxSupervisor {
         let _ = Command::new("tmux")
             .args(["send-keys", "-t", &spec.tmux_session, "C-c"])
             .status();
-        let outcome = poll_for_stopped(
-            timeout,
-            POLL_INTERVAL,
-            || self.state(spec).unwrap_or(AgentState::Unknown),
-        );
+        let outcome = poll_for_stopped(timeout, POLL_INTERVAL, || {
+            self.state(spec).unwrap_or(AgentState::Unknown)
+        });
         if outcome == DrainOutcome::TimedOutKilled {
             self.down(spec)?;
         }
@@ -174,43 +172,33 @@ mod drain_tests {
     #[test]
     fn poll_returns_graceful_when_stopped_observed_in_time() {
         let calls = RefCell::new(0u32);
-        let outcome = poll_for_stopped(
-            Duration::from_millis(50),
-            Duration::from_millis(1),
-            || {
-                let mut n = calls.borrow_mut();
-                *n += 1;
-                if *n >= 2 {
-                    AgentState::Stopped
-                } else {
-                    AgentState::Running
-                }
-            },
-        );
+        let outcome = poll_for_stopped(Duration::from_millis(50), Duration::from_millis(1), || {
+            let mut n = calls.borrow_mut();
+            *n += 1;
+            if *n >= 2 {
+                AgentState::Stopped
+            } else {
+                AgentState::Running
+            }
+        });
         assert_eq!(outcome, DrainOutcome::Graceful);
     }
 
     #[test]
     fn poll_falls_through_to_kill_when_agent_never_stops() {
-        let outcome = poll_for_stopped(
-            Duration::from_millis(8),
-            Duration::from_millis(2),
-            || AgentState::Running,
-        );
+        let outcome = poll_for_stopped(Duration::from_millis(8), Duration::from_millis(2), || {
+            AgentState::Running
+        });
         assert_eq!(outcome, DrainOutcome::TimedOutKilled);
     }
 
     #[test]
     fn poll_zero_timeout_only_checks_once_then_kills() {
         let mut calls: u32 = 0;
-        let outcome = poll_for_stopped(
-            Duration::from_millis(0),
-            Duration::from_millis(1),
-            || {
-                calls += 1;
-                AgentState::Running
-            },
-        );
+        let outcome = poll_for_stopped(Duration::from_millis(0), Duration::from_millis(1), || {
+            calls += 1;
+            AgentState::Running
+        });
         assert_eq!(outcome, DrainOutcome::TimedOutKilled);
         assert_eq!(calls, 1, "single state observation before timeout");
     }
