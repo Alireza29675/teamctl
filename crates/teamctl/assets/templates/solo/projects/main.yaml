@@ -1,21 +1,49 @@
+# projects/main.yaml — one project, one team of agents.
+#
+# Each project is an isolated team with its own channels and roster.
+# Messages from one project cannot reach another without an explicit
+# bridge. This file describes a single project; add more files alongside
+# and list them in `team-compose.yaml::projects` to add more.
+
 version: 2
 
 project:
+  # `id` is the short handle used in `teamctl send <id>:<agent>` and
+  # in inter-agent DMs. Keep it kebab-case and stable.
   id: {{project_id}}
+  # `name` is the human label that shows up in logs and dashboards.
   name: {{project_name}}
+  # `cwd` is where each agent is launched from. `./workspace` keeps the
+  # agents' working tree separate from the team config; create that
+  # directory (or change the path) before running `teamctl up`.
   cwd: ./workspace
 
+# Channels are broadcast groups. `members: "*"` includes every agent
+# in this project. Use explicit lists to scope a channel to specific
+# agents (e.g. `members: [manager, dev]`).
 channels:
   - name: all
     members: "*"
 
+# Managers are agents with `is_manager: true` semantics — they can
+# `reply_to_user` to talk back through the configured interface
+# adapter (Telegram, etc.), and they're the natural router for
+# inbound traffic from humans.
 managers:
   manager:
+    # `claude-code` is the default. `codex` and `gemini` also work;
+    # see the runtime descriptors under `runtimes/` for the contract.
     runtime: claude-code
     model: claude-opus-4-7
     role_prompt: roles/manager.md
+    # `auto` lets the agent run tools without a human prompt.
+    # Combine with `autonomy: low_risk_only` (the default) to keep
+    # destructive actions behind `request_approval` HITL gates.
     permission_mode: auto
     reports_to_user: true
+    # ACLs: who can this agent DM, and which channels can it
+    # broadcast to. Keep these tight — over-broad ACLs are how
+    # multi-agent setups become noisy.
     can_dm: [dev]
     can_broadcast: [all]
 
@@ -24,6 +52,9 @@ workers:
     runtime: claude-code
     model: claude-sonnet-4-6
     role_prompt: roles/dev.md
+    # `reports_to` builds the org chart Telegram approval routing
+    # walks; the dev's approval requests surface in the manager's
+    # operator chat (when an interface is configured).
     reports_to: manager
     can_dm: [manager]
     can_broadcast: [all]

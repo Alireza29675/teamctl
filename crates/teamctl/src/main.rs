@@ -29,14 +29,24 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     // ── Setup ────────────────────────────────────────────────────────
-    /// Scaffold a fresh `.team/` directory in the current repo.
+    /// Scaffold a fresh `.team/` directory.
+    ///
+    /// With `name`: creates `<name>/<name>/.team/...` so a fresh
+    /// `cd <name> && teamctl up` Just Works. Without `name`: scaffolds
+    /// `.team/` in the current directory.
     Init {
-        /// Template name. Use `--list` to see options.
+        /// Folder name to create. Doubles as the default project id.
+        /// When omitted, scaffolds `.team/` directly in cwd.
+        name: Option<String>,
+        /// Template name. Defaults to `solo`. Known: `solo`, `blank`.
         #[arg(long)]
         template: Option<String>,
-        /// Project id (default: derived from the repo directory name).
+        /// Project id override (default: derived from `name` or cwd).
         #[arg(long)]
         project: Option<String>,
+        /// Overwrite an existing `.team/` at the target path.
+        #[arg(long)]
+        force: bool,
         /// Skip prompts; accept defaults.
         #[arg(long, short = 'y')]
         yes: bool,
@@ -198,12 +208,14 @@ fn main() -> Result<()> {
 
     // Some commands don't need a resolved root — handle them up front.
     if let Command::Init {
+        name,
         template,
         project,
+        force,
         yes,
     } = cli.command
     {
-        return cmd::init::run(template, project, yes);
+        return cmd::init::run(name, template, project, force, yes);
     }
     if let Command::Context { action } = &cli.command {
         return match action {
