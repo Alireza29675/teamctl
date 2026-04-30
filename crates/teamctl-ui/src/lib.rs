@@ -7,6 +7,7 @@ pub mod app;
 pub mod approvals;
 pub mod compose;
 pub mod data;
+pub mod layouts;
 pub mod mailbox;
 pub mod pane;
 pub mod splash;

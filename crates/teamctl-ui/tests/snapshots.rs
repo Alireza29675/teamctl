@@ -102,6 +102,7 @@ fn fixture_team(team_name: &str, agents: Vec<AgentInfo>) -> TeamSnapshot {
         root: std::path::PathBuf::from("/fixture"),
         team_name: team_name.into(),
         agents,
+        channels: Vec::new(),
     }
 }
 
