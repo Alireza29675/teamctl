@@ -5,6 +5,17 @@ members = [
     "crates/teamctl",
     "crates/team-mcp",
     "crates/team-bot",
+    "crates/teamctl-ui",
+]
+# `teamctl-ui` is opt-in: it pulls a TUI dep tree (ratatui + crossterm)
+# that the release flow + cargo-dist bundles don't need. Plain
+# `cargo build` / `cargo test` target only the four default members
+# below; the TUI crate is built with `-p teamctl-ui` or `--workspace`.
+default-members = [
+    "crates/team-core",
+    "crates/teamctl",
+    "crates/team-mcp",
+    "crates/team-bot",
 ]
 
 [workspace.package]
@@ -31,6 +42,8 @@ notify = "6"
 schemars = "0.8"
 team-core = { path = "crates/team-core", version = "0.4.0" }
 blake3 = "1"
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+crossterm = "0.28"
 
 [profile.release]
 lto = "thin"
