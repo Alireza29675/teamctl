@@ -70,6 +70,7 @@ managers:
     telegram_inbox: true
     reports_to_user: true
     autonomy: low_risk_only
+    effort: max
     can_dm: [pm, dev1, dev2, dev3, qa]
     can_broadcast: [all, leads, dev]
     interfaces:
@@ -148,6 +149,7 @@ workers:
     role_prompt: roles/qa.md
     permission_mode: auto
     autonomy: proposal_only
+    effort: max
     reports_to: eng_lead
     can_dm: [eng_lead, pm, dev1, dev2, dev3]
     can_broadcast: [all, dev]
