@@ -6,6 +6,17 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ### Added
 
+- `teamctl init <name>` scaffolds a fresh `<name>/.team/` tree
+  with the `solo` template by default (T-045). One manager + one
+  dev, both on Claude Code, with prose-led pedagogy comments
+  inline in `team-compose.yaml` and `projects/main.yaml` so
+  first-time users learn the schema by reading the generated
+  files. `teamctl validate` against the new tree passes
+  immediately. `--template <solo|blank>` picks the template;
+  `--project <id>` overrides the derived project id; `--force`
+  overwrites an existing `.team/` at the target path; the
+  pre-existing in-place flow (`teamctl init` with no name) still
+  works.
 - First-class `effort` field on the per-agent `team-compose.yaml`
   schema (T-048). Accepts the five values claude-code's
   `--effort` understands — `low` / `medium` / `high` / `xhigh`

@@ -1,9 +1,12 @@
-//! `teamctl init [--template <name>] [--yes]`
+//! `teamctl init [name] [--template <name>] [--project <id>] [--force] [--yes]`
 //!
-//! Scaffold a `.team/` directory in the current repo. Templates are baked
-//! into the binary so `init` works offline and produces consistent output.
-//! When run interactively (no `--yes`), the user picks a template, names
-//! the project, and confirms.
+//! Scaffold a `.team/` directory. With `name`, creates `<cwd>/<name>/.team/`
+//! so a fresh `cd <name> && teamctl up` Just Works. Without `name`,
+//! scaffolds `.team/` directly in cwd (the legacy in-place flow). Templates
+//! are baked into the binary so `init` works offline and produces
+//! consistent output. When run interactively (no `--yes`), the user picks a
+//! template and confirms; `--yes` accepts the `solo` template silently.
+//! `--force` overwrites an existing `.team/` at the target path.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -80,14 +83,36 @@ pub const TEMPLATES: &[Template] = &[
     },
 ];
 
-pub fn run(template: Option<String>, project_id: Option<String>, yes: bool) -> Result<()> {
+pub fn run(
+    name: Option<String>,
+    template: Option<String>,
+    project_id: Option<String>,
+    force: bool,
+    yes: bool,
+) -> Result<()> {
     let cwd = std::env::current_dir().context("get cwd")?;
-    let target = cwd.join(".team");
+
+    // Target layout:
+    //   teamctl init my-team   →  <cwd>/my-team/.team/...   (`name` set)
+    //   teamctl init           →  <cwd>/.team/...           (in-place)
+    let (parent, target) = match &name {
+        Some(n) => {
+            let dir = cwd.join(n);
+            (dir.clone(), dir.join(".team"))
+        }
+        None => (cwd.clone(), cwd.join(".team")),
+    };
+
     if target.exists() {
-        bail!(
-            "{} already exists. Remove it or pick a different directory.",
-            target.display()
-        );
+        if force {
+            fs::remove_dir_all(&target)
+                .with_context(|| format!("--force: remove existing {}", target.display()))?;
+        } else {
+            bail!(
+                "{} already exists. Pass --force to overwrite, or pick a different name.",
+                target.display()
+            );
+        }
     }
 
     let tpl = match template {
@@ -102,10 +127,15 @@ pub fn run(template: Option<String>, project_id: Option<String>, yes: bool) -> R
         None => choose_template_interactive()?,
     };
 
+    // Project id derives from (in order): explicit --project flag,
+    // positional `name`, parent-directory basename. The slugify pass
+    // is the same for all three so a name like "My Team!" still
+    // produces a usable id.
     let pid = project_id.unwrap_or_else(|| {
-        cwd.file_name()
-            .and_then(|s| s.to_str())
+        name.as_deref()
             .map(slugify)
+            .filter(|s| !s.is_empty())
+            .or_else(|| parent.file_name().and_then(|s| s.to_str()).map(slugify))
             .unwrap_or_else(|| "main".into())
     });
 
@@ -115,7 +145,7 @@ pub fn run(template: Option<String>, project_id: Option<String>, yes: bool) -> R
 
     if !yes {
         eprintln!();
-        eprintln!("About to scaffold `.team/` in {}:", cwd.display());
+        eprintln!("About to scaffold `.team/` at {}:", target.display());
         eprintln!("  template:    {} ({})", tpl.label, tpl.key);
         eprintln!("  project id:  {pid}");
         eprintln!("  files:");
@@ -141,6 +171,10 @@ pub fn run(template: Option<String>, project_id: Option<String>, yes: bool) -> R
     println!("✓ {} scaffolded.", target.display());
     println!();
     println!("Next:");
+    if name.is_some() {
+        let display = name.as_deref().unwrap_or(".");
+        println!("  cd {display}");
+    }
     println!("  cp .team/.env.example .team/.env   # edit secrets");
     println!("  teamctl validate                   # sanity-check");
     println!("  teamctl up                         # start the team");

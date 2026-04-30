@@ -312,6 +312,99 @@ fn context_subcommand_emits_deprecation_warning() {
 }
 
 #[test]
+fn init_with_name_creates_team_folder_that_validates() {
+    // T-045: `teamctl init my-team --yes` should produce a tree that
+    // `teamctl --root my-team/.team validate` accepts.
+    let tmp = tempdir().unwrap();
+    let home = tempdir().unwrap();
+
+    let init = Command::new(bin())
+        .env_clear()
+        .env("HOME", home.path())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .current_dir(tmp.path())
+        .args(["init", "my-team", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "init failed: stderr={}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let team_dir = tmp.path().join("my-team/.team");
+    for f in [
+        "team-compose.yaml",
+        "projects/main.yaml",
+        "roles/manager.md",
+        "roles/dev.md",
+        ".env.example",
+        ".gitignore",
+        "README.md",
+    ] {
+        assert!(team_dir.join(f).is_file(), "missing scaffolded file: {f}");
+    }
+
+    let validate = Command::new(bin())
+        .env_clear()
+        .env("HOME", home.path())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .args(["--root", team_dir.to_str().unwrap(), "validate"])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "validate failed: stderr={}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&validate.stdout);
+    assert!(
+        stdout.contains("ok") && stdout.contains("2 agents"),
+        "unexpected validate output: {stdout}"
+    );
+}
+
+#[test]
+fn init_refuses_existing_team_without_force() {
+    let tmp = tempdir().unwrap();
+    let home = tempdir().unwrap();
+
+    let run_init = |extra: &[&str]| -> std::process::Output {
+        let mut args = vec!["init", "my-team", "--yes"];
+        args.extend(extra);
+        Command::new(bin())
+            .env_clear()
+            .env("HOME", home.path())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .current_dir(tmp.path())
+            .args(args)
+            .output()
+            .unwrap()
+    };
+
+    let first = run_init(&[]);
+    assert!(first.status.success(), "first init must succeed");
+
+    let second = run_init(&[]);
+    assert!(
+        !second.status.success(),
+        "second init without --force must refuse"
+    );
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(
+        stderr.contains("already exists") && stderr.contains("--force"),
+        "expected refusal hint in stderr, got: {stderr}"
+    );
+
+    let third = run_init(&["--force"]);
+    assert!(
+        third.status.success(),
+        "init --force must overwrite: stderr={}",
+        String::from_utf8_lossy(&third.stderr)
+    );
+}
+
+#[test]
 fn warn_e_quiet_silences_env() {
     let tmp = tempdir().unwrap();
     let home = tempdir().unwrap();

@@ -1,12 +1,28 @@
+# team-compose.yaml — top-level team declaration.
+#
+# This is the file `teamctl` walks up to from any subdirectory of your
+# repo. Move/rename it and `teamctl up` stops finding the team.
+
 version: 2
 
+# How agents talk to each other and to humans. SQLite is the default and
+# what every shipped example uses; the path is relative to this `.team/`
+# folder. Two worktrees of the same repo get independent mailboxes
+# because `state/` is gitignored.
 broker:
   type: sqlite
   path: state/mailbox.db
 
+# How agents are run. `tmux` is what works today on macOS and Linux —
+# each agent gets its own tmux session named `<prefix><project>-<agent>`.
+# `tmux_prefix` is your differentiator if you want two teams running
+# concurrently on the same host: change it from `a-` to something
+# unique per team.
 supervisor:
   type: tmux
   tmux_prefix: a-
 
+# Project files. One file per project; each file declares its agents,
+# channels, and ACLs. Keep the list in sync with `projects/`.
 projects:
   - file: projects/main.yaml
