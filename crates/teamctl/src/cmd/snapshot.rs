@@ -415,10 +415,7 @@ mod tests {
         )]);
         let p = plan(Some(&prev), &next);
         assert_eq!(p.change.len(), 1);
-        assert_eq!(
-            p.change_prior.get("p:a").unwrap().tmux_session,
-            "OLD-p-a"
-        );
+        assert_eq!(p.change_prior.get("p:a").unwrap().tmux_session, "OLD-p-a");
     }
 
     #[test]

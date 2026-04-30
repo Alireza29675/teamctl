@@ -95,7 +95,8 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan) -> Result<()> {
             .expect("change_prior populated by plan()");
         sup.down(&spec_from_prior(compose, id, prior))?;
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
-            let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+            let spec =
+                AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
             sup.up(&spec)?;
         }
         println!("changed · {id} ({})", inputs.label());
@@ -104,7 +105,8 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan) -> Result<()> {
     // Additions: fresh spec, fresh up.
     for id in &plan.add {
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
-            let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+            let spec =
+                AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
             sup.up(&spec)?;
             println!("added   · {id}");
         }
@@ -114,7 +116,8 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan) -> Result<()> {
     // get restarted in place. Same behaviour as v1 reload.
     for id in &plan.keep {
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
-            let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+            let spec =
+                AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
             if sup.state(&spec)? == AgentState::Stopped {
                 sup.up(&spec)?;
                 println!("started · {id}");
