@@ -4,8 +4,6 @@ title: ADR 0004 — `.team/` folder, first-run UX, and the management surface
 
 - Status: **accepted** (implemented in v0.2.0)
 - Date: 2026-04-25
-- Author: Alireza
-- Reviewers:
 
 ## Context
 
@@ -184,7 +182,7 @@ $ teamctl bot pair tg-main
 
 2. Now message the bot. Anything. e.g. "ping".
    Waiting … (60s timeout)
-   ✓ Got message from chat 75473051 ("Alireza S.").
+   ✓ Got message from chat 75473051 ("Alex M.").
 
 3. Confirm: bind tg-main to chat 75473051? [Y/n] y
 
