@@ -4,6 +4,19 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+- First-class `effort` field on the per-agent `team-compose.yaml`
+  schema (T-048). Accepts the five values claude-code's
+  `--effort` understands — `low` / `medium` / `high` / `xhigh`
+  / `max`. Renders as `EFFORT=<value>` in the agent's env file
+  and is forwarded to `claude --effort <value>` by the wrapper.
+  Strict enum: typos like `effort: hgih` fail compose
+  validation at parse time with an error enumerating the valid
+  set, rather than silently falling back to the wrapper
+  default. Precedence (highest first): per-agent YAML →
+  workspace `.env` `EFFORT=` → no flag (claude's own default).
+
 ### Changed
 
 - Root resolution is now `--root` / `-C` flag → `TEAMCTL_ROOT` env →

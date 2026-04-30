@@ -285,6 +285,41 @@ pub struct Agent {
     /// Override the global rate-limit hook chain for this agent.
     #[serde(default)]
     pub on_rate_limit: Option<Vec<String>>,
+
+    /// Per-agent reasoning effort. Renders as `EFFORT=<value>` in the
+    /// agent env file; the wrapper passes it to the runtime (e.g.
+    /// `claude --effort <value>`). Strict enum: typos like `hgih` fail
+    /// compose validation rather than silently falling back to the
+    /// wrapper default.
+    #[serde(default)]
+    pub effort: Option<EffortLevel>,
+}
+
+/// Reasoning-effort level forwarded to the runtime. Maps 1:1 to
+/// `claude --effort <value>` today; if the runtime taxonomy evolves we
+/// extend the enum and bump the schema version.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EffortLevel {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl EffortLevel {
+    /// Lowercase rendering for the env-file `EFFORT=<value>` line and
+    /// the `claude --effort <value>` CLI flag.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EffortLevel::Low => "low",
+            EffortLevel::Medium => "medium",
+            EffortLevel::High => "high",
+            EffortLevel::Xhigh => "xhigh",
+            EffortLevel::Max => "max",
+        }
+    }
 }
 
 fn default_runtime() -> String {
@@ -420,6 +455,39 @@ mod tests {
         assert_eq!(a.runtime, "claude-code");
         assert_eq!(a.autonomy, "low_risk_only");
         assert!(!a.telegram_inbox);
+        assert!(a.effort.is_none());
+    }
+
+    #[test]
+    fn effort_parses_all_five_levels() {
+        for (yaml, expected) in [
+            ("effort: low\n", EffortLevel::Low),
+            ("effort: medium\n", EffortLevel::Medium),
+            ("effort: high\n", EffortLevel::High),
+            ("effort: xhigh\n", EffortLevel::Xhigh),
+            ("effort: max\n", EffortLevel::Max),
+        ] {
+            let a: Agent = serde_yaml::from_str(yaml).expect(yaml);
+            assert_eq!(a.effort, Some(expected), "yaml: {yaml}");
+        }
+    }
+
+    #[test]
+    fn effort_unknown_value_is_rejected() {
+        let err = serde_yaml::from_str::<Agent>("effort: hgih\n")
+            .expect_err("typo'd effort value must fail to parse");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("low") && msg.contains("max"),
+            "error should enumerate valid variants; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn effort_renders_to_lowercase_string() {
+        assert_eq!(EffortLevel::Low.as_str(), "low");
+        assert_eq!(EffortLevel::Xhigh.as_str(), "xhigh");
+        assert_eq!(EffortLevel::Max.as_str(), "max");
     }
 
     #[test]

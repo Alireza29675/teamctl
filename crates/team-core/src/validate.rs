@@ -212,6 +212,7 @@ mod tests {
                 can_broadcast: vec!["team".into()],
                 reports_to: None,
                 on_rate_limit: None,
+                effort: None,
             },
         );
         let mut workers = BTreeMap::new();
@@ -229,6 +230,7 @@ mod tests {
                 can_broadcast: vec!["team".into()],
                 reports_to: Some("mgr".into()),
                 on_rate_limit: None,
+                effort: None,
             },
         );
         Compose {
