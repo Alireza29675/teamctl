@@ -10,8 +10,8 @@ Declare a team of long-lived Claude Code, Codex CLI, or Gemini CLI sessions in Y
 
 ```bash
 curl -fsSL https://teamctl.run/install | sh
-teamctl init hello-team
-cd hello-team
+cd /path/to/your/project
+teamctl init
 teamctl up
 ```
 
@@ -19,18 +19,18 @@ teamctl up
 
 ## Getting started
 
-teamctl scaffolds a `.team/` folder, brings the agents up in `tmux`, and supervises them. Four commands take a fresh checkout to a running team:
+teamctl drops a `.team/` folder into your existing project, brings the agents up in `tmux`, and supervises them. Four commands take any repo to a running team:
 
 ```bash
-teamctl init my-team        # 1. scaffold
-cd my-team                  # 2. enter it
+cd /path/to/your/project    # 1. start in the repo you want a team in
+teamctl init                # 2. scaffold .team/ here
 teamctl up                  # 3. bring the team up
 teamctl reload              # 4. apply edits to .team/team-compose.yaml
 ```
 
-**1. `teamctl init my-team`** writes a `.team/` directory next to your call-site with a starter `team-compose.yaml`, role prompts for a manager and a dev, and a `.env.example`. The contents are plain YAML and Markdown — nothing hidden, nothing generated at runtime that you can't read.
+**1. `cd /path/to/your/project`** — teamctl integrates with an existing project, it doesn't replace it. The agents in your team will work alongside whatever else is in this directory, with their config and state living under a single `.team/` subfolder.
 
-**2. `cd my-team`** puts you inside the team's tree. From here, every `teamctl` subcommand walks up to find `.team/team-compose.yaml`; no `-C` flag, no environment variable.
+**2. `teamctl init`** writes a `.team/` directory in the current repo with a starter `team-compose.yaml`, role prompts for a manager and a dev, and a `.env.example`. The contents are plain YAML and Markdown — nothing hidden, nothing generated at runtime that you can't read.
 
 **3. `teamctl up`** brings the team up. Each agent gets its own `tmux` pane running its CLI (Claude Code by default), wired to a shared SQLite mailbox over MCP. Runtime state — the database, rendered env files, supervisor records — lives in `.team/state/`, gitignored.
 

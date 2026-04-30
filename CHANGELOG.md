@@ -32,10 +32,11 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 - README onboarding refreshed (T-046). Drops the Mermaid topology
   diagram and adds a four-command Getting-started arc
-  (`init` → `cd` → `up` → `reload`) wired to the `.team/`
-  convention and `teamctl init` from T-008/T-045. A first-time
-  reader can copy-paste the snippet and end up with a running
-  team without leaving the README.
+  (`cd` → `teamctl init` → `up` → `reload`) that leads with the
+  in-place flow — teamctl integrates into an existing project
+  rather than scaffolding a fresh one. A first-time reader can
+  copy-paste the snippet inside their own repo and end up with
+  a running team without leaving the README.
 - Root resolution is now `--root` / `-C` flag → `TEAMCTL_ROOT` env →
   walk-up from cwd to the first `.team/team-compose.yaml`. The
   registered-context fallback was retired (T-008): `teamctl context`
