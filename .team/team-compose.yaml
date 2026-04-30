@@ -1,12 +1,31 @@
+# teamctl-core team config — the dogfood team.
+#
+# This is the team that develops `teamctl` on `teamctl`. It ships
+# inside the public `teamctl` repo as a real-world showcase of how
+# we use the tool to build the tool. Operators read this directory
+# to learn how a working teamctl team is organised; comments are
+# pedagogical on purpose.
+#
+# For a minimal starter team, run `teamctl init <name>` (the `solo`
+# template is closer to what most operators will copy first).
+
 version: 2
 
+# SQLite mailbox at `state/mailbox.db` (relative to this file).
+# `state/` is gitignored — runtime state never leaves the host.
 broker:
   type: sqlite
   path: state/mailbox.db
 
+# Tmux supervisor — one detached session per agent. `tmux_prefix`
+# scopes session names so they don't collide with anything else
+# tmux is hosting; `t-` is short for "teamctl" and reads cleanly
+# in `tmux ls`.
 supervisor:
   type: tmux
   tmux_prefix: t-
 
+# Single project file. The "project" here is the teamctl repo
+# itself; agents work on the codebase they live inside.
 projects:
   - file: projects/teamctl.yaml

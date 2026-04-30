@@ -3,21 +3,42 @@ version: 2
 project:
   id: teamctl
   name: teamctl core
-  # `..` resolves to the teamctl repo root. Agents work *on the repo
-  # they live inside* — that is the whole point of this dogfood team.
+  # `..` resolves to the teamctl repo root. Agents work *on the
+  # repo they live inside* — that is the whole point of this
+  # dogfood team.
   cwd: ..
 
+# Channel topology — three guiding principles, one channel each:
+# one wildcard for team-wide announcements, one per leadership
+# tier (pm/eng_lead/marketing), one per implementation surface
+# (eng_lead + devs + qa).
+#
+# The marketing channel deliberately excludes engineering; the
+# leads channel excludes devs/qa. ACL discipline is intentional
+# dogfooding of project-isolation — frictiony at our 7-agent
+# size, but exactly the signal we want operators to see when
+# they crack open the showcase: this is what real-world
+# project-isolation looks like in production.
 channels:
   - name: all
     members: "*"
+
   - name: leads
     members: [pm, eng_lead, marketing]
+
   - name: dev
     members: [eng_lead, dev1, dev2, dev3, qa]
+
   - name: marketing
     members: [pm, marketing]
 
 managers:
+  # PM owns ticket synthesis and is Alireza's intent-relay. Runs
+  # `auto` because PM never edits code or runs builds; the
+  # default permission set fits without surprising prompts.
+  # `low_risk_only` autonomy reflects PM's role as
+  # synthesiser, not actor — destructive actions get
+  # request_approval gates.
   pm:
     runtime: claude-code
     model: claude-opus-4-7
@@ -33,6 +54,14 @@ managers:
         id: pm
         display_name: "teamctl PM"
 
+  # Eng lead routes work, brokers reviews, executes the public-
+  # write actions devs cannot perform on this repo (push, PR
+  # comments under user identity), and runs the release
+  # cascade. Runs `bypassPermissions` because eng_lead routinely
+  # unblocks teammates by running their permission-prompted
+  # actions on their behalf — see role file for the bypass
+  # discipline. effort: max because release-cascade and
+  # investigation-synthesis decisions need deep reasoning.
   eng_lead:
     runtime: claude-code
     model: claude-opus-4-7
@@ -48,6 +77,12 @@ managers:
         id: eng
         display_name: "teamctl Eng Lead"
 
+  # Marketing owns the public surface (README hero, docs/
+  # landing, release announcements). `proposal_only` autonomy
+  # is load-bearing: marketing proposes, Alireza approves,
+  # eng_lead routes the eventual edits through dev tickets.
+  # `can_dm` excludes engineering on purpose — this is the
+  # dogfooded project-isolation principle in action.
   marketing:
     runtime: claude-code
     model: claude-opus-4-7
@@ -64,6 +99,13 @@ managers:
         display_name: "teamctl Marketing"
 
 workers:
+  # Three IC devs. `auto` permission_mode is right for code-
+  # editing work without surprising prompts; `bypassPermissions`
+  # would be too broad. Devs DM each other for design chatter;
+  # peer-review verdicts go DM to eng_lead because the harness
+  # blocks devs from posting PR comments under their own
+  # identity on this repo. `#dev` carries the headline
+  # broadcast for team awareness.
   dev1:
     runtime: claude-code
     model: claude-opus-4-7
@@ -91,6 +133,15 @@ workers:
     can_dm: [eng_lead, dev1, dev2, qa]
     can_broadcast: [all, dev]
 
+  # QA holds the merge-to-main gate. `proposal_only` because qa
+  # never merges or pushes; the verdict is what `eng_lead`
+  # waits on before routing the merge to Alireza. `can_dm:
+  # [pm]` is unusual for a worker but lets qa raise quality
+  # patterns directly to PM without going via eng_lead — one
+  # short-circuit, on purpose, for the dogfood team's
+  # smaller scale. effort: max because QA's two lanes
+  # (CI parity + cold-reader meta-test) both reward careful
+  # reasoning.
   qa:
     runtime: claude-code
     model: claude-opus-4-7
