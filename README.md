@@ -10,72 +10,37 @@ Declare a team of long-lived Claude Code, Codex CLI, or Gemini CLI sessions in Y
 
 ```bash
 curl -fsSL https://teamctl.run/install | sh
-teamctl init hello-team
+cd /path/to/your/project
+teamctl init
 teamctl up
 ```
 
 > Prefer to build from source? `cargo install teamctl team-mcp team-bot` works too. A Homebrew tap is on the way — see the [ROADMAP](./ROADMAP.md).
 
-## How it works
+## Getting started
 
-```mermaid
-flowchart TB
-    User(["👤 you"])
+teamctl drops a `.team/` folder into your existing project, brings the agents up in `tmux`, and supervises them. Four commands take any repo to a running team:
 
-    subgraph Interfaces["interfaces (pluggable)"]
-      direction LR
-      Tg["Telegram"]
-      Dc["Discord"]
-      Im["iMessage"]
-      Cl["CLI"]
-    end
-    User <--> Tg
-    User <--> Dc
-    User <--> Im
-    User <--> Cl
-
-    subgraph ProjA["Project A"]
-      direction TB
-      subgraph AProd["product manager · tmux:a-A-prod-mgr"]
-        Aprod["claude (Opus)"]
-      end
-      subgraph AEng["engineering manager · tmux:a-A-eng-mgr"]
-        Aeng["claude (Opus)"]
-      end
-      subgraph AW1["worker · tmux:a-A-dev1"]
-        Adev1["codex"]
-      end
-      subgraph AW2["worker · tmux:a-A-dev2"]
-        Adev2["claude (Sonnet)"]
-      end
-      subgraph AW3["worker · tmux:a-A-writer"]
-        Aw["gemini"]
-      end
-      AProd --- AW1
-      AProd --- AW2
-      AEng --- AW2
-      AEng --- AW3
-    end
-
-    subgraph ProjB["Project B"]
-      direction TB
-      subgraph BMgr["manager · tmux:a-B-mgr"]
-        Bmgr["claude (Opus)"]
-      end
-      subgraph BW["worker · tmux:a-B-dev"]
-        Bdev["codex"]
-      end
-      BMgr --- BW
-    end
-
-    Mailbox[("team-mcp<br/>SQLite mailbox<br/>(dm · broadcast · org_chart · HITL)")]
-
-    Interfaces <--> Mailbox
-    ProjA <--> Mailbox
-    ProjB <--> Mailbox
-
-    AProd <-. bridge (opt-in, TTL) .-> BMgr
+```bash
+cd /path/to/your/project    # 1. start in the repo you want a team in
+teamctl init                # 2. scaffold .team/ here
+teamctl up                  # 3. bring the team up
+teamctl reload              # 4. apply edits to .team/team-compose.yaml
 ```
+
+**1. `cd /path/to/your/project`** — teamctl integrates with an existing project, it doesn't replace it. The agents in your team will work alongside whatever else is in this directory, with their config and state living under a single `.team/` subfolder.
+
+**2. `teamctl init`** writes a `.team/` directory in the current repo with a starter `team-compose.yaml`, role prompts for a manager and a dev, and a `.env.example`. The contents are plain YAML and Markdown — nothing hidden, nothing generated at runtime that you can't read.
+
+**3. `teamctl up`** brings the team up. Each agent gets its own `tmux` pane running its CLI (Claude Code by default), wired to a shared SQLite mailbox over MCP. Runtime state — the database, rendered env files, supervisor records — lives in `.team/state/`, gitignored.
+
+**4. `teamctl reload`** picks up edits to `.team/team-compose.yaml` and restarts only the agents whose config actually changed. No full teardown, no lost mailbox state.
+
+**Talking to the team.** Copy `.team/.env.example` to `.team/.env`, fill in `TEAMCTL_TELEGRAM_TOKEN` and `TEAMCTL_TELEGRAM_CHATS`, and the manager bot will introduce itself when you DM it on Telegram. Brand-sensitive actions (`publish`, `deploy`, `release`, …) pause for inline Approve / Deny.
+
+The full onboarding tutorial lives at [teamctl.run/getting-started](https://teamctl.run/getting-started/); curated example teams (`startup-team`, `oss-maintainer`, `indie-game-studio`, `newsletter-office`, `market-analysts`) ship under [`examples/`](https://github.com/Alireza29675/teamctl/tree/main/examples).
+
+## What's in a team
 
 - **Every node is a separate long-lived CLI** — Claude Code, Codex, or Gemini — running in its own `tmux` pane. No shared process, no "roles inside one LLM."
 - **Projects are self-contained org charts.** One project can have many managers and many workers; workers are wired to one or more managers through `reports_to`. Agents can call `org_chart` to introspect their chain of command.
