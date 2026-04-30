@@ -46,12 +46,13 @@ impl Widget for Splash<'_> {
             .alignment(Alignment::Center)
             .render(chunks[1], buf);
 
+        let count = self.app.team.agents.len();
         let team_line = format!(
             "v{}  ·  {}  ·  {} agent{}",
             self.app.version,
-            self.app.team_name,
-            self.app.agent_count,
-            if self.app.agent_count == 1 { "" } else { "s" }
+            self.app.team.team_name,
+            count,
+            if count == 1 { "" } else { "s" }
         );
         Paragraph::new(team_line)
             .alignment(Alignment::Center)

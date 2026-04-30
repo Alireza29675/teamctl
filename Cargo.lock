@@ -2234,8 +2234,10 @@ dependencies = [
  "dirs",
  "insta",
  "ratatui",
+ "rusqlite",
  "serde",
  "serde_json",
+ "team-core",
 ]
 
 [[package]]

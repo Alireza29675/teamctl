@@ -1,19 +1,26 @@
 //! Triptych — the default Layout A. Three resizable panes (roster,
 //! detail, mailbox) with an Approvals stripe reserved at the top
 //! (rendered only when there's something to surface — empty in
-//! PR-UI-1) and a focus ring on the active pane.
+//! PR-UI-2 still) and a focus ring on the active pane.
 //!
-//! PR-UI-1 ships the layout primitives + empty-state placeholders;
-//! real agent / mailbox data lands in PR-UI-2 and PR-UI-3. The pane
-//! widths match SPEC §2: roster ~28 cols, mailbox ~32 cols, detail
-//! takes the remainder.
+//! PR-UI-2 wires the roster + detail panes to live data:
+//! - Roster lists `app.team.agents` with single-cell state glyphs
+//!   driven by `data::state_glyph`. Selection is highlighted with
+//!   the focus accent.
+//! - Detail shows the last-N lines of `app.detail_buffer` (the
+//!   tmux capture-pane scrollback for the focused agent), or an
+//!   empty-state hint when no agent is selected.
+//! - Mailbox stays empty-state — wiring lands in PR-UI-3.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::app::App;
+use crate::data::{state_glyph, AgentInfo};
+use crate::theme::ColorMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
@@ -44,8 +51,8 @@ pub struct Triptych<'a> {
 impl Widget for Triptych<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // The approvals stripe takes one line at the top *only* when
-        // there's a pending approval. PR-UI-1 has no real data, so
-        // the stripe is hidden and the panes get the full area.
+        // there's a pending approval. PR-UI-2 still leaves the
+        // stripe hidden — wiring lands in PR-UI-4.
         let stripe_visible = false;
         let body = if stripe_visible {
             let v = Layout::default()
@@ -66,23 +73,9 @@ impl Widget for Triptych<'_> {
             ])
             .split(body);
 
-        render_pane(
-            buf,
-            columns[0],
-            "ROSTER",
-            "(no agents yet)",
-            self.app,
-            Pane::Roster,
-        );
-        render_pane(
-            buf,
-            columns[1],
-            "DETAIL",
-            "(no agent selected)",
-            self.app,
-            Pane::Detail,
-        );
-        render_pane(
+        render_roster(buf, columns[0], self.app);
+        render_detail(buf, columns[1], self.app);
+        render_pane_empty(
             buf,
             columns[2],
             "MAILBOX",
@@ -93,8 +86,107 @@ impl Widget for Triptych<'_> {
     }
 }
 
-fn render_pane(buf: &mut Buffer, area: Rect, title: &str, empty: &str, app: &App, which: Pane) {
+fn render_roster(buf: &mut Buffer, area: Rect, app: &App) {
+    let focused = app.focused_pane == Pane::Roster;
+    let block = pane_block("ROSTER", focused, app);
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    if app.team.agents.is_empty() {
+        let empty = Paragraph::new("(no agents)")
+            .style(Style::default().fg(app.capabilities.muted()))
+            .alignment(Alignment::Center);
+        empty.render(inner, buf);
+        return;
+    }
+
+    let ascii = matches!(app.capabilities.color, ColorMode::Monochrome);
+    let lines: Vec<Line<'_>> = app
+        .team
+        .agents
+        .iter()
+        .enumerate()
+        .map(|(i, info)| roster_line(info, Some(i) == app.selected_agent, ascii, app))
+        .collect();
+    let para = Paragraph::new(lines).alignment(Alignment::Left);
+    para.render(inner, buf);
+}
+
+fn roster_line<'a>(info: &'a AgentInfo, selected: bool, ascii: bool, app: &App) -> Line<'a> {
+    let glyph = state_glyph(info, ascii);
+    let display = format!(" {glyph}  {}", info.agent);
+    let style = if selected {
+        Style::default()
+            .fg(app.capabilities.accent())
+            .add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default()
+    };
+    Line::styled(display, style)
+}
+
+fn render_detail(buf: &mut Buffer, area: Rect, app: &App) {
+    let focused = app.focused_pane == Pane::Detail;
+    let title = match app
+        .selected_agent
+        .and_then(|i| app.team.agents.get(i))
+        .map(|a| a.id.as_str())
+    {
+        Some(id) => format!("DETAIL · {id}"),
+        None => "DETAIL".to_string(),
+    };
+    let block = pane_block(&title, focused, app);
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    if app.selected_agent.is_none() || app.team.agents.is_empty() {
+        let muted = Style::default().fg(app.capabilities.muted());
+        Paragraph::new("(select an agent on the left to follow its session)")
+            .style(muted)
+            .alignment(Alignment::Center)
+            .render(inner, buf);
+        return;
+    }
+    if app.detail_buffer.is_empty() {
+        let muted = Style::default().fg(app.capabilities.muted());
+        Paragraph::new("(no scrollback yet — agent may be starting up)")
+            .style(muted)
+            .alignment(Alignment::Center)
+            .render(inner, buf);
+        return;
+    }
+
+    // Tail the buffer to whatever fits; ratatui already clips lines
+    // that overrun the rect, but pre-trimming saves a render-time
+    // copy of thousands of lines we'd never see.
+    let cap = inner.height as usize;
+    let start = app.detail_buffer.len().saturating_sub(cap);
+    let lines: Vec<Line<'_>> = app.detail_buffer[start..]
+        .iter()
+        .map(|s| Line::raw(s.clone()))
+        .collect();
+    Paragraph::new(lines).render(inner, buf);
+}
+
+fn render_pane_empty(
+    buf: &mut Buffer,
+    area: Rect,
+    title: &str,
+    empty: &str,
+    app: &App,
+    which: Pane,
+) {
     let focused = app.focused_pane == which;
+    let block = pane_block(title, focused, app);
+    let muted = Style::default().fg(app.capabilities.muted());
+    Paragraph::new(empty)
+        .style(muted)
+        .alignment(Alignment::Center)
+        .block(block)
+        .render(area, buf);
+}
+
+fn pane_block<'a>(title: &'a str, focused: bool, app: &App) -> Block<'a> {
     let border = if focused {
         Style::default()
             .fg(app.capabilities.accent())
@@ -102,14 +194,8 @@ fn render_pane(buf: &mut Buffer, area: Rect, title: &str, empty: &str, app: &App
     } else {
         Style::default().fg(app.capabilities.muted())
     };
-    let block = Block::default()
+    Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(border);
-    let muted = Style::default().fg(app.capabilities.muted());
-    Paragraph::new(empty)
-        .style(muted)
-        .alignment(Alignment::Center)
-        .block(block)
-        .render(area, buf);
+        .border_style(border)
 }

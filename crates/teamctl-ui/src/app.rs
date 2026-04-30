@@ -1,11 +1,12 @@
 //! App state and the top-level run loop.
 //!
 //! Three stages today: `Splash` (figlet logo for ~3s or until first
-//! key), `Triptych` (the default empty-state read view), and
-//! `QuitConfirm` (a modal asking "really?"). Subsequent stacked PRs
-//! bolt on real data subscribers, more modals, and the layout
-//! variants from SPEC §3 — those wire in by adding `Stage` variants
-//! and dispatching from `draw`/`handle_event`, no rearchitecting.
+//! key), `Triptych` (the default read view, now backed by a live
+//! team snapshot from PR-UI-2), and `QuitConfirm` (a modal asking
+//! "really?"). Subsequent stacked PRs bolt on more modals and the
+//! layout variants from SPEC §3 — those wire in by adding `Stage`
+//! variants and dispatching from `draw`/`handle_event`, no
+//! rearchitecting.
 
 use std::time::{Duration, Instant};
 
@@ -17,6 +18,8 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 
+use crate::data::TeamSnapshot;
+use crate::pane::{PaneSource, TmuxPaneSource};
 use crate::splash;
 use crate::statusline;
 use crate::theme::{detect_capabilities, Capabilities};
@@ -25,6 +28,9 @@ use crate::tutorial;
 
 const SPLASH_AUTO_DISMISS: Duration = Duration::from_secs(3);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// How often the team snapshot + detail-pane capture get refreshed.
+/// PR-UI-2 polls; PR-UI-3 may upgrade to event subscriptions.
+const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
@@ -38,11 +44,21 @@ pub struct App {
     /// Tracked so QuitConfirm can return to whichever stage opened it.
     pub previous_stage: Stage,
     pub focused_pane: Pane,
-    pub team_name: String,
-    pub agent_count: usize,
+    pub team: TeamSnapshot,
+    /// Index into `team.agents` of the agent the detail pane is
+    /// streaming. `None` when the team is empty or roster
+    /// navigation hasn't picked one yet.
+    pub selected_agent: Option<usize>,
+    /// Lines from the most recent pane capture. Bounded to the last
+    /// `MAX_DETAIL_LINES` so the buffer doesn't grow unboundedly
+    /// over a long-running session.
+    pub detail_buffer: Vec<String>,
     pub version: &'static str,
     pub capabilities: Capabilities,
     pub splash_started: Instant,
+    /// Last time the snapshot + pane capture were refreshed. Used by
+    /// `tick()` to gate the next refresh.
+    pub last_refresh: Instant,
     pub running: bool,
     /// First-launch detection — when the marker file exists, future
     /// stacked-PRs (PR-UI-7) skip the tutorial after splash. PR-UI-1
@@ -50,18 +66,26 @@ pub struct App {
     pub tutorial_completed: bool,
 }
 
+const MAX_DETAIL_LINES: usize = 2000;
+
 impl App {
+    /// Construct an empty App — no team snapshot loaded. Used by
+    /// tests and as the splash-stage default. Production launch
+    /// goes through `App::launch()` which immediately runs an
+    /// initial `refresh()` so the splash screen already shows the
+    /// real team name + agent count.
     pub fn new() -> Self {
         Self {
             stage: Stage::Splash,
             previous_stage: Stage::Splash,
             focused_pane: Pane::Roster,
-            // Mock values until PR-UI-2 wires the compose subscriber.
-            team_name: "(no team loaded)".into(),
-            agent_count: 0,
+            team: TeamSnapshot::empty(std::path::PathBuf::new()),
+            selected_agent: None,
+            detail_buffer: Vec::new(),
             version: env!("CARGO_PKG_VERSION"),
             capabilities: detect_capabilities(),
             splash_started: Instant::now(),
+            last_refresh: Instant::now() - REFRESH_INTERVAL,
             running: true,
             tutorial_completed: tutorial::is_completed(),
         }
@@ -78,6 +102,32 @@ impl App {
         self.focused_pane = self.focused_pane.next();
     }
 
+    /// Move roster selection up by one — wraps at the top. No-op
+    /// when the team is empty. Does not change `focused_pane`.
+    pub fn select_prev(&mut self) {
+        if self.team.agents.is_empty() {
+            self.selected_agent = None;
+            return;
+        }
+        self.selected_agent = Some(match self.selected_agent {
+            None | Some(0) => self.team.agents.len() - 1,
+            Some(i) => i - 1,
+        });
+    }
+
+    /// Move roster selection down by one — wraps at the bottom.
+    /// No-op when the team is empty.
+    pub fn select_next(&mut self) {
+        if self.team.agents.is_empty() {
+            self.selected_agent = None;
+            return;
+        }
+        self.selected_agent = Some(match self.selected_agent {
+            None => 0,
+            Some(i) => (i + 1) % self.team.agents.len(),
+        });
+    }
+
     pub fn enter_quit_confirm(&mut self) {
         self.previous_stage = self.stage;
         self.stage = Stage::QuitConfirm;
@@ -90,6 +140,37 @@ impl App {
     pub fn confirm_quit(&mut self) {
         self.running = false;
     }
+
+    /// Replace the team snapshot. Preserves the current selection
+    /// when the agent at that index still exists; otherwise resets
+    /// to the first agent (or `None` for an empty team).
+    pub fn replace_team(&mut self, team: TeamSnapshot) {
+        let prior_id = self
+            .selected_agent
+            .and_then(|i| self.team.agents.get(i))
+            .map(|a| a.id.clone());
+        self.team = team;
+        self.selected_agent = match (prior_id, self.team.agents.is_empty()) {
+            (_, true) => None,
+            (Some(id), false) => self.team.agents.iter().position(|a| a.id == id).or(Some(0)),
+            (None, false) => Some(0),
+        };
+    }
+
+    /// Return the focused agent's tmux session name, if any. Used
+    /// by the run loop to know which session to capture.
+    pub fn focused_session(&self) -> Option<&str> {
+        self.selected_agent
+            .and_then(|i| self.team.agents.get(i))
+            .map(|a| a.tmux_session.as_str())
+    }
+
+    /// Replace the detail buffer, clipped at the recent-line cap.
+    pub fn set_detail_buffer(&mut self, lines: Vec<String>) {
+        let len = lines.len();
+        let start = len.saturating_sub(MAX_DETAIL_LINES);
+        self.detail_buffer = lines[start..].to_vec();
+    }
 }
 
 impl Default for App {
@@ -98,8 +179,27 @@ impl Default for App {
     }
 }
 
+/// Refresh the team snapshot + the focused agent's pane capture.
+/// Pulled out so tests can drive a single tick deterministically
+/// against a `MockPaneSource` without going through the event loop.
+pub fn refresh<P: PaneSource>(app: &mut App, pane_source: &P) {
+    if let Ok(Some(snapshot)) = TeamSnapshot::discover_and_load() {
+        app.replace_team(snapshot);
+    }
+    if let Some(session) = app.focused_session().map(|s| s.to_string()) {
+        if let Ok(lines) = pane_source.capture(&session) {
+            app.set_detail_buffer(lines);
+        }
+    } else {
+        app.detail_buffer.clear();
+    }
+    app.last_refresh = Instant::now();
+}
+
 pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
     let mut app = App::new();
+    let pane_source = TmuxPaneSource;
+    refresh(&mut app, &pane_source);
     while app.running {
         terminal.draw(|f| draw(f, &app))?;
         if event::poll(POLL_INTERVAL)? {
@@ -108,6 +208,9 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
         if matches!(app.stage, Stage::Splash) && app.splash_started.elapsed() >= SPLASH_AUTO_DISMISS
         {
             app.dismiss_splash();
+        }
+        if app.last_refresh.elapsed() >= REFRESH_INTERVAL {
+            refresh(&mut app, &pane_source);
         }
     }
     Ok(())
@@ -164,6 +267,15 @@ fn handle_event(app: &mut App, ev: Event) {
             Stage::Triptych => match k.code {
                 KeyCode::Char('q') => app.enter_quit_confirm(),
                 KeyCode::Tab => app.cycle_focus(),
+                // Roster navigation — only when roster is the
+                // focused pane. j/k mirror Vim; arrows mirror
+                // every-day navigation.
+                KeyCode::Up | KeyCode::Char('k') if app.focused_pane == Pane::Roster => {
+                    app.select_prev()
+                }
+                KeyCode::Down | KeyCode::Char('j') if app.focused_pane == Pane::Roster => {
+                    app.select_next()
+                }
                 _ => {}
             },
             Stage::QuitConfirm => match k.code {
@@ -219,7 +331,9 @@ fn render_quit_confirm(area: Rect, buf: &mut Buffer) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::AgentInfo;
     use crossterm::event::{KeyEvent, KeyEventState, KeyModifiers};
+    use team_core::supervisor::AgentState;
 
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent {
@@ -228,6 +342,33 @@ mod tests {
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
         })
+    }
+
+    fn agent(id: &str, state: AgentState) -> AgentInfo {
+        AgentInfo {
+            id: id.into(),
+            agent: id
+                .split_once(':')
+                .map(|(_, a)| a.to_string())
+                .unwrap_or_default(),
+            project: id
+                .split_once(':')
+                .map(|(p, _)| p.to_string())
+                .unwrap_or_default(),
+            tmux_session: format!("t-{}", id.replace(':', "-")),
+            state,
+            unread_mail: 0,
+            pending_approvals: 0,
+            is_manager: false,
+        }
+    }
+
+    pub fn fixture_team(agents: Vec<AgentInfo>) -> TeamSnapshot {
+        TeamSnapshot {
+            root: std::path::PathBuf::from("/fixture"),
+            team_name: "fixture".into(),
+            agents,
+        }
     }
 
     #[test]
@@ -282,8 +423,6 @@ mod tests {
 
     #[test]
     fn render_does_not_panic_at_minimal_size() {
-        // Anything ≥ a 1×1 buffer must round-trip without panicking;
-        // ratatui swallows constraints that exceed the area.
         let app = App::new();
         let _ = render_to_buffer(&app, 20, 8);
     }
@@ -292,5 +431,92 @@ mod tests {
     fn render_does_not_panic_at_huge_size() {
         let app = App::new();
         let _ = render_to_buffer(&app, 240, 80);
+    }
+
+    #[test]
+    fn select_next_wraps_through_team() {
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![
+            agent("p:a", AgentState::Running),
+            agent("p:b", AgentState::Running),
+            agent("p:c", AgentState::Running),
+        ]));
+        assert_eq!(app.selected_agent, Some(0));
+        app.select_next();
+        assert_eq!(app.selected_agent, Some(1));
+        app.select_next();
+        assert_eq!(app.selected_agent, Some(2));
+        app.select_next();
+        assert_eq!(app.selected_agent, Some(0)); // wraps
+    }
+
+    #[test]
+    fn select_prev_wraps_at_top() {
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![
+            agent("p:a", AgentState::Running),
+            agent("p:b", AgentState::Running),
+        ]));
+        app.selected_agent = Some(0);
+        app.select_prev();
+        assert_eq!(app.selected_agent, Some(1));
+    }
+
+    #[test]
+    fn select_no_op_on_empty_team() {
+        let mut app = App::new();
+        app.select_next();
+        assert_eq!(app.selected_agent, None);
+        app.select_prev();
+        assert_eq!(app.selected_agent, None);
+    }
+
+    #[test]
+    fn replace_team_preserves_selection_when_agent_still_present() {
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![
+            agent("p:a", AgentState::Running),
+            agent("p:b", AgentState::Running),
+        ]));
+        app.selected_agent = Some(1);
+        app.replace_team(fixture_team(vec![
+            agent("p:a", AgentState::Running),
+            agent("p:b", AgentState::Stopped), // same id, new state
+        ]));
+        assert_eq!(app.selected_agent, Some(1), "selection follows the id");
+    }
+
+    #[test]
+    fn replace_team_resets_selection_when_agent_disappears() {
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![
+            agent("p:a", AgentState::Running),
+            agent("p:gone", AgentState::Running),
+        ]));
+        app.selected_agent = Some(1);
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        assert_eq!(app.selected_agent, Some(0), "falls back to first agent");
+    }
+
+    #[test]
+    fn arrow_keys_navigate_only_when_roster_focused() {
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![
+            agent("p:a", AgentState::Running),
+            agent("p:b", AgentState::Running),
+        ]));
+        app.dismiss_splash();
+        // Focused pane is Roster → arrow cycles selection.
+        app.selected_agent = Some(0);
+        handle_event(&mut app, key(KeyCode::Down));
+        assert_eq!(app.selected_agent, Some(1));
+        // Cycle to Detail → arrow no longer touches selection.
+        app.cycle_focus();
+        handle_event(&mut app, key(KeyCode::Down));
+        assert_eq!(
+            app.selected_agent,
+            Some(1),
+            "non-roster focus ignores arrows"
+        );
     }
 }

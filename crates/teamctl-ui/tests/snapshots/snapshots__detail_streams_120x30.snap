@@ -1,12 +1,12 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-assertion_line: 56
+assertion_line: 152
 expression: buffer_to_string(&buf)
 ---
-┌ROSTER────────────────────┐┌DETAIL────────────────────────────────────────────────────┐┌MAILBOX───────────────────────┐
-│        (no agents)       ││    (select an agent on the left to follow its session)   ││         (no mailbox)         │
-│                          ││                                                          ││                              │
-│                          ││                                                          ││                              │
+┌ROSTER────────────────────┐┌DETAIL · writing:manager──────────────────────────────────┐┌MAILBOX───────────────────────┐
+│ *  manager               ││[12:00] user: draft a release plan                        ││         (no mailbox)         │
+│ *  worker-1              ││[12:01] assistant: Sure — I'll outline the cascade.       ││                              │
+│                          ││[12:01] tool: teamctl validate                            ││                              │
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
@@ -32,4 +32,4 @@ expression: buffer_to_string(&buf)
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
 └──────────────────────────┘└──────────────────────────────────────────────────────────┘└──────────────────────────────┘
-/ filter · w wall · @ send · esc back · q quit                                                       ? help · t tutorial
+/ search · ⏎ open · @ send · q quit                                                                  ? help · t tutorial
