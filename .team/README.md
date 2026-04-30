@@ -61,6 +61,13 @@ and are gitignored. Production code lives in `crates/`,
 directly except through tickets that go through the normal PR
 flow.
 
+> **Note:** the durable `.team/decisions.md`, `.team/patterns.md`,
+> and `.team/tasks/` surfaces are pointed at by the role files
+> but get seeded in Phase B (operational migration). Pre-Phase-B
+> tickets and decision logs remain at their previous locations
+> until then; the role-file paths describe the steady-state
+> layout an outside operator should expect.
+
 ## The release-cascade rhythm
 
 teamctl ships in cascades, not single PRs:
