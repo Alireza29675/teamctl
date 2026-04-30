@@ -7,8 +7,8 @@
 //! {
 //!   "current": "newsroom",
 //!   "contexts": {
-//!     "newsroom": "/Users/alireza/dev/projects/news/.team",
-//!     "startup":  "/Users/alireza/dev/projects/startup/.team"
+//!     "newsroom": "/Users/you/dev/projects/news/.team",
+//!     "startup":  "/Users/you/dev/projects/startup/.team"
 //!   }
 //! }
 //! ```
