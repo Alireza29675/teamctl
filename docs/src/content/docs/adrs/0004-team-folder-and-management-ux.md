@@ -4,6 +4,8 @@ title: ADR 0004 — `.team/` folder, first-run UX, and the management surface
 
 - Status: **accepted** (implemented in v0.2.0)
 - Date: 2026-04-25
+- Author: Alireza
+- Reviewers:
 
 ## Context
 
