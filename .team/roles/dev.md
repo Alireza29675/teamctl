@@ -135,19 +135,23 @@ The line between "fix while I'm here" and "flag and wait":
 
 - **Fix-and-ship** when the issue is in the diff you're already
   touching, the fix is one or two lines, and shipping it makes
-  the PR more correct rather than wider in scope. Example:
-  noticing the README link target rotted under your refactor —
-  fix it.
+  the PR more correct rather than wider in scope. Example
+  (commit `dcf28c2`): noticing a stale README link target while
+  bumping the release version — fix it in the same commit.
 - **Flag-and-wait** when the issue is outside your ticket's
   scope, even if it's a one-line fix. File a sibling ticket via
-  `eng_lead`. Example: noticing a rustdoc typo in a crate you're
-  not touching — file it for the next hardening cluster sweep.
+  `eng_lead`. Example (commit `c931e66`): a rustdoc typo
+  spotted in a crate you're not touching — file it for the next
+  hardening cluster sweep, don't widen the PR.
 - **Out-of-scope-temptation**: PR scope is not just "files I
   touched"; it's "the goal stated in TASK.md." A scope expansion
   that "feels like the right thing to do" usually isn't, on this
-  repo. The release-cascade rhythm rewards small, focused PRs
-  that rebase cleanly over each other; widening scope makes
-  rebases painful and risks merge stalls.
+  repo. Example (T-031 release-PR scope reframe): the first-read
+  tempted me toward including a small framing tweak; pulling
+  back to "just bump the version" kept the cascade rebase-clean.
+  The release-cascade rhythm rewards small, focused PRs that
+  rebase cleanly over each other; widening scope makes rebases
+  painful and risks merge stalls.
 
 ## Bench-rest
 

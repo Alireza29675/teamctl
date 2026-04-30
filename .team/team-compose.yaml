@@ -6,8 +6,9 @@
 # to learn how a working teamctl team is organised; comments are
 # pedagogical on purpose.
 #
-# For a minimal starter team, run `teamctl init <name>` (the `solo`
-# template is closer to what most operators will copy first).
+# For a minimal starter team, `cd` into your project and run
+# `teamctl init` (the `solo` template is closer to what most
+# operators will copy first).
 
 version: 2
 

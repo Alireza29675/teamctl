@@ -8,10 +8,10 @@ project:
   # dogfood team.
   cwd: ..
 
-# Channel topology — three guiding principles, one channel each:
-# one wildcard for team-wide announcements, one per leadership
-# tier (pm/eng_lead/marketing), one per implementation surface
-# (eng_lead + devs + qa).
+# Channel topology — four guiding principles, one channel each:
+# one wildcard, one per leadership tier (pm/eng_lead/marketing),
+# one per implementation surface (eng_lead + devs + qa), one per
+# cross-team handoff (pm + marketing for landing-copy ratification).
 #
 # The marketing channel deliberately excludes engineering; the
 # leads channel excludes devs/qa. ACL discipline is intentional
