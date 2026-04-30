@@ -4,9 +4,10 @@
 //! the one their CWD implies.
 //!
 //! The warning fires for `validate`, `ps`, `mail`, `inspect` whenever the
-//! root was picked up from `TEAMCTL_ROOT` or a registered context. It is
-//! suppressed when the operator passed `--root` explicitly (deliberate
-//! intent) or when `TEAMCTL_QUIET=1` is set (script escape hatch).
+//! root was picked up from `TEAMCTL_ROOT`. It is suppressed when the
+//! operator passed `--root` explicitly (deliberate intent) or when
+//! `TEAMCTL_QUIET=1` is set (script escape hatch). Registered-context
+//! resolution was retired in T-008.
 
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -17,8 +18,6 @@ pub enum RootSource {
     CliFlag,
     /// `TEAMCTL_ROOT` environment variable.
     Env,
-    /// Active registered context (via `teamctl context use`).
-    Context(String),
     /// Walked up from CWD looking for `.team/team-compose.yaml`.
     WalkUp,
 }
@@ -36,11 +35,6 @@ pub fn maybe_warn_root_source(source: &RootSource, root: &Path) {
         RootSource::CliFlag | RootSource::WalkUp => return,
         RootSource::Env => format!(
             "using $TEAMCTL_ROOT={} (CWD walk-up would resolve elsewhere or fail)",
-            root.display()
-        ),
-        RootSource::Context(name) => format!(
-            "using context '{}' \u{2192} {} (set via 'teamctl context use')",
-            name,
             root.display()
         ),
     };
