@@ -55,7 +55,7 @@ hitl:
 
 ### Manager-only bridge
 
-Workers can't open bridges — only Alireza can, via `teamctl` or Telegram. This is an intentional privilege boundary.
+Workers can't open bridges — only the human operator can, via `teamctl` or Telegram. This is an intentional privilege boundary.
 
 ### Audit after the fact
 

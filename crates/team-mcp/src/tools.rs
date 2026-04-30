@@ -108,7 +108,7 @@ pub fn schema() -> Value {
         },
         {
             "name": "reply_to_user",
-            "description": "Send a reply to the human operator who DMed this agent. Available only to managers (`is_manager: true`); the configured interface adapter (Telegram, Discord, …) forwards it. Use this to answer Alireza, not `dm` (which is for inter-agent traffic and is project-scoped).",
+            "description": "Send a reply to the human operator who DMed this agent. Available only to managers (`is_manager: true`); the configured interface adapter (Telegram, Discord, …) forwards it. Use this to answer the human operator, not `dm` (which is for inter-agent traffic and is project-scoped).",
             "inputSchema": {
                 "type": "object",
                 "required": ["text"],
