@@ -1279,9 +1279,7 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 // model — `]` walks forward, `[` walks back. Keys
                 // do nothing when other panes are focused, so the
                 // chord stays unsurprising in every other context.
-                KeyCode::Char(']') if app.focused_pane == Pane::Mailbox => {
-                    app.cycle_mailbox_tab()
-                }
+                KeyCode::Char(']') if app.focused_pane == Pane::Mailbox => app.cycle_mailbox_tab(),
                 KeyCode::Char('[') if app.focused_pane == Pane::Mailbox => {
                     app.cycle_mailbox_tab_back()
                 }

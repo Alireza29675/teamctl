@@ -43,11 +43,7 @@ impl Widget for Statusline<'_> {
             Pane::Mailbox => "[ / ] tabs · ⏎ open · ! broadcast · q quit",
         };
 
-        let left = Line::from(vec![
-            tab_hint,
-            sep,
-            Span::styled(contextual, muted),
-        ]);
+        let left = Line::from(vec![tab_hint, sep, Span::styled(contextual, muted)]);
 
         // Always-visible right-anchor hint per SPEC §4.
         let right = "? help · t tutorial";
