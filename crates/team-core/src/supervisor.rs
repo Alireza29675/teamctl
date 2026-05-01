@@ -68,6 +68,45 @@ pub trait Supervisor {
         self.down(spec)?;
         Ok(DrainOutcome::TimedOutKilled)
     }
+
+    /// Cadence at which `drain` polls for `Stopped` after the
+    /// graceful-stop signal is sent. Default 250ms — fine on every
+    /// host we've tested. The hook exists so tests can inject a
+    /// shorter cadence (no real-time waits) without going through
+    /// the OS, and so a future slow-tmux host has an escape valve
+    /// without forking the orchestration.
+    fn drain_poll_interval(&self) -> Duration {
+        Duration::from_millis(250)
+    }
+}
+
+/// Generic graceful-drain orchestration used by `Supervisor` impls
+/// that have a "signal a graceful stop" primitive (e.g. tmux's
+/// `send-keys C-c`). Calls `signal_fn`, polls
+/// `supervisor.state(spec)` for `Stopped` up to `timeout` at the
+/// supervisor's `drain_poll_interval`, falls through to
+/// `supervisor.down(spec)` if the agent doesn't exit in time.
+///
+/// Pulled out so the orchestration contract is testable end-to-end
+/// against a `MockSupervisor` without a real tmux runtime.
+pub fn orchestrate_drain<S, F>(
+    supervisor: &S,
+    spec: &AgentSpec,
+    timeout: Duration,
+    signal_fn: F,
+) -> Result<DrainOutcome>
+where
+    S: Supervisor + ?Sized,
+    F: FnOnce(),
+{
+    signal_fn();
+    let outcome = poll_for_stopped(timeout, supervisor.drain_poll_interval(), || {
+        supervisor.state(spec).unwrap_or(AgentState::Unknown)
+    });
+    if outcome == DrainOutcome::TimedOutKilled {
+        supervisor.down(spec)?;
+    }
+    Ok(outcome)
 }
 
 /// Portable supervisor: one detached `tmux` session per agent.
@@ -128,20 +167,13 @@ impl Supervisor for TmuxSupervisor {
     /// assistant responses get a chance to flush instead of being
     /// SIGKILL'd by the prior `down()`.
     fn drain(&self, spec: &AgentSpec, timeout: Duration) -> Result<DrainOutcome> {
-        let _ = Command::new("tmux")
-            .args(["send-keys", "-t", &spec.tmux_session, "C-c"])
-            .status();
-        let outcome = poll_for_stopped(timeout, POLL_INTERVAL, || {
-            self.state(spec).unwrap_or(AgentState::Unknown)
-        });
-        if outcome == DrainOutcome::TimedOutKilled {
-            self.down(spec)?;
-        }
-        Ok(outcome)
+        orchestrate_drain(self, spec, timeout, || {
+            let _ = Command::new("tmux")
+                .args(["send-keys", "-t", &spec.tmux_session, "C-c"])
+                .status();
+        })
     }
 }
-
-const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Poll `observe_state` every `interval` for up to `timeout`, returning
 /// `Graceful` if `Stopped` is observed in time and `TimedOutKilled`
@@ -201,6 +233,166 @@ mod drain_tests {
         });
         assert_eq!(outcome, DrainOutcome::TimedOutKilled);
         assert_eq!(calls, 1, "single state observation before timeout");
+    }
+
+    /// Test supervisor that records every up/down/state/drain
+    /// call, optionally returns `Stopped` after N state observations,
+    /// and exposes a tunable `drain_poll_interval` so tests don't
+    /// wait on real time. Every invariant a Supervisor impl is
+    /// supposed to honour can be asserted against this.
+    #[derive(Default)]
+    struct MockSupervisor {
+        calls: RefCell<Vec<&'static str>>,
+        signals: RefCell<u32>,
+        /// On the Nth state() call (1-indexed), return Stopped. 0 =
+        /// always Running.
+        stop_after: u32,
+        state_calls: RefCell<u32>,
+        poll_interval: Duration,
+    }
+
+    impl MockSupervisor {
+        fn record(&self, op: &'static str) {
+            self.calls.borrow_mut().push(op);
+        }
+    }
+
+    impl Supervisor for MockSupervisor {
+        fn up(&self, _spec: &AgentSpec) -> Result<()> {
+            self.record("up");
+            Ok(())
+        }
+        fn down(&self, _spec: &AgentSpec) -> Result<()> {
+            self.record("down");
+            Ok(())
+        }
+        fn state(&self, _spec: &AgentSpec) -> Result<AgentState> {
+            self.record("state");
+            let mut n = self.state_calls.borrow_mut();
+            *n += 1;
+            if self.stop_after > 0 && *n >= self.stop_after {
+                Ok(AgentState::Stopped)
+            } else {
+                Ok(AgentState::Running)
+            }
+        }
+        fn drain_poll_interval(&self) -> Duration {
+            self.poll_interval
+        }
+    }
+
+    fn fake_spec() -> AgentSpec {
+        AgentSpec {
+            project: "p".into(),
+            agent: "a".into(),
+            tmux_session: "p-a".into(),
+            wrapper: PathBuf::from("/dev/null"),
+            cwd: PathBuf::from("/tmp"),
+            env_file: PathBuf::from("/dev/null"),
+        }
+    }
+
+    #[test]
+    fn drain_with_zero_timeout_returns_timed_out_killed_and_calls_down() {
+        // Contract: timeout=0 → instant signal-fn invocation, single
+        // state observation, fall-through to down(). No graceful path,
+        // no double-kill, no other side effects.
+        let mock = MockSupervisor {
+            poll_interval: Duration::from_millis(1),
+            ..Default::default()
+        };
+        let spec = fake_spec();
+        let signaled = RefCell::new(false);
+
+        let outcome = orchestrate_drain(&mock, &spec, Duration::ZERO, || {
+            *signaled.borrow_mut() = true;
+        })
+        .unwrap();
+
+        assert_eq!(outcome, DrainOutcome::TimedOutKilled);
+        assert!(*signaled.borrow(), "signal_fn must run before the poll");
+        assert_eq!(
+            mock.calls.borrow().as_slice(),
+            &["state", "down"],
+            "zero-timeout: one state observation then kill"
+        );
+    }
+
+    #[test]
+    fn drain_with_graceful_stop_does_not_call_down() {
+        // Contract: agent observed `Stopped` within timeout → no
+        // fall-through kill. The down() side effect is reserved for
+        // forced terminations.
+        let mock = MockSupervisor {
+            poll_interval: Duration::from_millis(1),
+            stop_after: 2, // Stopped on 2nd state() call.
+            ..Default::default()
+        };
+        let spec = fake_spec();
+
+        let outcome = orchestrate_drain(&mock, &spec, Duration::from_millis(100), || {}).unwrap();
+
+        assert_eq!(outcome, DrainOutcome::Graceful);
+        assert!(
+            !mock.calls.borrow().contains(&"down"),
+            "graceful drain must not call down(); calls: {:?}",
+            mock.calls.borrow()
+        );
+    }
+
+    #[test]
+    fn drain_poll_interval_default_is_250ms() {
+        // Pin the documented default so a future "tighten the
+        // default" change has to update the docstring + this test
+        // together.
+        struct Default250;
+        impl Supervisor for Default250 {
+            fn up(&self, _: &AgentSpec) -> Result<()> {
+                Ok(())
+            }
+            fn down(&self, _: &AgentSpec) -> Result<()> {
+                Ok(())
+            }
+            fn state(&self, _: &AgentSpec) -> Result<AgentState> {
+                Ok(AgentState::Stopped)
+            }
+        }
+        assert_eq!(Default250.drain_poll_interval(), Duration::from_millis(250));
+    }
+
+    #[test]
+    fn drain_poll_interval_override_is_used_by_orchestrator() {
+        // Sanity check that the trait method's value flows into
+        // poll_for_stopped — without this, a host-specific override
+        // would silently no-op.
+        let mock = MockSupervisor {
+            poll_interval: Duration::from_millis(2),
+            stop_after: 0,
+            ..Default::default()
+        };
+        let spec = fake_spec();
+
+        let start = Instant::now();
+        let _ = orchestrate_drain(&mock, &spec, Duration::from_millis(8), || {});
+        let elapsed = start.elapsed();
+
+        // With a 2ms poll interval and an 8ms timeout, we expect a
+        // handful of state observations, not 0 and not 100. Loose
+        // bound — enough to catch a 250ms default leaking in.
+        let states = mock
+            .calls
+            .borrow()
+            .iter()
+            .filter(|c| **c == "state")
+            .count();
+        assert!(
+            states >= 2,
+            "expected several state observations at 2ms cadence, got {states}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(60),
+            "drain with 2ms interval finished too slowly ({elapsed:?})"
+        );
     }
 }
 
