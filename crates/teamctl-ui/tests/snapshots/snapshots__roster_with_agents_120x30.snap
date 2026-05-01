@@ -1,0 +1,35 @@
+---
+source: crates/teamctl-ui/tests/snapshots.rs
+assertion_line: 126
+expression: buffer_to_string(&buf)
+---
+┌ROSTER────────────────────┐┌DETAIL · writing:manager──────────────────────────────────┐┌MAILBOX───────────────────────┐
+│ *  manager               ││      (no scrollback yet — agent may be starting up)      ││ Inbox    Channel    Wire     │
+│ @  worker-1              ││                                                          ││           (no DMs)           │
+│ !  worker-2              ││                                                          ││                              │
+│ x  critic                ││                                                          ││                              │
+│ ?  scout                 ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+└──────────────────────────┘└──────────────────────────────────────────────────────────┘└──────────────────────────────┘
+/ search · ⏎ open · @ send · q quit                                                                  ? help · t tutorial

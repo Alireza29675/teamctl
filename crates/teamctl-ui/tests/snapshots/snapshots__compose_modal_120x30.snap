@@ -1,0 +1,35 @@
+---
+source: crates/teamctl-ui/tests/snapshots.rs
+assertion_line: 310
+expression: s
+---
+┌ROSTER────────────────────┐┌DETAIL · writing:dev1─────────────────────────────────────┐┌MAILBOX───────────────────────┐
+│ *  manager               ││      (no scrollback yet — agent may be starting up)      ││ Inbox    Channel    Wire     │
+│ *  dev1                  ││                                                          ││           (no DMs)           │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                   ┌→ writing:dev1────────────────────────────────────────────────────────────────┐                   │
+│                   │line one                                                                      │                   │
+│                   │line two▏                                                                     │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │-- INSERT --                                                                  │                   │
+│                   │Ctrl+Enter send · Esc Esc cancel · Tab attach (TODO #32)                      │                   │
+│                   └──────────────────────────────────────────────────────────────────────────────┘                   │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+└──────────────────────────┘└──────────────────────────────────────────────────────────┘└──────────────────────────────┘
+/ search · ⏎ open · @ send · q quit                                                                  ? help · t tutorial
