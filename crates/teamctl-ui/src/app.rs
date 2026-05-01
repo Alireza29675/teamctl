@@ -2392,6 +2392,23 @@ mod tests {
     }
 
     #[test]
+    fn tutorial_walk_back_at_step_zero_is_no_op() {
+        // qa Gap C fold: pin the chosen behaviour for `k`/`Up`/`p`
+        // at step 0 — saturating decrement keeps `tutorial_step`
+        // at 0 rather than wrapping. Any future shift to
+        // wrap-to-end would break this test, which is the point.
+        let mut app = App::new();
+        app.dismiss_splash();
+        app.enter_tutorial();
+        assert_eq!(app.tutorial_step, 0);
+        dispatch(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.tutorial_step, 0, "step-0 walk-back is no-op");
+        // The walk-back keypress must NOT close the tutorial
+        // either — the Stage stays.
+        assert_eq!(app.stage, Stage::Tutorial);
+    }
+
+    #[test]
     fn ctrl_pipe_adds_vertical_split_ctrl_minus_adds_horizontal() {
         use crossterm::event::KeyModifiers;
         let mut app = App::new();

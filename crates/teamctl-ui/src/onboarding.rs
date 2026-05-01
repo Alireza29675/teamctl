@@ -69,6 +69,19 @@ pub fn has_completed(team_root: &std::path::Path) -> bool {
     sentinel_path(team_root).exists()
 }
 
+/// Mark this team's tutorial as completed by creating the
+/// sentinel file. The design intent is **presence-based**: only
+/// the file's existence matters, never its contents — a partial
+/// write that leaves an empty / truncated file still satisfies
+/// `has_completed`. That's accidentally robust to crash-during-
+/// write (the auto-trigger correctly fires once, then any later
+/// completion makes it stop firing forever) but the property is
+/// load-bearing, not coincidental: `has_completed` deliberately
+/// does NOT validate file content. Future readers tempted to
+/// add atomic-rename or content-validation should know that the
+/// existing crash-safety story already lives entirely in the
+/// presence check; tightening write semantics doesn't strengthen
+/// the contract, it just adds surface area.
 pub fn mark_completed(team_root: &std::path::Path) -> std::io::Result<()> {
     let path = sentinel_path(team_root);
     if let Some(parent) = path.parent() {
