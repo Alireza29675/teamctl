@@ -115,4 +115,57 @@ done
 if [ "$VERIFY" != "0" ]; then
   echo "all sha256s verified."
 fi
-echo "installed $installed binaries to $INSTALL_DIR. Make sure it's on your PATH."
+echo "installed $installed binaries to $INSTALL_DIR."
+
+# T-070: if INSTALL_DIR isn't on PATH, print an actionable shell-tailored
+# one-liner instead of a vague "make sure it's on your PATH." Friendly
+# without auto-mutating rc files (per T-062).
+case ":${PATH:-}:" in
+  *":$INSTALL_DIR:"*)
+    # Already on PATH — nothing more to say.
+    exit 0
+    ;;
+esac
+
+# System-wide install dirs (running as root) are typically on PATH already;
+# if INSTALL_DIR somehow isn't, keep the message generic rather than nudging
+# operator rc files.
+if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
+  echo "note: $INSTALL_DIR is not on root's PATH — add it to your system profile."
+  exit 0
+fi
+
+echo
+echo "WARNING: $INSTALL_DIR is not on your PATH."
+echo
+
+case "${SHELL:-}" in
+  */zsh)
+    rcfile="$HOME/.zshrc"
+    echo "To fix it, run:"
+    echo "  echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> $rcfile && source $rcfile"
+    echo
+    echo "Or add the line manually to $rcfile."
+    ;;
+  */bash)
+    rcfile="$HOME/.bashrc"
+    echo "To fix it, run:"
+    echo "  echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> $rcfile && source $rcfile"
+    echo
+    echo "Or add the line manually to $rcfile."
+    ;;
+  */fish)
+    echo "To fix it, run:"
+    echo "  fish_add_path $INSTALL_DIR"
+    echo
+    echo "(persists immediately — no need to source.)"
+    ;;
+  *)
+    rcfile="$HOME/.profile"
+    echo "To fix it, run:"
+    echo "  echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> $rcfile && . $rcfile"
+    echo
+    echo "Or add the line manually to $rcfile. Some shells (csh, tcsh)"
+    echo "use different syntax — adapt accordingly."
+    ;;
+esac
