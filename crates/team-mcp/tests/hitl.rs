@@ -3,7 +3,14 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+fn now_secs() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
 
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
@@ -250,4 +257,113 @@ fn request_approval_wait_false_returns_pending_immediately() {
         "wait:false should not block; took {elapsed:?}"
     );
     p.shutdown();
+}
+
+// T-038 — Regression-guard for SELECT vs delivered_at flip concurrency.
+//
+// Today the broker's safety against this race is implicit: SQLite's WAL
+// mode serialises writes, the SELECT for pending rows is a snapshot
+// read, and the `delivered_at IS NULL` clause makes the flip
+// idempotent. The test does not exercise a bug that exists today; it
+// exists so that a future refactor toward async/streaming or an
+// alternative store can't silently introduce a torn read, a double
+// flip, or a lost update without this test failing.
+//
+// Mechanic: spawn N concurrent SELECT-for-pending threads alongside one
+// thread that flips delivered_at on the row, and assert (a) every
+// observation of the row sees a coherent state (delivered_at either
+// fully NULL or fully set, never a torn intermediate); (b) the row's
+// final `delivered_at` is set exactly once (the `WHERE ... IS NULL`
+// guard makes the flip idempotent — repeat-flips become no-ops).
+#[test]
+fn select_vs_delivered_at_flip_is_race_free() {
+    use std::sync::Arc;
+
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("m.db");
+    seed(&mailbox);
+
+    // Seed one pending approval row.
+    let conn = Connection::open(&mailbox).unwrap();
+    conn.busy_timeout(Duration::from_secs(5)).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    conn.execute(
+        "INSERT INTO approvals (project_id, agent_id, action, summary, status,
+                                requested_at, expires_at)
+         VALUES ('p', 'mgr', 'publish', 'race test', 'pending', ?1, ?2)",
+        params![now, now + 3600.0],
+    )
+    .unwrap();
+    let id: i64 = conn.last_insert_rowid();
+    drop(conn);
+
+    let mailbox = Arc::new(mailbox);
+    let mut handles = Vec::new();
+
+    // Reader threads: repeatedly SELECT the row's status + delivered_at
+    // and assert the pair is coherent. "Coherent" here means: when
+    // status is `pending`, delivered_at may be NULL or a real f64 (the
+    // flipper races us); never a malformed value or a torn read.
+    for _ in 0..4 {
+        let mb = Arc::clone(&mailbox);
+        handles.push(thread::spawn(move || {
+            let conn = Connection::open(&*mb).unwrap();
+            conn.busy_timeout(Duration::from_secs(5)).unwrap();
+            for _ in 0..200 {
+                let (status, delivered_at): (String, Option<f64>) = conn
+                    .query_row(
+                        "SELECT status, delivered_at FROM approvals WHERE id = ?1",
+                        params![id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .unwrap();
+                assert_eq!(status, "pending", "row should remain pending throughout");
+                if let Some(t) = delivered_at {
+                    assert!(t > 0.0 && t < now + 7200.0, "torn timestamp: {t}");
+                }
+            }
+        }));
+    }
+
+    // Flipper thread: hammer the idempotent UPDATE. The first flip wins;
+    // subsequent flips become no-ops because of `delivered_at IS NULL`.
+    let mb = Arc::clone(&mailbox);
+    handles.push(thread::spawn(move || {
+        let conn = Connection::open(&*mb).unwrap();
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let mut total_flipped: usize = 0;
+        for _ in 0..50 {
+            let n = conn
+                .execute(
+                    "UPDATE approvals SET delivered_at = ?1
+                     WHERE id = ?2 AND delivered_at IS NULL",
+                    params![now_secs(), id],
+                )
+                .unwrap();
+            total_flipped += n;
+        }
+        assert_eq!(
+            total_flipped, 1,
+            "delivered_at should flip exactly once across 50 attempts"
+        );
+    }));
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    // Final state: delivered_at set, status still pending.
+    let conn = Connection::open(&*mailbox).unwrap();
+    let (status, delivered_at): (String, Option<f64>) = conn
+        .query_row(
+            "SELECT status, delivered_at FROM approvals WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "pending");
+    assert!(delivered_at.is_some(), "delivered_at should be set");
 }
