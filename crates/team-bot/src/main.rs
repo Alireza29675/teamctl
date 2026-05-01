@@ -235,20 +235,30 @@ async fn handle_callback(bot: Bot, q: CallbackQuery, state: Arc<State>) -> Respo
 
     // Atomic decision: only update if still pending. Returned row count tells
     // us whether this tap was the live decision or a stale duplicate.
+    //
+    // Order matters: status pin first, delivered_at flip second and
+    // *only* when the status pin succeeded. The reverse order — flip
+    // delivered_at unconditionally, then try the status pin — would
+    // break the invariant `undeliverable ↔ delivered_at IS NULL` on
+    // stale taps against rows that gc already moved to undeliverable.
     let decided_now = {
         let c = state.conn.lock().await;
-        let _ = c.execute(
-            "UPDATE approvals SET delivered_at=strftime('%s','now')
-             WHERE id=?1 AND delivered_at IS NULL",
-            params![id],
-        );
-        c.execute(
-            "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='user:telegram'
-             WHERE id=?2 AND status='pending'",
-            params![if approved { "approved" } else { "denied" }, id],
-        )
-        .map(|n| n > 0)
-        .unwrap_or(false)
+        let n = c
+            .execute(
+                "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='user:telegram'
+                 WHERE id=?2 AND status='pending'",
+                params![if approved { "approved" } else { "denied" }, id],
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if n {
+            let _ = c.execute(
+                "UPDATE approvals SET delivered_at=strftime('%s','now')
+                 WHERE id=?1 AND delivered_at IS NULL",
+                params![id],
+            );
+        }
+        n
     };
 
     if !decided_now {
@@ -585,5 +595,111 @@ mod tests {
         let input = "🔐 deploy\nrouting prompt to one channel — the **right** one";
         let expected = "🔐 deploy\nrouting prompt to one channel — the right one";
         assert_eq!(render_plain(input), expected);
+    }
+
+    /// T-036 — exercise the SQL ordering pattern used by `handle_callback`
+    /// (and by `cmd::approval::decide` in teamctl) directly against a
+    /// `Connection` so the ordering invariant has a unit-testable home.
+    /// Asserts: a stale tap on an `undeliverable` row does *not* flip
+    /// `delivered_at` (preserving the invariant
+    /// `undeliverable ↔ delivered_at IS NULL`), and a live tap on a
+    /// `pending` row flips both fields atomically.
+    fn decide_sql(conn: &Connection, id: i64, approved: bool) -> bool {
+        let status = if approved { "approved" } else { "denied" };
+        let n = conn
+            .execute(
+                "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='user:telegram'
+                 WHERE id=?2 AND status='pending'",
+                params![status, id],
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if n {
+            let _ = conn.execute(
+                "UPDATE approvals SET delivered_at=strftime('%s','now')
+                 WHERE id=?1 AND delivered_at IS NULL",
+                params![id],
+            );
+        }
+        n
+    }
+
+    fn insert_approval(conn: &Connection, status: &str, delivered_at: Option<f64>) -> i64 {
+        conn.execute(
+            "INSERT INTO approvals (project_id, agent_id, action, summary, status,
+                                    requested_at, expires_at, delivered_at)
+             VALUES ('p', 'eng_lead', 'publish', 's', ?1, 0.0, 999999999.0, ?2)",
+            params![status, delivered_at],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn stale_tap_on_undeliverable_does_not_flip_delivered_at() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let id = insert_approval(&conn, "undeliverable", None);
+
+        let decided = decide_sql(&conn, id, true);
+        assert!(!decided, "stale tap should report no live decision");
+
+        let (status, delivered_at): (String, Option<f64>) = conn
+            .query_row(
+                "SELECT status, delivered_at FROM approvals WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "undeliverable");
+        assert!(
+            delivered_at.is_none(),
+            "delivered_at must stay NULL on undeliverable row (invariant)"
+        );
+    }
+
+    #[test]
+    fn live_tap_on_pending_flips_status_and_delivered_at() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let id = insert_approval(&conn, "pending", None);
+
+        let decided = decide_sql(&conn, id, true);
+        assert!(decided, "live tap should report decision");
+
+        let (status, delivered_at): (String, Option<f64>) = conn
+            .query_row(
+                "SELECT status, delivered_at FROM approvals WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "approved");
+        assert!(
+            delivered_at.is_some(),
+            "live decision implies delivery acknowledgement"
+        );
+    }
+
+    #[test]
+    fn live_tap_keeps_existing_delivered_at_unchanged() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let id = insert_approval(&conn, "pending", Some(1234.5));
+
+        let decided = decide_sql(&conn, id, false);
+        assert!(decided);
+
+        let delivered_at: f64 = conn
+            .query_row(
+                "SELECT delivered_at FROM approvals WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            (delivered_at - 1234.5).abs() < 1e-6,
+            "previously-set delivered_at must not be overwritten ({delivered_at})"
+        );
     }
 }
