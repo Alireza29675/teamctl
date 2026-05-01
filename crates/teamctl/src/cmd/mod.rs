@@ -17,6 +17,7 @@ pub mod send;
 pub mod snapshot;
 pub mod status;
 pub mod tail;
+pub mod ui;
 pub mod up;
 pub mod validate;
 pub mod warn;

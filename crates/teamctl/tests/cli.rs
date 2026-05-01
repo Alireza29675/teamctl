@@ -679,6 +679,37 @@ fn init_refuses_existing_team_without_force() {
     );
 }
 
+// ── T-062: `teamctl ui` wrapper ────────────────────────────────────────
+
+#[test]
+fn ui_with_no_prompt_and_no_binary_prints_install_hint_and_exits_zero() {
+    // End-to-end: drive the real binary with a hermetic PATH that
+    // contains no `teamctl-ui`, and confirm `--no-prompt` short-circuits
+    // cleanly. This pins the contract that scripted/CI use of
+    // `teamctl ui --no-prompt` is exit-0 + hint-on-stderr — never
+    // blocks, never installs, never errors.
+    let empty = tempdir().unwrap();
+    let out = Command::new(bin())
+        .env("PATH", empty.path())
+        .args(["ui", "--no-prompt"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "ui --no-prompt must exit 0 even when teamctl-ui is missing; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("teamctl-ui is not installed"),
+        "expected install hint on stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("cargo install teamctl-ui"),
+        "expected install command in hint, got: {stderr}"
+    );
+}
+
 #[test]
 fn warn_e_quiet_silences_env() {
     let tmp = tempdir().unwrap();
