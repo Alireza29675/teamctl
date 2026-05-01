@@ -19,6 +19,8 @@ teamctl up
 
 ## Getting started
 
+> **Upgrading from 0.3.x?** See [Migrate from flat layout to `.team/`](https://teamctl.run/cookbook/migrate-to-team-folder/).
+
 teamctl drops a `.team/` folder into your existing project, brings the agents up in `tmux`, and supervises them. Four commands take any repo to a running team:
 
 ```bash

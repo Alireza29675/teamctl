@@ -62,6 +62,7 @@ export default defineConfig({
             { label: 'Mixing runtimes in one team', link: '/cookbook/multi-runtime/' },
             { label: 'Two projects, one teamctl, with bridges', link: '/cookbook/two-projects/' },
             { label: 'Per-agent reasoning effort', link: '/cookbook/effort/' },
+            { label: 'Migrate from flat layout to .team/', link: '/cookbook/migrate-to-team-folder/' },
           ],
         },
         {
