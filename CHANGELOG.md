@@ -4,6 +4,45 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-05-02
+
+### Fixed
+
+- **`teamctl ui` approve modal accepts lowercase `y`.** Previous
+  uppercase-only matcher meant `y` did nothing — operators concluded
+  the modal was broken. Asymmetric chord shape now: `y` or `Y`
+  approve (loose, common path); `N` only deny (strict, preserves
+  destructive-deny Shift-gate). Modal label and help overlay both
+  reflect the new shape.
+- **Tutorial body wraps to modal width.** Long step descriptions
+  no longer extend past the modal — `Wrap { trim: true }` on the
+  Paragraph render.
+- **Tab cycles pane focus uniformly.** Previously Tab cycled INTO
+  mailbox tabs (Inbox → Channel → Wire) instead of moving to the
+  next pane — operators got stuck. Tab now consistently cycles
+  Roster → Detail → Mailbox → Roster across all panes. New `[`
+  and `]` chords walk mailbox tabs when Mailbox is focused (vim
+  `[t`/`]t` mental model).
+- **Statusline pins Tab pane-cycle hint always-visible.** First
+  segment of every statusline now reads "Tab cycle panes" so the
+  chord is discoverable from the very first launch. Mailbox-focused
+  contextual hint updated to "[ / ] tabs."
+- **Tmux ANSI colors render in detail pane.** Captured agent output
+  now passes through `tmux capture-pane -e` and parses through
+  `ansi-to-tui` (MIT, MSRV 1.78). Falls back to raw text on parse
+  error so malformed escapes don't crash the render.
+
+### Notes
+
+- Release-pipeline gap caught alongside this patch — cargo-dist
+  smoke-test case-statement order matters when binary-name prefixes
+  overlap (`teamctl-ui` vs `teamctl`). Always put longest-prefix
+  branches first. Same bug shape as the splash isometric4 figlet
+  glyph collision.
+- TUI bug cluster (1) detail-pane height + (2) mailbox-bottom-half
+  layout (operator preference) tracked as T-074 PR #2; ships as
+  0.5.2.
+
 ## [0.5.0] — 2026-05-02
 
 ### Added
