@@ -38,7 +38,7 @@ pub const STEPS: &[Step] = &[
     },
     Step {
         heading: "Approvals",
-        body: "When an agent files request_approval, a stripe appears at the top. Press `a` to open the modal, then Y/N to decide. j/k cycle if multiple are pending.",
+        body: "When an agent files request_approval, a stripe appears at the top. Press `a` to open the modal, then `y` to approve or Shift-`N` to deny. j/k cycle if multiple are pending.",
     },
     Step {
         heading: "Compose",

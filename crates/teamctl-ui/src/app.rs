@@ -1116,7 +1116,7 @@ fn render_approvals_modal(area: Rect, buf: &mut Buffer, app: &App) {
     }
     lines.push(ratatui::text::Line::raw(""));
     lines.push(ratatui::text::Line::styled(
-        "[Y] approve  ·  [N] deny  ·  [j/k] cycle  ·  [Esc] close",
+        "[y] approve  ·  [Shift-N] deny  ·  [j/k] cycle  ·  [Esc] close",
         muted,
     ));
     Paragraph::new(lines).render(inner, buf);
@@ -1298,12 +1298,17 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 _ => {}
             },
             Stage::ApprovalsModal => match k.code {
-                // Uppercase-only Y / N to commit a decision —
-                // requires deliberate Shift, which raises the bar
-                // on a destructive deny (and keeps approve on the
-                // same chord shape for consistency). Lowercase y/n
-                // are intentionally not accepted.
-                KeyCode::Char('Y') => app.apply_decision(decider, Decision::Approve, ""),
+                // Asymmetric chord shape (T-074 bug 4 fix): approve is
+                // the common path so it accepts both `y` and `Y` —
+                // matches QuitConfirm's loose convention and the
+                // muscle-memory most TUI prompts build. Deny is the
+                // destructive side, so it requires deliberate Shift
+                // (`N` only); a stray lowercase `n` does nothing.
+                // Trades cosmetic chord-symmetry for discoverability
+                // on the load-bearing approve flow.
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    app.apply_decision(decider, Decision::Approve, "")
+                }
                 KeyCode::Char('N') => app.apply_decision(decider, Decision::Deny, ""),
                 KeyCode::Char('j') | KeyCode::Down => app.cycle_approval_next(),
                 KeyCode::Char('k') | KeyCode::Up => app.cycle_approval_prev(),
@@ -1885,6 +1890,59 @@ mod tests {
         app.enter_approvals_modal();
         dispatch(&mut app, key(KeyCode::Esc));
         assert_eq!(app.stage, Stage::Triptych);
+    }
+
+    #[test]
+    fn lowercase_y_routes_approve_through_decider() {
+        // T-074 bug 4: discoverable approve. Most operators try
+        // lowercase first; the modal must accept it on the
+        // approve (low-risk) side. Deny stays Shift-gated.
+        use crate::approvals::test_support::MockApprovalDecider;
+        let dec = MockApprovalDecider::default();
+        let mut app = App::new();
+        app.dismiss_splash();
+        app.replace_approvals(vec![ap(7)]);
+        app.enter_approvals_modal();
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Char('y')),
+            &dec,
+            &NoopSender,
+            &EmptyMailbox,
+        );
+        let calls = dec.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, crate::approvals::Decision::Approve);
+    }
+
+    #[test]
+    fn lowercase_n_does_not_deny() {
+        // Asymmetry guard: deny is destructive — `n` lowercase must
+        // NOT fire the decider. A future "symmetric loose" refactor
+        // would silently regress the destructive-deny Shift-gate;
+        // this test pins it.
+        use crate::approvals::test_support::MockApprovalDecider;
+        let dec = MockApprovalDecider::default();
+        let mut app = App::new();
+        app.dismiss_splash();
+        app.replace_approvals(vec![ap(7)]);
+        app.enter_approvals_modal();
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Char('n')),
+            &dec,
+            &NoopSender,
+            &EmptyMailbox,
+        );
+        assert!(
+            dec.calls.lock().unwrap().is_empty(),
+            "lowercase n must not route through the decider"
+        );
+        assert_eq!(
+            app.stage,
+            Stage::ApprovalsModal,
+            "stale lowercase n leaves the modal open"
+        );
     }
 
     #[test]
