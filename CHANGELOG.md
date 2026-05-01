@@ -4,13 +4,72 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-02
+
+### Added
+
+- **`teamctl-ui` — terminal control room** for autonomous agent
+  teams. Ships as a sibling crate (`cargo install teamctl-ui`) that
+  the main `teamctl` binary can launch via the new `teamctl ui`
+  subcommand wrapper. Triptych layout (Roster / Detail / Mailbox)
+  with state-glyph priority indicators on every agent; live tmux
+  pane streaming for the focused agent; mailbox tabs (Inbox /
+  Channel / Wire) with notify-based file-watch for real-time
+  updates; approvals stripe + modal that route writes through the
+  existing `teamctl approve|deny` CLI to preserve `delivered_at`
+  contracts; vim-keyed compose modal (`@` DM / `!` broadcast with
+  per-channel picker) sending via `teamctl send|broadcast`; Wall
+  and MailboxFirst alternate layouts (`Ctrl+W`/`Ctrl+M`); split-
+  screen with vertical/horizontal orientation per cell (`Ctrl+|` /
+  `Ctrl+-`) and `Ctrl+W q/o` chord-prefix navigation; `?` help
+  overlay reading from the same keymap registry the event loop
+  uses; first-launch onboarding tutorial (`t` to reopen). 110
+  tests; capability-aware theming degrades cleanly to monochrome.
+- `teamctl ui` subcommand in the main binary. Detects `teamctl-ui`
+  on PATH and execs it with clean process handoff (Unix) or
+  spawn-and-propagate-exit-code (Windows); friendly install hint
+  with explicit `[y/N]` prompt when missing. `--no-prompt` flag
+  for non-interactive shells / CI.
+- Per-agent `effort:` field on the team-compose schema. Accepts
+  `low | medium | high | xhigh | max` and flows through to
+  `claude --effort` at spawn time. Strict-enum validation rejects
+  typos with a clear error citing the offending agent.
+- Project-as-code dogfood — teamctl ships a `.team/` directory
+  inside its own repo demonstrating the `.team/` walk-up
+  convention end-to-end on the project that maintains itself.
+
+### Changed
+
+- Approval routing invariant tightened across all decide call sites
+  (CLI + Telegram callback). Status pin now precedes the
+  `delivered_at` flip, with the flip gated on a successful pin —
+  preserving the `undeliverable ↔ delivered_at IS NULL` invariant
+  against late stale taps.
+- CLI approval decisions now use a single fractional-seconds `now()`
+  call threaded through both `delivered_at` and `decided_at` writes,
+  matching the broker's `store::now()` precision and column affinity.
+- `Supervisor::drain` extracted into `orchestrate_drain` with a
+  testable trait-method poll interval (default 250ms). Drain
+  contract end-to-end pinned by mock-host tests including the
+  timeout=0 fast-path.
+- README links retargeted at the live docs site
+  (`https://teamctl.run/...`) instead of repo-relative paths that
+  404 on GitHub renders.
+
+### Fixed
+
+- Installer prints actionable shell-tailored PATH hint when the
+  install dir isn't on `$PATH` (zsh / bash / fish / fallback
+  profile). Friendly without auto-mutating — copy-paste one-liner,
+  never edits operator rc files.
+
 ### Notes
 
-- `teamctl-ui` splitscreen accepts both `Ctrl+|` and `Ctrl+-`
-  chords (PR-UI-6) but the visual layout collapses both into a
-  shared 2×2 tile grid for now. Vim/tmux operators' muscle memory
-  is preserved on the chord side; lifting the visual to honour
-  vertical-vs-horizontal subdivision is a PR-UI-7 polish item.
+- TUI bug cluster from operator first-trial (T-074) — modal
+  keymap discoverability, tmux color pass-through, focus-cycle
+  semantics, layout-height polish — landing as 0.5.1 follow-up.
+  This release ships the cascade substance; the polish iteration
+  follows immediately.
 
 ## [0.4.0] — 2026-04-30
 
