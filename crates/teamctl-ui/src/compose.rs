@@ -78,6 +78,15 @@ pub struct Editor {
     /// a row from any mode cancel the surrounding modal — same
     /// shape SPEC §4 specifies for "close all modals."
     pub esc_armed: bool,
+    /// Single-register yank buffer for `yy` / `dd` → `p`. Only
+    /// holds full lines; word-level yanks aren't in PR-UI-7 scope.
+    /// Empty `Vec` means "nothing to paste."
+    pub yank: Vec<String>,
+    /// Tracks whether the previous Normal-mode key was `d` or `y`.
+    /// `dd` deletes the line, `yy` yanks it. The pending-op state
+    /// clears on any non-matching key so `dx` doesn't leave the
+    /// editor in a half-operation.
+    pub pending_op: Option<char>,
 }
 
 impl Default for Editor {
@@ -92,6 +101,8 @@ impl Default for Editor {
             mode: VimMode::Insert,
             ex_buffer: String::new(),
             esc_armed: false,
+            yank: Vec::new(),
+            pending_op: None,
         }
     }
 }
@@ -208,6 +219,24 @@ impl Editor {
     }
 
     fn apply_normal(&mut self, k: KeyEvent) -> EditorAction {
+        // Pending-op (dd/yy) machine: when the previous press was
+        // `d` or `y`, the next key either completes the op
+        // (`d`/`y`) or aborts it. Any non-d/y/p key clears the
+        // pending-op so we don't leave the editor stuck.
+        if let Some(op) = self.pending_op {
+            self.pending_op = None;
+            match (op, k.code) {
+                ('d', KeyCode::Char('d')) => {
+                    self.delete_line();
+                    return EditorAction::Continue;
+                }
+                ('y', KeyCode::Char('y')) => {
+                    self.yank_line();
+                    return EditorAction::Continue;
+                }
+                _ => {} // fall through and re-dispatch the key
+            }
+        }
         match k.code {
             KeyCode::Char('i') => self.mode = VimMode::Insert,
             KeyCode::Char('a') => {
@@ -232,6 +261,19 @@ impl Editor {
                 self.mode = VimMode::Ex;
                 self.ex_buffer.clear();
             }
+            // PR-UI-7 word motions — `w` next word, `b` prev
+            // word, `e` end of word. ASCII-word semantics
+            // (alphanumeric + `_`); good enough for prose +
+            // single-line code we'd compose into mailbox messages.
+            KeyCode::Char('w') => self.move_word_forward(),
+            KeyCode::Char('b') => self.move_word_back(),
+            KeyCode::Char('e') => self.move_word_end(),
+            // PR-UI-7 line ops — first press arms the op, second
+            // press completes. `p` pastes the yank register
+            // below the current line.
+            KeyCode::Char('d') => self.pending_op = Some('d'),
+            KeyCode::Char('y') => self.pending_op = Some('y'),
+            KeyCode::Char('p') => self.paste_below(),
             _ => {}
         }
         EditorAction::Continue
@@ -277,6 +319,104 @@ impl Editor {
         let len = self.lines[self.cursor_row].len();
         self.cursor_col = (self.cursor_col + 1).min(len);
     }
+    fn move_word_forward(&mut self) {
+        let line = self.lines[self.cursor_row].as_bytes();
+        let mut i = self.cursor_col;
+        // Skip current word.
+        while i < line.len() && is_word_byte(line[i]) {
+            i += 1;
+        }
+        // Skip whitespace / non-word.
+        while i < line.len() && !is_word_byte(line[i]) {
+            i += 1;
+        }
+        if i == self.cursor_col && self.cursor_row + 1 < self.lines.len() {
+            // At EOL with no further word — advance to next line's start.
+            self.cursor_row += 1;
+            self.cursor_col = 0;
+        } else {
+            self.cursor_col = i;
+        }
+    }
+    fn move_word_back(&mut self) {
+        if self.cursor_col == 0 {
+            if self.cursor_row > 0 {
+                self.cursor_row -= 1;
+                self.cursor_col = self.lines[self.cursor_row].len();
+            }
+            return;
+        }
+        let line = self.lines[self.cursor_row].as_bytes();
+        let mut i = self.cursor_col;
+        // Step back over whitespace.
+        while i > 0 && !is_word_byte(line[i - 1]) {
+            i -= 1;
+        }
+        // Step back to start of word.
+        while i > 0 && is_word_byte(line[i - 1]) {
+            i -= 1;
+        }
+        self.cursor_col = i;
+    }
+    fn move_word_end(&mut self) {
+        let line = self.lines[self.cursor_row].as_bytes();
+        let mut i = self.cursor_col;
+        // If currently in a word, move to its end; if not, find
+        // the next word and move to its end.
+        if i < line.len() && !is_word_byte(line[i]) {
+            while i < line.len() && !is_word_byte(line[i]) {
+                i += 1;
+            }
+        } else if i < line.len()
+            && is_word_byte(line[i])
+            && (i + 1 >= line.len() || !is_word_byte(line[i + 1]))
+        {
+            // Already at EOW — skip past this word's terminator
+            // and find the next word's end.
+            i += 1;
+            while i < line.len() && !is_word_byte(line[i]) {
+                i += 1;
+            }
+        }
+        while i + 1 < line.len() && is_word_byte(line[i + 1]) {
+            i += 1;
+        }
+        if i < line.len() {
+            self.cursor_col = i;
+        }
+    }
+
+    fn delete_line(&mut self) {
+        if self.lines.is_empty() {
+            return;
+        }
+        let removed = self.lines.remove(self.cursor_row);
+        self.yank = vec![removed];
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+        if self.cursor_row >= self.lines.len() {
+            self.cursor_row = self.lines.len() - 1;
+        }
+        self.cursor_col = self.cursor_col.min(self.lines[self.cursor_row].len());
+    }
+    fn yank_line(&mut self) {
+        if let Some(line) = self.lines.get(self.cursor_row) {
+            self.yank = vec![line.clone()];
+        }
+    }
+    fn paste_below(&mut self) {
+        if self.yank.is_empty() {
+            return;
+        }
+        let yanked = self.yank.clone();
+        for (offset, line) in yanked.into_iter().enumerate() {
+            self.lines.insert(self.cursor_row + 1 + offset, line);
+        }
+        self.cursor_row += 1;
+        self.cursor_col = 0;
+    }
+
     fn move_up(&mut self) {
         if self.cursor_row > 0 {
             self.cursor_row -= 1;
@@ -289,6 +429,13 @@ impl Editor {
             self.cursor_col = self.cursor_col.min(self.lines[self.cursor_row].len());
         }
     }
+}
+
+/// ASCII word-boundary classifier — alphanumeric + `_` is a word
+/// byte, everything else is whitespace / punctuation. Used by the
+/// vim word-motion `w` / `b` / `e` keys.
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 pub trait MessageSender: Send + Sync {
