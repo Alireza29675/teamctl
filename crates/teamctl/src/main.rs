@@ -155,6 +155,21 @@ enum Command {
         action: ContextAction,
     },
 
+    // ── TUI ──────────────────────────────────────────────────────────
+    /// Launch the `teamctl-ui` TUI. If `teamctl-ui` is on PATH, exec
+    /// to it with any extra args forwarded; if not, print an install
+    /// hint and (interactively) offer to run `cargo install teamctl-ui`.
+    Ui {
+        /// Skip the install prompt; just print the hint and exit.
+        /// Implicit when stdin is non-interactive (CI / pipes).
+        #[arg(long)]
+        no_prompt: bool,
+        /// Args forwarded to `teamctl-ui`. Use `--` to separate them
+        /// from teamctl's own flags: `teamctl ui -- --root /path`.
+        #[arg(last = true, allow_hyphen_values = true)]
+        argv: Vec<String>,
+    },
+
     // ── Internal ────────────────────────────────────────────────────
     /// Wrap a runtime invocation, watching for rate-limit signatures.
     /// Used by `agent-wrapper.sh`; not normally invoked by hand.
@@ -223,6 +238,9 @@ fn main() -> Result<()> {
     {
         return cmd::init::run(name, template, project, force, yes);
     }
+    if let Command::Ui { no_prompt, argv } = cli.command {
+        return cmd::ui::run(no_prompt, argv);
+    }
     if let Command::Context { action } = &cli.command {
         return match action {
             ContextAction::Ls => cmd::context::ls(),
@@ -283,6 +301,7 @@ fn main() -> Result<()> {
         Command::Env { doctor } => cmd::env::run(&root, doctor),
         Command::Context { .. } => unreachable!("handled above"),
         Command::Init { .. } => unreachable!("handled above"),
+        Command::Ui { .. } => unreachable!("handled above"),
     }
 }
 
