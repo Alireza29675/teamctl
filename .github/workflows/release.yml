@@ -161,9 +161,10 @@ jobs:
             # Strip the longest binary-name prefix (`team-mcp-`, `team-bot-`,
             # then `teamctl-`) to recover the target triple.
             case "$base" in
-              team-mcp-*) bin_name="team-mcp"; target="${base#team-mcp-}" ;;
-              team-bot-*) bin_name="team-bot"; target="${base#team-bot-}" ;;
-              teamctl-*)  bin_name="teamctl";  target="${base#teamctl-}" ;;
+              team-mcp-*)   bin_name="team-mcp";   target="${base#team-mcp-}" ;;
+              team-bot-*)   bin_name="team-bot";   target="${base#team-bot-}" ;;
+              teamctl-ui-*) bin_name="teamctl-ui"; target="${base#teamctl-ui-}" ;;
+              teamctl-*)    bin_name="teamctl";    target="${base#teamctl-}" ;;
               *) echo "::error::unrecognized tarball $tarball"; exit 1 ;;
             esac
             workdir="$(mktemp -d)"
