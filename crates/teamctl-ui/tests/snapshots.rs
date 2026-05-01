@@ -312,6 +312,90 @@ fn compose_modal_renders_target_body_and_attach_todo_footer() {
     insta::assert_snapshot!("compose_modal_120x30", s);
 }
 
+// ── PR-UI-7 fixup (qa Gap D): detail-pane splits actually render.
+
+#[test]
+fn detail_pane_two_vertical_splits_renders_side_by_side() {
+    use teamctl_ui::app::SplitOrientation;
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![
+            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            synth_agent("writing:dev1", AgentState::Running, 0, 0),
+        ],
+    ));
+    app.set_detail_buffer(["[12:00] focused".into()].to_vec());
+    // Inject splits directly to keep the snapshot input deterministic.
+    app.detail_splits = vec![("writing:dev1".into(), SplitOrientation::Vertical)];
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(s.contains("writing:manager"), "focused agent title missing");
+    assert!(s.contains("writing:dev1"), "split agent title missing");
+    insta::assert_snapshot!("detail_two_vertical_splits_120x30", s);
+}
+
+#[test]
+fn detail_pane_two_horizontal_splits_stack_top_to_bottom() {
+    use teamctl_ui::app::SplitOrientation;
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![
+            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            synth_agent("writing:dev1", AgentState::Running, 0, 0),
+        ],
+    ));
+    app.set_detail_buffer(["[12:00] focused".into()].to_vec());
+    app.detail_splits = vec![("writing:dev1".into(), SplitOrientation::Horizontal)];
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(s.contains("writing:manager"));
+    assert!(s.contains("writing:dev1"));
+    insta::assert_snapshot!("detail_two_horizontal_splits_120x30", s);
+}
+
+#[test]
+fn detail_pane_four_split_mixed_grid_renders() {
+    use teamctl_ui::app::SplitOrientation;
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![
+            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            synth_agent("writing:dev1", AgentState::Running, 0, 0),
+            synth_agent("writing:dev2", AgentState::Running, 0, 0),
+            synth_agent("writing:critic", AgentState::Running, 0, 0),
+        ],
+    ));
+    app.set_detail_buffer(["[12:00] focused".into()].to_vec());
+    // Composition: vertical → horizontal → vertical → horizontal.
+    // First V starts column 1 next to focused; following H stacks
+    // inside that new column; then another V opens a third
+    // column; another H stacks inside it. Net: 3 columns, the
+    // first holds the focused agent, the second holds dev1+dev2
+    // stacked, the third holds critic alone.
+    app.detail_splits = vec![
+        ("writing:dev1".into(), SplitOrientation::Vertical),
+        ("writing:dev2".into(), SplitOrientation::Horizontal),
+        ("writing:critic".into(), SplitOrientation::Vertical),
+    ];
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    for must in [
+        "writing:manager",
+        "writing:dev1",
+        "writing:dev2",
+        "writing:critic",
+    ] {
+        assert!(s.contains(must), "missing split title: {must}");
+    }
+    insta::assert_snapshot!("detail_four_split_mixed_120x30", s);
+}
+
 #[test]
 fn render_at_minimum_terminal_does_not_panic() {
     // Small terminal — ratatui swallows over-large constraints, so as

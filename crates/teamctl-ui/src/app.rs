@@ -55,6 +55,23 @@ pub enum Stage {
     /// send|broadcast` so the channel-ACL + ratelimit + delivery
     /// hooks the CLI already runs through ride for free.
     ComposeModal,
+    /// `?` help overlay — modal listing every chord registered in
+    /// `help::ALL_GROUPS`. Read-only; closes on Esc / `?`.
+    HelpOverlay,
+    /// Onboarding tutorial walkthrough. Auto-opens on first
+    /// launch (per-team sentinel at
+    /// `.team/state/ui-tutorial-completed`); reopenable via `t`
+    /// from any non-modal state.
+    Tutorial,
+}
+
+/// Splitscreen orientation per detail-pane split (PR-UI-7 lift
+/// of PR-UI-6's deferred Q1). `Vertical` subdivides side-by-side
+/// (Ctrl+|); `Horizontal` stacks top-to-bottom (Ctrl+-).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitOrientation {
+    Vertical,
+    Horizontal,
 }
 
 pub struct App {
@@ -125,11 +142,28 @@ pub struct App {
     /// picker. `None` until the operator picks one.
     pub selected_channel: Option<usize>,
     /// Splits within Triptych's detail pane (PR-UI-6). When
-    /// non-empty, the detail pane subdivides; each entry is the
-    /// agent id streaming in that split. `selected_split` is the
-    /// vim-window-motion focus.
-    pub detail_splits: Vec<String>,
+    /// non-empty, the detail pane subdivides; each entry pairs an
+    /// agent id with the per-split orientation (PR-UI-7 lift of
+    /// the Q1 deferral). `selected_split` is the vim-window-motion
+    /// focus.
+    pub detail_splits: Vec<(String, SplitOrientation)>,
     pub selected_split: usize,
+    /// Chord-prefix machine for `Ctrl+W` follow-ups (PR-UI-7 lift
+    /// of PR-UI-6's `Ctrl+Q` alias). When `Some(KeyCode::Char('w'))`,
+    /// the next key is interpreted as a `Ctrl+W` follow: `q` =
+    /// close split, `o` = close others. Cleared on any unrelated
+    /// keypress so a typo doesn't leave the editor stuck.
+    pub pending_chord: Option<KeyCode>,
+    /// `true` when the operator's first launch on this team has
+    /// not yet completed the tutorial — drives the auto-open after
+    /// splash. Reset to `false` on tutorial completion.
+    pub tutorial_pending_for_team: bool,
+    /// Brand-spinner frame counter (PR-UI-7). Bumped each refresh
+    /// tick so the statusline indicator shows the app is alive.
+    pub spinner_frame: usize,
+    /// Tutorial step cursor (PR-UI-7). Index into
+    /// `onboarding::STEPS`; reset to 0 when the tutorial reopens.
+    pub tutorial_step: usize,
     /// Modal substage for the broadcast channel picker (PR-UI-6).
     /// When `true` the compose modal renders a picker over the
     /// editor; selecting a channel populates `compose_target` and
@@ -176,7 +210,48 @@ impl App {
             selected_split: 0,
             compose_picker_open: false,
             compose_picker_index: 0,
+            pending_chord: None,
+            tutorial_pending_for_team: false,
+            spinner_frame: 0,
+            tutorial_step: 0,
         }
+    }
+
+    /// Per-tutorial-step cursor (used by Stage::Tutorial). Wraps
+    /// at the end so `t`-then-keys walks the full tour.
+    pub fn enter_help_overlay(&mut self) {
+        self.previous_stage = self.stage;
+        self.stage = Stage::HelpOverlay;
+    }
+    pub fn close_help_overlay(&mut self) {
+        self.stage = self.previous_stage;
+    }
+    pub fn enter_tutorial(&mut self) {
+        self.previous_stage = self.stage;
+        self.stage = Stage::Tutorial;
+        self.tutorial_step = 0;
+    }
+    pub fn close_tutorial(&mut self) {
+        self.stage = self.previous_stage;
+        self.tutorial_pending_for_team = false;
+        if !self.team.root.as_os_str().is_empty() {
+            let _ = crate::onboarding::mark_completed(&self.team.root);
+        }
+    }
+    pub fn tutorial_advance(&mut self) {
+        let len = crate::onboarding::STEPS.len();
+        if len == 0 {
+            self.close_tutorial();
+            return;
+        }
+        if self.tutorial_step + 1 >= len {
+            self.close_tutorial();
+        } else {
+            self.tutorial_step += 1;
+        }
+    }
+    pub fn tutorial_back(&mut self) {
+        self.tutorial_step = self.tutorial_step.saturating_sub(1);
     }
 
     pub fn toggle_wall_layout(&mut self) {
@@ -226,15 +301,30 @@ impl App {
 
     /// Add a split for the focused agent (or current selection)
     /// to the detail pane. Cap at 4 splits per the SPEC §3 cap.
-    pub fn add_detail_split(&mut self) {
+    /// Add a vertical split (PR-UI-7). `Ctrl+|` calls this.
+    pub fn add_detail_split_vertical(&mut self) {
+        self.add_detail_split_with_orientation(SplitOrientation::Vertical);
+    }
+    /// Add a horizontal split (PR-UI-7). `Ctrl+-` calls this.
+    pub fn add_detail_split_horizontal(&mut self) {
+        self.add_detail_split_with_orientation(SplitOrientation::Horizontal);
+    }
+    fn add_detail_split_with_orientation(&mut self, orientation: SplitOrientation) {
         let Some(id) = self.selected_agent_id() else {
             return;
         };
         if self.detail_splits.len() >= 4 {
             return;
         }
-        self.detail_splits.push(id);
+        self.detail_splits.push((id, orientation));
         self.selected_split = self.detail_splits.len() - 1;
+    }
+    /// Back-compat shim — earlier PRs called the unsuffixed name.
+    /// Defaults to vertical (matching the most-common chord
+    /// `Ctrl+|`). Kept so the test surface PR-UI-6 pinned doesn't
+    /// drift.
+    pub fn add_detail_split(&mut self) {
+        self.add_detail_split_vertical();
     }
     pub fn close_focused_split(&mut self) {
         if self.detail_splits.is_empty() {
@@ -752,7 +842,69 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
             draw_main(f, area, app);
             draw_compose_modal(f, area, app);
         }
+        Stage::HelpOverlay => {
+            draw_main(f, area, app);
+            let buf = f.buffer_mut();
+            render_help_overlay(area, buf, app);
+        }
+        Stage::Tutorial => {
+            draw_main(f, area, app);
+            let buf = f.buffer_mut();
+            render_tutorial(area, buf, app);
+        }
     }
+}
+
+fn render_help_overlay(area: Rect, buf: &mut Buffer, app: &App) {
+    let popup_w = 70u16.min(area.width.saturating_sub(4));
+    let popup_h = 24u16.min(area.height.saturating_sub(2));
+    let popup = centered_rect(popup_w, popup_h, area);
+    Clear.render(popup, buf);
+    let block = Block::default()
+        .title("help · ? to close")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.capabilities.accent()));
+    let inner = block.inner(popup);
+    block.render(popup, buf);
+    let muted = Style::default().fg(app.capabilities.muted());
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mut lines: Vec<ratatui::text::Line<'_>> = Vec::new();
+    for group in crate::help::ALL_GROUPS {
+        lines.push(ratatui::text::Line::styled(group.title, bold));
+        for b in group.bindings {
+            lines.push(ratatui::text::Line::raw(format!(
+                "  {:<22}  {}",
+                b.chord, b.description
+            )));
+        }
+        lines.push(ratatui::text::Line::styled("", muted));
+    }
+    Paragraph::new(lines).render(inner, buf);
+}
+
+fn render_tutorial(area: Rect, buf: &mut Buffer, app: &App) {
+    let popup_w = 64u16.min(area.width.saturating_sub(4));
+    let popup_h = 14u16.min(area.height.saturating_sub(2));
+    let popup = centered_rect(popup_w, popup_h, area);
+    Clear.render(popup, buf);
+    let total = crate::onboarding::STEPS.len();
+    let i = app.tutorial_step.min(total.saturating_sub(1));
+    let step = &crate::onboarding::STEPS[i];
+    let block = Block::default()
+        .title(format!("tutorial · {}/{total}", i + 1))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.capabilities.accent()));
+    let inner = block.inner(popup);
+    block.render(popup, buf);
+    let muted = Style::default().fg(app.capabilities.muted());
+    let lines = vec![
+        ratatui::text::Line::styled(step.heading, Style::default().add_modifier(Modifier::BOLD)),
+        ratatui::text::Line::raw(""),
+        ratatui::text::Line::raw(step.body),
+        ratatui::text::Line::raw(""),
+        ratatui::text::Line::styled("any key next  ·  k / ↑ / p back  ·  Esc skip", muted),
+    ];
+    Paragraph::new(lines).render(inner, buf);
 }
 
 fn draw_main(f: &mut Frame<'_>, area: Rect, app: &App) {
@@ -1005,6 +1157,24 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
         Event::Key(k) if k.kind == KeyEventKind::Press => match app.stage {
             Stage::Splash => app.dismiss_splash(),
             Stage::Triptych => match k.code {
+                // PR-UI-7 chord-prefix follow-ups MUST be tested
+                // before unguarded `Char('q')` / `Char('o')` arms,
+                // otherwise the no-modifier `q` quit would shadow
+                // the `Ctrl+W q` close-split.
+                KeyCode::Char('q') if app.pending_chord == Some(KeyCode::Char('w')) => {
+                    app.pending_chord = None;
+                    app.close_focused_split();
+                }
+                KeyCode::Char('o') if app.pending_chord == Some(KeyCode::Char('w')) => {
+                    app.pending_chord = None;
+                    if !app.detail_splits.is_empty() {
+                        let keep = app.selected_split.min(app.detail_splits.len() - 1);
+                        let kept = app.detail_splits.remove(keep);
+                        app.detail_splits.clear();
+                        app.detail_splits.push(kept);
+                        app.selected_split = 0;
+                    }
+                }
                 KeyCode::Char('q') => app.enter_quit_confirm(),
                 // PR-UI-4: `a` opens the approvals modal when there's
                 // at least one pending row. No-op otherwise so the
@@ -1016,41 +1186,38 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 // not just the project's `all` wire.
                 KeyCode::Char('@') => app.enter_compose_dm_for_focused(),
                 KeyCode::Char('!') => app.enter_compose_broadcast_with_picker(),
-                // PR-UI-6: layout toggles. `Ctrl+W` for Wall,
-                // `Ctrl+M` for MailboxFirst. Pressed without the
-                // modifier these letters fall through (no `w`/`m`
-                // chord at the Triptych level).
+                // PR-UI-7 chord-prefix: when there's at least one
+                // detail split, `Ctrl+W` arms the chord-prefix
+                // (the next key dispatches `q` close-split, `o`
+                // close-others). Tested BEFORE the wall-layout
+                // toggle below so the chord-prefix wins when
+                // relevant.
+                KeyCode::Char('w')
+                    if k.modifiers.contains(KeyModifiers::CONTROL)
+                        && !app.detail_splits.is_empty() =>
+                {
+                    app.pending_chord = Some(KeyCode::Char('w'))
+                }
+                // PR-UI-6: layout toggles. `Ctrl+W` for Wall when
+                // there are no splits to chord on; `Ctrl+M` for
+                // MailboxFirst (always).
                 KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.toggle_wall_layout()
                 }
                 KeyCode::Char('m') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.toggle_mailbox_first_layout()
                 }
-                // PR-UI-6 splitscreen: `Ctrl+|` (vertical) and
-                // `Ctrl+-` (horizontal) both add a split rooted at
-                // the focused agent. The visual layout doesn't
-                // (yet) distinguish vertical vs horizontal — we
-                // tile splits in a 2×2 grid; the chords just say
-                // "give me one more split."
-                //
-                // TODO(PR-UI-7): lift the visual to honour the
-                // chord pair — `Ctrl+|` subdivides vertically,
-                // `Ctrl+-` horizontally — so vim/tmux operators'
-                // muscle memory matches what they see. The chord
-                // pair itself is preserved here precisely so that
-                // muscle memory stays trained while the visual
-                // catches up. CHANGELOG `[Unreleased]` flags the
-                // temporary collapse.
+                // PR-UI-7 splitscreen lift: `Ctrl+|` subdivides
+                // vertically, `Ctrl+-` horizontally — vim/tmux
+                // operators' muscle memory matches the visual.
                 KeyCode::Char('|') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                    app.add_detail_split()
+                    app.add_detail_split_vertical()
                 }
                 KeyCode::Char('-') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                    app.add_detail_split()
+                    app.add_detail_split_horizontal()
                 }
                 // Vim window-motion `Ctrl+H/J/K/L` cycles between
-                // splits when there's more than one. `Ctrl+W q`
-                // pattern would need a chord-prefix machine; for
-                // PR-UI-6 we collapse to `Ctrl+Q`-as-close-split.
+                // splits when there's more than one.
                 KeyCode::Char('h') | KeyCode::Char('k')
                     if k.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
@@ -1061,9 +1228,25 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 {
                     app.cycle_split_next()
                 }
+                // PR-UI-6 alias preserved for back-compat: `Ctrl+Q`
+                // closes the focused split. PR-UI-7 also wires the
+                // proper `Ctrl+W q` chord; both work.
                 KeyCode::Char('Q') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.close_focused_split()
                 }
+                // (chord-prefix follow-ups handled at top of arm
+                // before unguarded letter-arms — see top of
+                // `Stage::Triptych` match.)
+                // PR-UI-7 help + tutorial chords. `?` opens help
+                // overlay; `t` reopens tutorial. Both no-op if a
+                // modifier is in flight (so `Shift+?` and `Ctrl+T`
+                // don't double-bind).
+                KeyCode::Char('?')
+                    if k.modifiers.is_empty() || k.modifiers == KeyModifiers::SHIFT =>
+                {
+                    app.enter_help_overlay()
+                }
+                KeyCode::Char('t') if k.modifiers.is_empty() => app.enter_tutorial(),
                 // PR-UI-4: Shift+Tab cycles panes backward. Some
                 // terminals send `BackTab`, others send `Tab` with
                 // SHIFT — handle both.
@@ -1160,6 +1343,15 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                     }
                 }
             }
+            Stage::HelpOverlay => match k.code {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => app.close_help_overlay(),
+                _ => {}
+            },
+            Stage::Tutorial => match k.code {
+                KeyCode::Esc => app.close_tutorial(),
+                KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('p') => app.tutorial_back(),
+                _ => app.tutorial_advance(),
+            },
         },
         Event::Resize(_, _) => {
             // ratatui redraws on the next loop iteration; nothing to do.
@@ -1188,6 +1380,14 @@ pub fn render_to_buffer(app: &App, width: u16, height: u16) -> Buffer {
         Stage::ComposeModal => {
             render_main(app, area, &mut buf);
             render_compose_modal(area, &mut buf, app);
+        }
+        Stage::HelpOverlay => {
+            render_main(app, area, &mut buf);
+            render_help_overlay(area, &mut buf, app);
+        }
+        Stage::Tutorial => {
+            render_main(app, area, &mut buf);
+            render_tutorial(area, &mut buf, app);
         }
     }
     buf
@@ -2161,6 +2361,141 @@ mod tests {
         assert!(app.selected_channel.is_none());
         app.toggle_mailbox_first_layout();
         assert_eq!(app.selected_channel, Some(0));
+    }
+
+    #[test]
+    fn help_overlay_opens_on_question_mark_closes_on_esc() {
+        let mut app = App::new();
+        app.dismiss_splash();
+        dispatch(&mut app, key(KeyCode::Char('?')));
+        assert_eq!(app.stage, Stage::HelpOverlay);
+        dispatch(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.stage, Stage::Triptych);
+    }
+
+    #[test]
+    fn tutorial_opens_on_t_advances_and_closes() {
+        let mut app = App::new();
+        app.dismiss_splash();
+        dispatch(&mut app, key(KeyCode::Char('t')));
+        assert_eq!(app.stage, Stage::Tutorial);
+        assert_eq!(app.tutorial_step, 0);
+        // Any non-Esc/back key advances.
+        dispatch(&mut app, key(KeyCode::Char(' ')));
+        assert_eq!(app.tutorial_step, 1);
+        // `k` walks back.
+        dispatch(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.tutorial_step, 0);
+        // Esc closes from any step.
+        dispatch(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.stage, Stage::Triptych);
+    }
+
+    #[test]
+    fn tutorial_walk_back_at_step_zero_is_no_op() {
+        // qa Gap C fold: pin the chosen behaviour for `k`/`Up`/`p`
+        // at step 0 — saturating decrement keeps `tutorial_step`
+        // at 0 rather than wrapping. Any future shift to
+        // wrap-to-end would break this test, which is the point.
+        let mut app = App::new();
+        app.dismiss_splash();
+        app.enter_tutorial();
+        assert_eq!(app.tutorial_step, 0);
+        dispatch(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.tutorial_step, 0, "step-0 walk-back is no-op");
+        // The walk-back keypress must NOT close the tutorial
+        // either — the Stage stays.
+        assert_eq!(app.stage, Stage::Tutorial);
+    }
+
+    #[test]
+    fn ctrl_pipe_adds_vertical_split_ctrl_minus_adds_horizontal() {
+        use crossterm::event::KeyModifiers;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('|'), KeyModifiers::CONTROL),
+        );
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('-'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.detail_splits.len(), 2);
+        assert_eq!(app.detail_splits[0].1, SplitOrientation::Vertical);
+        assert_eq!(app.detail_splits[1].1, SplitOrientation::Horizontal);
+    }
+
+    #[test]
+    fn ctrl_w_q_chord_prefix_closes_focused_split() {
+        use crossterm::event::KeyModifiers;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        // Two splits — `Ctrl+W` arms only when there's something
+        // to close.
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('|'), KeyModifiers::CONTROL),
+        );
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('|'), KeyModifiers::CONTROL),
+        );
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.pending_chord, Some(KeyCode::Char('w')));
+        // Plain `q` (no modifier) is now interpreted as the
+        // chord-prefix follow-up — close split, NOT quit.
+        dispatch(&mut app, key(KeyCode::Char('q')));
+        assert_eq!(app.detail_splits.len(), 1);
+        assert_eq!(app.stage, Stage::Triptych, "must not enter quit confirm");
+        assert_eq!(app.pending_chord, None, "chord cleared");
+    }
+
+    #[test]
+    fn ctrl_w_o_chord_keeps_only_focused_split() {
+        use crossterm::event::KeyModifiers;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        for _ in 0..3 {
+            dispatch(
+                &mut app,
+                key_with(KeyCode::Char('|'), KeyModifiers::CONTROL),
+            );
+        }
+        // Focus the middle split.
+        app.selected_split = 1;
+        let kept_id = app.detail_splits[1].0.clone();
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        dispatch(&mut app, key(KeyCode::Char('o')));
+        assert_eq!(app.detail_splits.len(), 1);
+        assert_eq!(app.detail_splits[0].0, kept_id);
+        assert_eq!(app.selected_split, 0);
+    }
+
+    #[test]
+    fn add_detail_split_saturates_at_four_with_explicit_4_and_5_calls() {
+        // qa Gap 2 fold: pin the cap explicitly. Reaching exactly
+        // 4 must stick; the 5th call must be a no-op (not panic,
+        // not silently grow). If `add_detail_split` ever returns
+        // a Result, this test catches the silent-success regression.
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        for _ in 0..4 {
+            app.add_detail_split();
+        }
+        assert_eq!(app.detail_splits.len(), 4);
+        let snapshot_len = app.detail_splits.len();
+        app.add_detail_split();
+        assert_eq!(app.detail_splits.len(), snapshot_len, "5th call rejected");
     }
 
     #[test]
