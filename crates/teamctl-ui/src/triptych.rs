@@ -23,6 +23,38 @@ use crate::data::{state_glyph, AgentInfo};
 use crate::mailbox::{render_row, MailboxTab};
 use crate::theme::ColorMode;
 
+/// Top-level layout selector for the main view (Stage::Triptych).
+/// PR-UI-1..5 used the Triptych shape exclusively; PR-UI-6 adds
+/// Wall (orchestrator overview, up to 4 tiles + scroll) and
+/// MailboxFirst (channel-feed centric for cross-team triage).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainLayout {
+    Triptych,
+    Wall,
+    MailboxFirst,
+}
+
+impl MainLayout {
+    /// `Ctrl+W` (or standalone `w` from the SPEC chord map)
+    /// toggles between Triptych ↔ Wall.
+    pub fn toggle_wall(self) -> Self {
+        if matches!(self, MainLayout::Wall) {
+            MainLayout::Triptych
+        } else {
+            MainLayout::Wall
+        }
+    }
+
+    /// `Ctrl+M` toggles between Triptych ↔ MailboxFirst.
+    pub fn toggle_mailbox_first(self) -> Self {
+        if matches!(self, MainLayout::MailboxFirst) {
+            MainLayout::Triptych
+        } else {
+            MainLayout::MailboxFirst
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
     Roster,

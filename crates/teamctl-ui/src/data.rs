@@ -50,6 +50,17 @@ pub struct AgentInfo {
     pub is_manager: bool,
 }
 
+/// One channel exposed in `team-compose.yaml`. Used by PR-UI-6's
+/// per-channel broadcast picker and by the Mailbox-first layout's
+/// channel list. `id` is `<project>:<name>` (matches the broker's
+/// `channels.id`); `name` is the short label rendered as `#name`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelInfo {
+    pub id: String,
+    pub name: String,
+    pub project_id: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct TeamSnapshot {
     /// Path to the `.team/` discovered by walk-up (the compose root).
@@ -61,6 +72,10 @@ pub struct TeamSnapshot {
     /// each group sorted by id. Roster navigation (`↑` / `↓`) walks
     /// this slice directly.
     pub agents: Vec<AgentInfo>,
+    /// Channels declared across every project file. Drives the
+    /// PR-UI-6 broadcast picker + the Mailbox-first layout's
+    /// channel list.
+    pub channels: Vec<ChannelInfo>,
 }
 
 impl TeamSnapshot {
@@ -71,6 +86,7 @@ impl TeamSnapshot {
             root,
             team_name: "(no team loaded)".into(),
             agents: Vec::new(),
+            channels: Vec::new(),
         }
     }
 
@@ -136,10 +152,25 @@ impl TeamSnapshot {
             _ => std::cmp::Ordering::Equal,
         });
 
+        let mut channels = Vec::new();
+        for project in &compose.projects {
+            for ch in &project.channels {
+                channels.push(ChannelInfo {
+                    id: format!("{}:{}", project.project.id, ch.name),
+                    name: ch.name.clone(),
+                    project_id: project.project.id.clone(),
+                });
+            }
+        }
+        // Stable order for the picker — operators see the same
+        // sequence on every open.
+        channels.sort_by(|a, b| a.id.cmp(&b.id));
+
         Ok(Self {
             root: compose.root,
             team_name,
             agents,
+            channels,
         })
     }
 }

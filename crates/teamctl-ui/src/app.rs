@@ -24,12 +24,13 @@ use crate::approvals::{
 };
 use crate::compose::{CliMessageSender, ComposeTarget, Editor, EditorAction, MessageSender};
 use crate::data::TeamSnapshot;
+use crate::layouts;
 use crate::mailbox::{BrokerMailboxSource, MailboxBuffers, MailboxSource, MailboxTab};
 use crate::pane::{PaneSource, TmuxPaneSource};
 use crate::splash;
 use crate::statusline;
 use crate::theme::{detect_capabilities, Capabilities};
-use crate::triptych::{self, Pane};
+use crate::triptych::{self, MainLayout, Pane};
 use crate::tutorial;
 use crate::watch::Watch;
 
@@ -112,6 +113,30 @@ pub struct App {
     /// in the modal so the operator sees rate-limit / ACL-block
     /// errors without leaving the UI.
     pub compose_error: Option<String>,
+    /// Active main-view layout (PR-UI-6). Triptych is the default;
+    /// `Ctrl+W` toggles Wall, `Ctrl+M` toggles MailboxFirst.
+    pub layout: MainLayout,
+    /// Top-of-window agent index for the Wall view's vertical
+    /// scroll. SPEC §3 caps visible tiles at 4; this offsets which
+    /// 4-agent window is shown when the team has more.
+    pub wall_scroll: usize,
+    /// Selected channel index (into `team.channels`) for the
+    /// MailboxFirst layout's channel list and for the broadcast
+    /// picker. `None` until the operator picks one.
+    pub selected_channel: Option<usize>,
+    /// Splits within Triptych's detail pane (PR-UI-6). When
+    /// non-empty, the detail pane subdivides; each entry is the
+    /// agent id streaming in that split. `selected_split` is the
+    /// vim-window-motion focus.
+    pub detail_splits: Vec<String>,
+    pub selected_split: usize,
+    /// Modal substage for the broadcast channel picker (PR-UI-6).
+    /// When `true` the compose modal renders a picker over the
+    /// editor; selecting a channel populates `compose_target` and
+    /// drops back to the editor.
+    pub compose_picker_open: bool,
+    /// Picker selection cursor — index into `team.channels`.
+    pub compose_picker_index: usize,
 }
 
 const MAX_DETAIL_LINES: usize = 2000;
@@ -144,7 +169,151 @@ impl App {
             compose_target: None,
             compose_editor: Editor::default(),
             compose_error: None,
+            layout: MainLayout::Triptych,
+            wall_scroll: 0,
+            selected_channel: None,
+            detail_splits: Vec::new(),
+            selected_split: 0,
+            compose_picker_open: false,
+            compose_picker_index: 0,
         }
+    }
+
+    pub fn toggle_wall_layout(&mut self) {
+        self.layout = self.layout.toggle_wall();
+    }
+    pub fn toggle_mailbox_first_layout(&mut self) {
+        self.layout = self.layout.toggle_mailbox_first();
+        // First entry into MailboxFirst seeds the channel cursor
+        // so the feed pane has something to render.
+        if matches!(self.layout, MainLayout::MailboxFirst) && self.selected_channel.is_none() {
+            self.selected_channel = if self.team.channels.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+        }
+    }
+    pub fn wall_scroll_up(&mut self) {
+        self.wall_scroll = self
+            .wall_scroll
+            .saturating_sub(crate::layouts::WALL_TILE_CAP);
+    }
+    pub fn wall_scroll_down(&mut self) {
+        let next = self.wall_scroll + crate::layouts::WALL_TILE_CAP;
+        if next < self.team.agents.len() {
+            self.wall_scroll = next;
+        }
+    }
+    pub fn select_next_channel(&mut self) {
+        if self.team.channels.is_empty() {
+            return;
+        }
+        self.selected_channel = Some(match self.selected_channel {
+            None => 0,
+            Some(i) => (i + 1) % self.team.channels.len(),
+        });
+    }
+    pub fn select_prev_channel(&mut self) {
+        if self.team.channels.is_empty() {
+            return;
+        }
+        self.selected_channel = Some(match self.selected_channel {
+            None | Some(0) => self.team.channels.len() - 1,
+            Some(i) => i - 1,
+        });
+    }
+
+    /// Add a split for the focused agent (or current selection)
+    /// to the detail pane. Cap at 4 splits per the SPEC §3 cap.
+    pub fn add_detail_split(&mut self) {
+        let Some(id) = self.selected_agent_id() else {
+            return;
+        };
+        if self.detail_splits.len() >= 4 {
+            return;
+        }
+        self.detail_splits.push(id);
+        self.selected_split = self.detail_splits.len() - 1;
+    }
+    pub fn close_focused_split(&mut self) {
+        if self.detail_splits.is_empty() {
+            return;
+        }
+        let i = self.selected_split.min(self.detail_splits.len() - 1);
+        self.detail_splits.remove(i);
+        self.selected_split = i.saturating_sub(1);
+    }
+    pub fn cycle_split_next(&mut self) {
+        if self.detail_splits.is_empty() {
+            return;
+        }
+        self.selected_split = (self.selected_split + 1) % self.detail_splits.len();
+    }
+    pub fn cycle_split_prev(&mut self) {
+        if self.detail_splits.is_empty() {
+            return;
+        }
+        self.selected_split = if self.selected_split == 0 {
+            self.detail_splits.len() - 1
+        } else {
+            self.selected_split - 1
+        };
+    }
+
+    /// Open the broadcast compose flow — picker first when at
+    /// least one channel is declared, else fall back to the
+    /// project's `all` channel (PR-UI-5 behaviour) on the
+    /// assumption that `all` always exists in production composes.
+    pub fn enter_compose_broadcast_with_picker(&mut self) {
+        if self.team.channels.is_empty() {
+            // Fall back to the PR-UI-5 default if no channels
+            // are declared yet — should only happen with a
+            // half-loaded snapshot.
+            self.enter_compose_broadcast();
+            return;
+        }
+        let project_id = self
+            .team
+            .channels
+            .first()
+            .map(|c| c.project_id.clone())
+            .unwrap_or_default();
+        self.previous_stage = self.stage;
+        self.stage = Stage::ComposeModal;
+        self.compose_target = Some(ComposeTarget::Broadcast {
+            channel_id: format!("{project_id}:all"),
+            project_id,
+        });
+        self.compose_editor = Editor::default();
+        self.compose_error = None;
+        self.compose_picker_open = true;
+        self.compose_picker_index = 0;
+    }
+    pub fn picker_next(&mut self) {
+        if self.team.channels.is_empty() {
+            return;
+        }
+        self.compose_picker_index = (self.compose_picker_index + 1) % self.team.channels.len();
+    }
+    pub fn picker_prev(&mut self) {
+        if self.team.channels.is_empty() {
+            return;
+        }
+        self.compose_picker_index = if self.compose_picker_index == 0 {
+            self.team.channels.len() - 1
+        } else {
+            self.compose_picker_index - 1
+        };
+    }
+    pub fn picker_confirm(&mut self) {
+        if let Some(ch) = self.team.channels.get(self.compose_picker_index) {
+            self.compose_target = Some(ComposeTarget::Broadcast {
+                channel_id: ch.id.clone(),
+                project_id: ch.project_id.clone(),
+            });
+        }
+        self.compose_picker_open = false;
     }
 
     pub fn cycle_mailbox_tab(&mut self) {
@@ -591,8 +760,19 @@ fn draw_main(f: &mut Frame<'_>, area: Rect, app: &App) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(area);
-    triptych::draw(f, chunks[0], app);
-    statusline::draw(f, chunks[1], app);
+    let buf = f.buffer_mut();
+    match app.layout {
+        crate::triptych::MainLayout::Triptych => {
+            triptych::Triptych { app }.render(chunks[0], buf);
+        }
+        crate::triptych::MainLayout::Wall => {
+            layouts::Wall { app }.render(chunks[0], buf);
+        }
+        crate::triptych::MainLayout::MailboxFirst => {
+            layouts::MailboxFirst { app }.render(chunks[0], buf);
+        }
+    }
+    statusline::Statusline { app }.render(chunks[1], buf);
 }
 
 fn draw_approvals_modal(f: &mut Frame<'_>, area: Rect, app: &App) {
@@ -603,6 +783,48 @@ fn draw_approvals_modal(f: &mut Frame<'_>, area: Rect, app: &App) {
 fn draw_compose_modal(f: &mut Frame<'_>, area: Rect, app: &App) {
     let buf = f.buffer_mut();
     render_compose_modal(area, buf, app);
+}
+
+fn render_compose_picker_body(inner: Rect, buf: &mut Buffer, app: &App) {
+    let muted = Style::default().fg(app.capabilities.muted());
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    let lines: Vec<ratatui::text::Line<'_>> = if app.team.channels.is_empty() {
+        vec![ratatui::text::Line::styled(
+            "(no channels declared in team-compose)",
+            muted,
+        )]
+    } else {
+        app.team
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(i, ch)| {
+                let label = format!("  #{}  ({})", ch.name, ch.project_id);
+                let style = if i == app.compose_picker_index {
+                    Style::default()
+                        .fg(app.capabilities.accent())
+                        .add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                ratatui::text::Line::styled(label, style)
+            })
+            .collect()
+    };
+    Paragraph::new(lines).render(chunks[0], buf);
+    Paragraph::new("pick a channel to broadcast to")
+        .style(muted)
+        .render(chunks[1], buf);
+    Paragraph::new("Enter pick · j/k navigate · Esc cancel")
+        .style(muted)
+        .render(chunks[2], buf);
 }
 
 fn render_compose_modal(area: Rect, buf: &mut Buffer, app: &App) {
@@ -623,6 +845,13 @@ fn render_compose_modal(area: Rect, buf: &mut Buffer, app: &App) {
     block.render(popup, buf);
 
     if inner.height < 3 {
+        return;
+    }
+    // PR-UI-6: when the broadcast picker is open we render a
+    // channel-list inside the modal instead of the editor; the
+    // editor footer stays so operators see the same layout.
+    if app.compose_picker_open {
+        render_compose_picker_body(inner, buf, app);
         return;
     }
     // Reserve the bottom two rows: an error line (rendered when
@@ -781,12 +1010,60 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 // at least one pending row. No-op otherwise so the
                 // chord doesn't surprise anyone hammering keys.
                 KeyCode::Char('a') => app.enter_approvals_modal(),
-                // PR-UI-5: `@` opens DM compose to focused agent;
-                // `!` opens broadcast compose to project's `all`
-                // channel. Both no-op when there's no agent /
-                // project to scope to.
+                // PR-UI-5: `@` opens DM compose to focused agent.
+                // PR-UI-6: `!` now opens the broadcast picker so
+                // operators choose which channel to broadcast to,
+                // not just the project's `all` wire.
                 KeyCode::Char('@') => app.enter_compose_dm_for_focused(),
-                KeyCode::Char('!') => app.enter_compose_broadcast(),
+                KeyCode::Char('!') => app.enter_compose_broadcast_with_picker(),
+                // PR-UI-6: layout toggles. `Ctrl+W` for Wall,
+                // `Ctrl+M` for MailboxFirst. Pressed without the
+                // modifier these letters fall through (no `w`/`m`
+                // chord at the Triptych level).
+                KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.toggle_wall_layout()
+                }
+                KeyCode::Char('m') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.toggle_mailbox_first_layout()
+                }
+                // PR-UI-6 splitscreen: `Ctrl+|` (vertical) and
+                // `Ctrl+-` (horizontal) both add a split rooted at
+                // the focused agent. The visual layout doesn't
+                // (yet) distinguish vertical vs horizontal — we
+                // tile splits in a 2×2 grid; the chords just say
+                // "give me one more split."
+                //
+                // TODO(PR-UI-7): lift the visual to honour the
+                // chord pair — `Ctrl+|` subdivides vertically,
+                // `Ctrl+-` horizontally — so vim/tmux operators'
+                // muscle memory matches what they see. The chord
+                // pair itself is preserved here precisely so that
+                // muscle memory stays trained while the visual
+                // catches up. CHANGELOG `[Unreleased]` flags the
+                // temporary collapse.
+                KeyCode::Char('|') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.add_detail_split()
+                }
+                KeyCode::Char('-') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.add_detail_split()
+                }
+                // Vim window-motion `Ctrl+H/J/K/L` cycles between
+                // splits when there's more than one. `Ctrl+W q`
+                // pattern would need a chord-prefix machine; for
+                // PR-UI-6 we collapse to `Ctrl+Q`-as-close-split.
+                KeyCode::Char('h') | KeyCode::Char('k')
+                    if k.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    app.cycle_split_prev()
+                }
+                KeyCode::Char('l') | KeyCode::Char('j')
+                    if k.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    app.cycle_split_next()
+                }
+                KeyCode::Char('Q') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.close_focused_split()
+                }
                 // PR-UI-4: Shift+Tab cycles panes backward. Some
                 // terminals send `BackTab`, others send `Tab` with
                 // SHIFT — handle both.
@@ -799,6 +1076,28 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 // so this special-case stays narrow.
                 KeyCode::Tab if app.focused_pane == Pane::Mailbox => app.cycle_mailbox_tab(),
                 KeyCode::Tab => app.cycle_focus(),
+                // PR-UI-6: in Wall layout, `j`/`k` (and arrows)
+                // scroll the tile grid — same vim shape, different
+                // surface. In Triptych roster focus they still
+                // navigate the roster.
+                KeyCode::Up | KeyCode::Char('k') if matches!(app.layout, MainLayout::Wall) => {
+                    app.wall_scroll_up()
+                }
+                KeyCode::Down | KeyCode::Char('j') if matches!(app.layout, MainLayout::Wall) => {
+                    app.wall_scroll_down()
+                }
+                // PR-UI-6: in MailboxFirst, `j`/`k` walk the
+                // channel list.
+                KeyCode::Up | KeyCode::Char('k')
+                    if matches!(app.layout, MainLayout::MailboxFirst) =>
+                {
+                    app.select_prev_channel()
+                }
+                KeyCode::Down | KeyCode::Char('j')
+                    if matches!(app.layout, MainLayout::MailboxFirst) =>
+                {
+                    app.select_next_channel()
+                }
                 // Roster navigation — only when roster is the
                 // focused pane. j/k mirror Vim; arrows mirror
                 // every-day navigation.
@@ -829,13 +1128,36 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 _ => {}
             },
             Stage::ComposeModal => {
-                // Route every keypress through the editor; the
-                // editor returns Send / Cancel / Continue. Modal
-                // close + send wiring lives on App.
-                match app.compose_editor.apply_key(k) {
-                    EditorAction::Continue => {}
-                    EditorAction::Send => app.apply_send(sender, mailbox_source),
-                    EditorAction::Cancel => app.close_compose_modal(),
+                // PR-UI-6: when the broadcast picker is open the
+                // editor doesn't see keys yet — operator first
+                // chooses a channel.
+                if app.compose_picker_open {
+                    match k.code {
+                        KeyCode::Down | KeyCode::Char('j') => app.picker_next(),
+                        KeyCode::Up | KeyCode::Char('k') => app.picker_prev(),
+                        KeyCode::Enter => app.picker_confirm(),
+                        // PR-UI-6 fixup (Q6, dev2 review): Esc
+                        // dismisses the picker overlay only and
+                        // returns to the editor with whatever the
+                        // operator already typed; the editor's own
+                        // Esc-Esc cancel-the-modal flow handles
+                        // bailing out of the whole compose. Mirrors
+                        // the overlay-vs-modal symmetry vim users
+                        // expect.
+                        KeyCode::Esc => {
+                            app.compose_picker_open = false;
+                            app.compose_picker_index = 0;
+                        }
+                        _ => {}
+                    }
+                } else {
+                    // Route every keypress through the editor; the
+                    // editor returns Send / Cancel / Continue.
+                    match app.compose_editor.apply_key(k) {
+                        EditorAction::Continue => {}
+                        EditorAction::Send => app.apply_send(sender, mailbox_source),
+                        EditorAction::Cancel => app.close_compose_modal(),
+                    }
                 }
             }
         },
@@ -876,7 +1198,17 @@ fn render_main(app: &App, area: Rect, buf: &mut Buffer) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(area);
-    triptych::Triptych { app }.render(chunks[0], buf);
+    match app.layout {
+        crate::triptych::MainLayout::Triptych => {
+            triptych::Triptych { app }.render(chunks[0], buf);
+        }
+        crate::triptych::MainLayout::Wall => {
+            layouts::Wall { app }.render(chunks[0], buf);
+        }
+        crate::triptych::MainLayout::MailboxFirst => {
+            layouts::MailboxFirst { app }.render(chunks[0], buf);
+        }
+    }
     statusline::Statusline { app }.render(chunks[1], buf);
 }
 
@@ -1000,6 +1332,7 @@ mod tests {
             root: std::path::PathBuf::from("/fixture"),
             team_name: "fixture".into(),
             agents,
+            channels: Vec::new(),
         }
     }
 
@@ -1501,6 +1834,333 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("rate limit"));
+    }
+
+    fn channel(id: &str, project: &str) -> crate::data::ChannelInfo {
+        crate::data::ChannelInfo {
+            id: id.into(),
+            name: id
+                .rsplit_once(':')
+                .map(|(_, n)| n.to_string())
+                .unwrap_or_default(),
+            project_id: project.into(),
+        }
+    }
+
+    fn fixture_team_with_channels(
+        agents: Vec<AgentInfo>,
+        channels: Vec<crate::data::ChannelInfo>,
+    ) -> TeamSnapshot {
+        TeamSnapshot {
+            root: std::path::PathBuf::from("/fixture"),
+            team_name: "fixture".into(),
+            agents,
+            channels,
+        }
+    }
+
+    #[test]
+    fn ctrl_w_toggles_wall_layout() {
+        use crossterm::event::KeyModifiers;
+        let mut app = App::new();
+        app.dismiss_splash();
+        assert_eq!(app.layout, MainLayout::Triptych);
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.layout, MainLayout::Wall);
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.layout, MainLayout::Triptych);
+    }
+
+    #[test]
+    fn ctrl_m_toggles_mailbox_first_layout() {
+        use crossterm::event::KeyModifiers;
+        let mut app = App::new();
+        app.dismiss_splash();
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('m'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.layout, MainLayout::MailboxFirst);
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('m'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.layout, MainLayout::Triptych);
+    }
+
+    #[test]
+    fn wall_scroll_pages_through_overflow_agents() {
+        let mut app = App::new();
+        let mut agents: Vec<_> = (1..=10)
+            .map(|i| agent(&format!("p:agent-{i:02}"), AgentState::Running))
+            .collect();
+        // managers-first sort would otherwise reorder; mark all as workers.
+        for a in agents.iter_mut() {
+            a.is_manager = false;
+        }
+        app.replace_team(fixture_team(agents));
+        app.dismiss_splash();
+        app.toggle_wall_layout();
+        assert_eq!(app.wall_scroll, 0);
+        app.wall_scroll_down();
+        assert_eq!(app.wall_scroll, 4);
+        app.wall_scroll_down();
+        assert_eq!(app.wall_scroll, 8);
+        // Past 10-1 = 9; cap blocks 12.
+        app.wall_scroll_down();
+        assert_eq!(app.wall_scroll, 8, "scroll capped at last full window");
+        app.wall_scroll_up();
+        assert_eq!(app.wall_scroll, 4);
+    }
+
+    #[test]
+    fn ctrl_pipe_adds_detail_split_capped_at_four() {
+        use crossterm::event::KeyModifiers;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![
+            agent("p:a", AgentState::Running),
+            agent("p:b", AgentState::Running),
+        ]));
+        app.dismiss_splash();
+        for _ in 0..6 {
+            dispatch(
+                &mut app,
+                key_with(KeyCode::Char('|'), KeyModifiers::CONTROL),
+            );
+        }
+        assert_eq!(app.detail_splits.len(), 4, "split count capped at 4");
+    }
+
+    #[test]
+    fn ctrl_q_closes_focused_split() {
+        use crossterm::event::KeyModifiers;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('|'), KeyModifiers::CONTROL),
+        );
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('|'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.detail_splits.len(), 2);
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('Q'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.detail_splits.len(), 1);
+    }
+
+    #[test]
+    fn ctrl_hjkl_cycles_splits() {
+        use crossterm::event::KeyModifiers;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        for _ in 0..3 {
+            dispatch(
+                &mut app,
+                key_with(KeyCode::Char('|'), KeyModifiers::CONTROL),
+            );
+        }
+        assert_eq!(app.selected_split, 2);
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('l'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.selected_split, 0, "wraps");
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('h'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.selected_split, 2);
+    }
+
+    #[test]
+    fn wall_scroll_at_exactly_cap_agents_does_not_scroll() {
+        // PR-UI-6 fixup (qa Gap 1a): with exactly WALL_TILE_CAP=4
+        // agents the entire team fits in one window — scrolling
+        // is a no-op in both directions. Pinning this catches a
+        // future `<` → `<=` slip in `wall_scroll_down`.
+        let mut app = App::new();
+        let agents: Vec<_> = (1..=4)
+            .map(|i| agent(&format!("p:agent-{i}"), AgentState::Running))
+            .collect();
+        app.replace_team(fixture_team(agents));
+        app.dismiss_splash();
+        app.toggle_wall_layout();
+        assert_eq!(app.wall_scroll, 0);
+        app.wall_scroll_down();
+        assert_eq!(app.wall_scroll, 0, "exactly-cap should not advance");
+        app.wall_scroll_up();
+        assert_eq!(app.wall_scroll, 0);
+    }
+
+    #[test]
+    fn wall_scroll_at_cap_plus_one_advances_then_stops() {
+        // PR-UI-6 fixup (qa Gap 1b): exactly 5 agents → 4 fit in
+        // window-0, the 5th lives at window-4. One scroll
+        // advances; the next caps. Pins the off-by-one between 4
+        // and 5 agents.
+        let mut app = App::new();
+        let agents: Vec<_> = (1..=5)
+            .map(|i| agent(&format!("p:agent-{i}"), AgentState::Running))
+            .collect();
+        app.replace_team(fixture_team(agents));
+        app.dismiss_splash();
+        app.toggle_wall_layout();
+        app.wall_scroll_down();
+        assert_eq!(app.wall_scroll, 4, "first scroll exposes agent 5");
+        app.wall_scroll_down();
+        assert_eq!(app.wall_scroll, 4, "second scroll caps; nothing past");
+    }
+
+    #[test]
+    fn esc_in_picker_dismisses_overlay_only_keeps_modal_open() {
+        // PR-UI-6 fixup (Q6 dev2 review + qa Gap 3): Esc inside
+        // the broadcast picker should close the picker overlay
+        // and return to the editor in its current state — NOT
+        // close the whole compose modal. Editor's Esc-Esc
+        // already handles cancel-the-modal.
+        let mut app = App::new();
+        app.replace_team(fixture_team_with_channels(
+            vec![agent("writing:manager", AgentState::Running)],
+            vec![
+                channel("writing:all", "writing"),
+                channel("writing:editorial", "writing"),
+            ],
+        ));
+        app.dismiss_splash();
+        dispatch(&mut app, key(KeyCode::Char('!')));
+        assert!(app.compose_picker_open);
+        assert_eq!(app.stage, Stage::ComposeModal);
+        dispatch(&mut app, key(KeyCode::Esc));
+        assert!(!app.compose_picker_open, "picker dismissed");
+        assert_eq!(app.stage, Stage::ComposeModal, "compose modal stays open");
+    }
+
+    #[test]
+    fn send_routes_broadcast_through_mock_sender_via_picker() {
+        // PR-UI-6 fixup (qa Gap 4): the broadcast path needs the
+        // same MockMessageSender pin the DM path got in PR-UI-5.
+        // Pins both per-channel-correct-id (picker selection
+        // flows through to the send call) AND routes-through-
+        // `broadcast()`-not-`send()` (no DM call recorded).
+        use crate::compose::test_support::MockMessageSender;
+        let sender = MockMessageSender::default();
+        let mailbox = EmptyMailbox;
+        let mut app = App::new();
+        app.replace_team(fixture_team_with_channels(
+            vec![agent("writing:manager", AgentState::Running)],
+            vec![
+                channel("writing:all", "writing"),
+                channel("writing:editorial", "writing"),
+                channel("writing:critique", "writing"),
+            ],
+        ));
+        app.dismiss_splash();
+        // Open picker, walk to channel index 1 (`editorial`),
+        // confirm, type a body, Ctrl+Enter to send.
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Char('!')),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+        );
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Char('j')),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+        );
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Enter),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+        );
+        for c in "ship docs".chars() {
+            super::handle_event(
+                &mut app,
+                key(KeyCode::Char(c)),
+                &NoopDecider,
+                &sender,
+                &mailbox,
+            );
+        }
+        super::handle_event(
+            &mut app,
+            key_with(KeyCode::Enter, crossterm::event::KeyModifiers::CONTROL),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+        );
+        let dm_calls = sender.dm_calls.lock().unwrap().clone();
+        let bcast_calls = sender.broadcast_calls.lock().unwrap().clone();
+        assert!(dm_calls.is_empty(), "broadcast must not route via send_dm");
+        assert_eq!(bcast_calls.len(), 1);
+        assert_eq!(
+            bcast_calls[0].0, "writing:editorial",
+            "channel id from picker selection"
+        );
+        assert_eq!(bcast_calls[0].1, "ship docs");
+        assert_eq!(app.stage, Stage::Triptych, "modal closes on send");
+    }
+
+    #[test]
+    fn bang_chord_opens_picker_when_channels_available() {
+        let mut app = App::new();
+        app.replace_team(fixture_team_with_channels(
+            vec![agent("writing:manager", AgentState::Running)],
+            vec![
+                channel("writing:all", "writing"),
+                channel("writing:editorial", "writing"),
+                channel("writing:critique", "writing"),
+            ],
+        ));
+        app.dismiss_splash();
+        dispatch(&mut app, key(KeyCode::Char('!')));
+        assert_eq!(app.stage, Stage::ComposeModal);
+        assert!(app.compose_picker_open);
+        // Walk the picker.
+        dispatch(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.compose_picker_index, 1);
+        // Confirm pulls into compose target.
+        dispatch(&mut app, key(KeyCode::Enter));
+        assert!(!app.compose_picker_open, "picker closes on confirm");
+        match app.compose_target.as_ref() {
+            Some(crate::compose::ComposeTarget::Broadcast { channel_id, .. }) => {
+                assert_eq!(channel_id, "writing:editorial");
+            }
+            other => panic!("expected Broadcast target, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mailbox_first_layout_seeds_channel_selection_on_entry() {
+        let mut app = App::new();
+        app.replace_team(fixture_team_with_channels(
+            vec![agent("writing:manager", AgentState::Running)],
+            vec![
+                channel("writing:all", "writing"),
+                channel("writing:editorial", "writing"),
+            ],
+        ));
+        app.dismiss_splash();
+        assert!(app.selected_channel.is_none());
+        app.toggle_mailbox_first_layout();
+        assert_eq!(app.selected_channel, Some(0));
     }
 
     #[test]
