@@ -227,9 +227,19 @@ fn render_detail(buf: &mut Buffer, area: Rect, app: &App) {
     // copy of thousands of lines we'd never see.
     let cap = inner.height as usize;
     let start = app.detail_buffer.len().saturating_sub(cap);
+    // T-074 bug 3: parse the ANSI escape sequences captured by
+    // `tmux capture-pane -e` into styled spans. `Line::raw` would
+    // render the escapes as literal `\x1b[...` garbage; `into_text`
+    // turns SGR codes (colours, bold, dim, …) into ratatui spans
+    // so the agent's terminal output renders coloured. Lines that
+    // contain no ANSI degrade gracefully to plain spans.
+    use ansi_to_tui::IntoText;
     let lines: Vec<Line<'_>> = app.detail_buffer[start..]
         .iter()
-        .map(|s| Line::raw(s.clone()))
+        .flat_map(|s| match s.as_bytes().into_text() {
+            Ok(text) => text.lines.into_iter().collect::<Vec<_>>(),
+            Err(_) => vec![Line::raw(s.clone())],
+        })
         .collect();
     Paragraph::new(lines).render(inner, buf);
 }
