@@ -136,6 +136,115 @@ fn send_injects_into_mailbox() {
     assert_eq!(text, "hi there");
 }
 
+// ── T-050: teamctl init template/force coverage ─────────────────────────
+
+#[test]
+fn init_blank_template_scaffolds_minimal_tree() {
+    // The `solo` template is exercised by an existing happy-path test;
+    // this pins the `blank` template's surface so a future template
+    // refactor can't silently drop its files. Asserts (a) every
+    // declared file lands at `.team/<relpath>` and (b) the resulting
+    // tree validates.
+    let tmp = tempdir().unwrap();
+    let out = Command::new(bin())
+        .current_dir(tmp.path())
+        .args(["init", "starter", "--template", "blank", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "init blank stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let team_dir = tmp.path().join("starter/.team");
+    assert!(
+        team_dir.is_dir(),
+        "expected .team/ at {}",
+        team_dir.display()
+    );
+    assert!(
+        team_dir.join("team-compose.yaml").is_file(),
+        "blank template must include team-compose.yaml"
+    );
+    assert!(
+        team_dir.join("projects/main.yaml").is_file(),
+        "blank template must include projects/main.yaml"
+    );
+    assert!(
+        team_dir.join(".env.example").is_file(),
+        "blank template must include .env.example (from _common)"
+    );
+    assert!(
+        team_dir.join(".gitignore").is_file(),
+        "blank template must include .gitignore (from _common)"
+    );
+
+    // The scaffolded tree must validate. Exercises the substitution
+    // pass + the schema together, so a typo in the template body
+    // surfaces here rather than at first user-run.
+    let validate = Command::new(bin())
+        .args(["--root", team_dir.to_str().unwrap(), "validate"])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "blank template validate stderr: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+}
+
+#[test]
+fn init_force_overwrites_existing_dot_team_cleanly() {
+    // The refusal path (no `--force` → exit non-zero, leave existing
+    // tree intact) is covered elsewhere. This pins the positive
+    // path: `--force` removes the prior `.team/` entirely (no orphan
+    // files survive) and lays down the new template fresh.
+    let tmp = tempdir().unwrap();
+
+    // First init.
+    let out = Command::new(bin())
+        .current_dir(tmp.path())
+        .args(["init", "myteam", "--template", "solo", "--yes"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    let team_dir = tmp.path().join("myteam/.team");
+    let sentinel = team_dir.join("sentinel-must-not-survive.txt");
+    fs::write(&sentinel, "this file should be wiped by --force").unwrap();
+    assert!(sentinel.exists(), "sentinel seeded for the test");
+
+    // Second init with --force on the same target.
+    let out = Command::new(bin())
+        .current_dir(tmp.path())
+        .args(["init", "myteam", "--template", "blank", "--force", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "init --force stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Sentinel from the prior tree is gone — `--force` did a clean
+    // remove-then-recreate, not a merge.
+    assert!(
+        !sentinel.exists(),
+        "sentinel survived --force; .team/ was not cleanly replaced"
+    );
+
+    // The new template's structure is in place.
+    assert!(team_dir.join("team-compose.yaml").is_file());
+    assert!(team_dir.join("projects/main.yaml").is_file());
+    // The `solo` template's roles/manager.md must be gone (we
+    // overwrote with `blank` which has no roles/).
+    assert!(
+        !team_dir.join("roles/manager.md").exists(),
+        "prior solo template's roles/manager.md should be wiped"
+    );
+}
+
 // ── T-035 PR B: reload --dry-run ────────────────────────────────────────
 
 #[test]
