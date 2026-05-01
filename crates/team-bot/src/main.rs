@@ -235,20 +235,30 @@ async fn handle_callback(bot: Bot, q: CallbackQuery, state: Arc<State>) -> Respo
 
     // Atomic decision: only update if still pending. Returned row count tells
     // us whether this tap was the live decision or a stale duplicate.
+    //
+    // Order matters: status pin first, delivered_at flip second and
+    // *only* when the status pin succeeded. The reverse order — flip
+    // delivered_at unconditionally, then try the status pin — would
+    // break the invariant `undeliverable ↔ delivered_at IS NULL` on
+    // stale taps against rows that gc already moved to undeliverable.
     let decided_now = {
         let c = state.conn.lock().await;
-        let _ = c.execute(
-            "UPDATE approvals SET delivered_at=strftime('%s','now')
-             WHERE id=?1 AND delivered_at IS NULL",
-            params![id],
-        );
-        c.execute(
-            "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='user:telegram'
-             WHERE id=?2 AND status='pending'",
-            params![if approved { "approved" } else { "denied" }, id],
-        )
-        .map(|n| n > 0)
-        .unwrap_or(false)
+        let n = c
+            .execute(
+                "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='user:telegram'
+                 WHERE id=?2 AND status='pending'",
+                params![if approved { "approved" } else { "denied" }, id],
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if n {
+            let _ = c.execute(
+                "UPDATE approvals SET delivered_at=strftime('%s','now')
+                 WHERE id=?1 AND delivered_at IS NULL",
+                params![id],
+            );
+        }
+        n
     };
 
     if !decided_now {
@@ -344,14 +354,13 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
             // T-027: when scoped to a manager, only surface approvals filed by
             // agents that report up to *this* bot's manager. With a manager
             // bot per tier (eng_lead, pm) Alireza sees one prompt per agent.
-            if let Some(scoped) = state.manager.as_deref() {
-                let routed = {
-                    let c = state.conn.lock().await;
-                    manager_of(&c, &agent).unwrap_or_else(|| agent.clone())
-                };
-                if routed != scoped {
-                    continue;
-                }
+            // Unscoped bots take the back-compat path (route everything).
+            let route_ok = {
+                let c = state.conn.lock().await;
+                should_route(state.manager.as_deref(), &agent, &c)
+            };
+            if !route_ok {
+                continue;
             }
             let kb = InlineKeyboardMarkup::new(vec![vec![
                 InlineKeyboardButton::callback("Approve", format!("approve:{id}")),
@@ -454,6 +463,22 @@ fn manager_of(conn: &Connection, agent_id: &str) -> Option<String> {
     }
     let role = reports_to?;
     Some(format!("{project}:{role}"))
+}
+
+/// Route an approval row to *this* bot iff:
+/// - `scoped` is `None` (unscoped bot — back-compat fallback for setups
+///   that predate per-manager scoping; surface every approval), or
+/// - `scoped` is `Some(<project>:<manager>)` and the agent that filed
+///   the approval rolls up to that manager (per `manager_of`).
+///
+/// Pulled out as a free function so the unscoped-vs-scoped semantics
+/// are unit-testable without spinning up an async tokio runtime.
+fn should_route(scoped: Option<&str>, agent_id: &str, conn: &Connection) -> bool {
+    let Some(scoped) = scoped else {
+        return true;
+    };
+    let routed = manager_of(conn, agent_id).unwrap_or_else(|| agent_id.to_string());
+    routed == scoped
 }
 
 /// Strip lightweight markdown so Telegram renders clean prose with emoji
@@ -585,5 +610,152 @@ mod tests {
         let input = "🔐 deploy\nrouting prompt to one channel — the **right** one";
         let expected = "🔐 deploy\nrouting prompt to one channel — the right one";
         assert_eq!(render_plain(input), expected);
+    }
+
+    /// T-036 — exercise the SQL ordering pattern used by `handle_callback`
+    /// (and by `cmd::approval::decide` in teamctl) directly against a
+    /// `Connection` so the ordering invariant has a unit-testable home.
+    /// Asserts: a stale tap on an `undeliverable` row does *not* flip
+    /// `delivered_at` (preserving the invariant
+    /// `undeliverable ↔ delivered_at IS NULL`), and a live tap on a
+    /// `pending` row flips both fields atomically.
+    fn decide_sql(conn: &Connection, id: i64, approved: bool) -> bool {
+        let status = if approved { "approved" } else { "denied" };
+        let n = conn
+            .execute(
+                "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='user:telegram'
+                 WHERE id=?2 AND status='pending'",
+                params![status, id],
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if n {
+            let _ = conn.execute(
+                "UPDATE approvals SET delivered_at=strftime('%s','now')
+                 WHERE id=?1 AND delivered_at IS NULL",
+                params![id],
+            );
+        }
+        n
+    }
+
+    fn insert_approval(conn: &Connection, status: &str, delivered_at: Option<f64>) -> i64 {
+        conn.execute(
+            "INSERT INTO approvals (project_id, agent_id, action, summary, status,
+                                    requested_at, expires_at, delivered_at)
+             VALUES ('p', 'eng_lead', 'publish', 's', ?1, 0.0, 999999999.0, ?2)",
+            params![status, delivered_at],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn stale_tap_on_undeliverable_does_not_flip_delivered_at() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let id = insert_approval(&conn, "undeliverable", None);
+
+        let decided = decide_sql(&conn, id, true);
+        assert!(!decided, "stale tap should report no live decision");
+
+        let (status, delivered_at): (String, Option<f64>) = conn
+            .query_row(
+                "SELECT status, delivered_at FROM approvals WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "undeliverable");
+        assert!(
+            delivered_at.is_none(),
+            "delivered_at must stay NULL on undeliverable row (invariant)"
+        );
+    }
+
+    #[test]
+    fn live_tap_on_pending_flips_status_and_delivered_at() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let id = insert_approval(&conn, "pending", None);
+
+        let decided = decide_sql(&conn, id, true);
+        assert!(decided, "live tap should report decision");
+
+        let (status, delivered_at): (String, Option<f64>) = conn
+            .query_row(
+                "SELECT status, delivered_at FROM approvals WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "approved");
+        assert!(
+            delivered_at.is_some(),
+            "live decision implies delivery acknowledgement"
+        );
+    }
+
+    /// T-039 — unscoped bot's back-compat path: when `state.manager` is
+    /// `None`, every approval routes to this bot regardless of which
+    /// agent filed it. The fallback is what makes pre-T-027 setups
+    /// (single team-wide bot) keep working after per-manager scoping
+    /// landed.
+    #[test]
+    fn unscoped_bot_routes_every_approval() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        // Worker, manager, and an unknown id all route through.
+        assert!(should_route(None, "p:dev1", &conn));
+        assert!(should_route(None, "p:eng_lead", &conn));
+        assert!(should_route(None, "p:ghost", &conn));
+        // Even agents from a different (unseeded) project route through —
+        // the unscoped bot is intentionally undiscriminating.
+        assert!(should_route(None, "other:agent", &conn));
+    }
+
+    #[test]
+    fn scoped_bot_routes_only_its_managers_chain() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        // Bot scoped to p:eng_lead. dev1 reports to eng_lead → routes.
+        assert!(should_route(Some("p:eng_lead"), "p:dev1", &conn));
+        // The manager themselves routes (manager_of returns self).
+        assert!(should_route(Some("p:eng_lead"), "p:eng_lead", &conn));
+        // pm is a sibling manager — does NOT route to eng_lead's bot.
+        assert!(!should_route(Some("p:eng_lead"), "p:pm", &conn));
+    }
+
+    #[test]
+    fn scoped_bot_with_unknown_agent_falls_back_to_self_routing() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        // Unknown agent: manager_of returns None → routed = agent_id;
+        // routed != scoped → does not route. This pins the fallback rule
+        // (don't surface unknown rows to a scoped bot) so a future
+        // change can't silently relax it.
+        assert!(!should_route(Some("p:eng_lead"), "p:ghost", &conn));
+    }
+
+    #[test]
+    fn live_tap_keeps_existing_delivered_at_unchanged() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let id = insert_approval(&conn, "pending", Some(1234.5));
+
+        let decided = decide_sql(&conn, id, false);
+        assert!(decided);
+
+        let delivered_at: f64 = conn
+            .query_row(
+                "SELECT delivered_at FROM approvals WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            (delivered_at - 1234.5).abs() < 1e-6,
+            "previously-set delivered_at must not be overwritten ({delivered_at})"
+        );
     }
 }
