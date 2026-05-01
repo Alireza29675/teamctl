@@ -32,6 +32,10 @@ pub const NAVIGATION: &[Binding] = &[
         description: "navigate within focused pane",
     },
     Binding {
+        chord: "[ / ]",
+        description: "walk mailbox tabs (when mailbox focused)",
+    },
+    Binding {
         chord: "Enter",
         description: "open / drill in",
     },
@@ -105,12 +109,12 @@ pub const APPROVALS: &[Binding] = &[
         description: "open approvals modal (when pending)",
     },
     Binding {
-        chord: "Y",
-        description: "approve focused (uppercase)",
+        chord: "y",
+        description: "approve focused",
     },
     Binding {
-        chord: "N",
-        description: "deny focused (uppercase)",
+        chord: "Shift-N",
+        description: "deny focused (Shift-gated)",
     },
     Binding {
         chord: "j / k",
@@ -181,8 +185,8 @@ mod tests {
             "@",
             "!",
             "a",
-            "Y",
-            "N",
+            "y",
+            "Shift-N",
             "?",
             "t",
             "q",

@@ -17,6 +17,7 @@ dirs = "5"
 team-core.workspace = true
 rusqlite.workspace = true
 notify.workspace = true
+ansi-to-tui = "7"
 
 [dev-dependencies]
 insta = "1"

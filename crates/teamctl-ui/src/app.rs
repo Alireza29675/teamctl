@@ -99,9 +99,11 @@ pub struct App {
     /// stacked-PRs (PR-UI-7) skip the tutorial after splash. PR-UI-1
     /// only reads the flag; nothing routes off it yet.
     pub tutorial_completed: bool,
-    /// Active tab inside the mailbox pane (PR-UI-3). `Tab` cycles
-    /// these when `focused_pane == Mailbox`; otherwise `Tab` cycles
-    /// the panes themselves (PR-UI-1 behaviour).
+    /// Active tab inside the mailbox pane (PR-UI-3). Walked with
+    /// `[` / `]` when `focused_pane == Mailbox` (T-074 bug 6).
+    /// `Tab` always cycles pane focus, never mailbox tabs — the
+    /// previous "Tab cycles tabs when mailbox is focused" shape
+    /// stranded operators inside the mailbox.
     pub mailbox_tab: MailboxTab,
     /// Per-tab buffers + cursors for the focused agent's mailbox
     /// view. Reset whenever the focused agent changes — switching
@@ -408,6 +410,10 @@ impl App {
 
     pub fn cycle_mailbox_tab(&mut self) {
         self.mailbox_tab = self.mailbox_tab.next();
+    }
+
+    pub fn cycle_mailbox_tab_back(&mut self) {
+        self.mailbox_tab = self.mailbox_tab.prev();
     }
 
     pub fn cycle_focus_back(&mut self) {
@@ -904,7 +910,14 @@ fn render_tutorial(area: Rect, buf: &mut Buffer, app: &App) {
         ratatui::text::Line::raw(""),
         ratatui::text::Line::styled("any key next  ·  k / ↑ / p back  ·  Esc skip", muted),
     ];
-    Paragraph::new(lines).render(inner, buf);
+    // T-074 bug 5: tutorial bodies are prose paragraphs, not pre-
+    // formatted lines — clip-on-overflow leaves them looking truncated
+    // on common (≤80 col) terminals. Soft-wrap with `trim: true` so
+    // long step descriptions reflow into the modal width instead of
+    // dropping off the right edge.
+    Paragraph::new(lines)
+        .wrap(ratatui::widgets::Wrap { trim: true })
+        .render(inner, buf);
 }
 
 fn draw_main(f: &mut Frame<'_>, area: Rect, app: &App) {
@@ -1116,7 +1129,7 @@ fn render_approvals_modal(area: Rect, buf: &mut Buffer, app: &App) {
     }
     lines.push(ratatui::text::Line::raw(""));
     lines.push(ratatui::text::Line::styled(
-        "[Y] approve  ·  [N] deny  ·  [j/k] cycle  ·  [Esc] close",
+        "[y] approve  ·  [Shift-N] deny  ·  [j/k] cycle  ·  [Esc] close",
         muted,
     ));
     Paragraph::new(lines).render(inner, buf);
@@ -1252,13 +1265,24 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 // SHIFT — handle both.
                 KeyCode::BackTab => app.cycle_focus_back(),
                 KeyCode::Tab if k.modifiers.contains(KeyModifiers::SHIFT) => app.cycle_focus_back(),
-                // PR-UI-3: when the mailbox pane is focused, `Tab`
-                // cycles its three tabs (Inbox / Channel / Wire)
-                // rather than the panes — the mailbox is the only
-                // pane whose focus state has its own subnavigation,
-                // so this special-case stays narrow.
-                KeyCode::Tab if app.focused_pane == Pane::Mailbox => app.cycle_mailbox_tab(),
+                // T-074 bug 6: Tab always cycles pane focus, never
+                // mailbox tabs. Previously Tab routed into mailbox
+                // tab-cycling when the mailbox pane was focused —
+                // this stranded operators inside the mailbox with no
+                // discoverable way out (Alireza's exact report). The
+                // vim/tmux convention is "Tab moves between panes";
+                // honour it across every pane uniformly.
                 KeyCode::Tab => app.cycle_focus(),
+                // T-074 bug 6: mailbox sub-navigation moved to a
+                // dedicated chord pair (`[`/`]`) gated on the
+                // mailbox pane being focused. Vim's [t/]t mental
+                // model — `]` walks forward, `[` walks back. Keys
+                // do nothing when other panes are focused, so the
+                // chord stays unsurprising in every other context.
+                KeyCode::Char(']') if app.focused_pane == Pane::Mailbox => app.cycle_mailbox_tab(),
+                KeyCode::Char('[') if app.focused_pane == Pane::Mailbox => {
+                    app.cycle_mailbox_tab_back()
+                }
                 // PR-UI-6: in Wall layout, `j`/`k` (and arrows)
                 // scroll the tile grid — same vim shape, different
                 // surface. In Triptych roster focus they still
@@ -1298,12 +1322,17 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 _ => {}
             },
             Stage::ApprovalsModal => match k.code {
-                // Uppercase-only Y / N to commit a decision —
-                // requires deliberate Shift, which raises the bar
-                // on a destructive deny (and keeps approve on the
-                // same chord shape for consistency). Lowercase y/n
-                // are intentionally not accepted.
-                KeyCode::Char('Y') => app.apply_decision(decider, Decision::Approve, ""),
+                // Asymmetric chord shape (T-074 bug 4 fix): approve is
+                // the common path so it accepts both `y` and `Y` —
+                // matches QuitConfirm's loose convention and the
+                // muscle-memory most TUI prompts build. Deny is the
+                // destructive side, so it requires deliberate Shift
+                // (`N` only); a stray lowercase `n` does nothing.
+                // Trades cosmetic chord-symmetry for discoverability
+                // on the load-bearing approve flow.
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    app.apply_decision(decider, Decision::Approve, "")
+                }
                 KeyCode::Char('N') => app.apply_decision(decider, Decision::Deny, ""),
                 KeyCode::Char('j') | KeyCode::Down => app.cycle_approval_next(),
                 KeyCode::Char('k') | KeyCode::Up => app.cycle_approval_prev(),
@@ -1545,12 +1574,13 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_focus_until_mailbox_then_cycles_mailbox_tabs() {
-        // PR-UI-3: Tab still cycles panes Roster → Detail →
-        // Mailbox, but once focused on Mailbox it cycles the
-        // mailbox subtabs (Inbox → Channel → Wire) instead of
-        // looping back to Roster. Shift+Tab pane reversal lands in
-        // a later PR.
+    fn tab_cycles_panes_uniformly_and_wraps_through_mailbox() {
+        // T-074 bug 6: Tab cycles pane focus only — Roster → Detail
+        // → Mailbox → Roster — at every step. The previous "Tab
+        // cycles tabs once focused on mailbox" shape stranded
+        // operators inside the mailbox; this test pins the corrected
+        // uniform cycle so a future refactor can't reintroduce the
+        // dead-end.
         let mut app = App::new();
         app.dismiss_splash();
         assert_eq!(app.focused_pane, Pane::Roster);
@@ -1558,14 +1588,63 @@ mod tests {
         assert_eq!(app.focused_pane, Pane::Detail);
         dispatch(&mut app, key(KeyCode::Tab));
         assert_eq!(app.focused_pane, Pane::Mailbox);
+        assert_eq!(
+            app.mailbox_tab,
+            MailboxTab::Inbox,
+            "Tab into mailbox does NOT touch the active mailbox tab"
+        );
+        dispatch(&mut app, key(KeyCode::Tab));
+        assert_eq!(
+            app.focused_pane,
+            Pane::Roster,
+            "Tab from mailbox wraps to roster, not into mailbox subtabs"
+        );
+        assert_eq!(
+            app.mailbox_tab,
+            MailboxTab::Inbox,
+            "mailbox tab still untouched"
+        );
+    }
+
+    #[test]
+    fn bracket_chords_walk_mailbox_tabs_when_mailbox_focused() {
+        // T-074 bug 6: `[` / `]` is the new mailbox-tab walker
+        // (vim-style [t/]t mental model). Gated on mailbox being
+        // the focused pane so the chord stays unsurprising in
+        // every other context.
+        let mut app = App::new();
+        app.dismiss_splash();
+        // Walk into mailbox via Tab.
+        dispatch(&mut app, key(KeyCode::Tab));
+        dispatch(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.focused_pane, Pane::Mailbox);
         assert_eq!(app.mailbox_tab, MailboxTab::Inbox);
-        dispatch(&mut app, key(KeyCode::Tab));
-        assert_eq!(app.focused_pane, Pane::Mailbox, "still on mailbox");
+
+        dispatch(&mut app, key(KeyCode::Char(']')));
         assert_eq!(app.mailbox_tab, MailboxTab::Channel);
-        dispatch(&mut app, key(KeyCode::Tab));
+        dispatch(&mut app, key(KeyCode::Char(']')));
         assert_eq!(app.mailbox_tab, MailboxTab::Wire);
-        dispatch(&mut app, key(KeyCode::Tab));
-        assert_eq!(app.mailbox_tab, MailboxTab::Inbox, "tabs wrap");
+        dispatch(&mut app, key(KeyCode::Char(']')));
+        assert_eq!(app.mailbox_tab, MailboxTab::Inbox, "] wraps");
+
+        dispatch(&mut app, key(KeyCode::Char('[')));
+        assert_eq!(app.mailbox_tab, MailboxTab::Wire, "[ walks back");
+    }
+
+    #[test]
+    fn bracket_chords_no_op_when_mailbox_not_focused() {
+        // The chord should not surprise an operator scrolling the
+        // roster — gate is load-bearing.
+        let mut app = App::new();
+        app.dismiss_splash();
+        assert_eq!(app.focused_pane, Pane::Roster);
+        let initial = app.mailbox_tab;
+        dispatch(&mut app, key(KeyCode::Char(']')));
+        dispatch(&mut app, key(KeyCode::Char('[')));
+        assert_eq!(
+            app.mailbox_tab, initial,
+            "[/] from non-mailbox panes must not flip the active tab"
+        );
     }
 
     #[test]
@@ -1885,6 +1964,59 @@ mod tests {
         app.enter_approvals_modal();
         dispatch(&mut app, key(KeyCode::Esc));
         assert_eq!(app.stage, Stage::Triptych);
+    }
+
+    #[test]
+    fn lowercase_y_routes_approve_through_decider() {
+        // T-074 bug 4: discoverable approve. Most operators try
+        // lowercase first; the modal must accept it on the
+        // approve (low-risk) side. Deny stays Shift-gated.
+        use crate::approvals::test_support::MockApprovalDecider;
+        let dec = MockApprovalDecider::default();
+        let mut app = App::new();
+        app.dismiss_splash();
+        app.replace_approvals(vec![ap(7)]);
+        app.enter_approvals_modal();
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Char('y')),
+            &dec,
+            &NoopSender,
+            &EmptyMailbox,
+        );
+        let calls = dec.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, crate::approvals::Decision::Approve);
+    }
+
+    #[test]
+    fn lowercase_n_does_not_deny() {
+        // Asymmetry guard: deny is destructive — `n` lowercase must
+        // NOT fire the decider. A future "symmetric loose" refactor
+        // would silently regress the destructive-deny Shift-gate;
+        // this test pins it.
+        use crate::approvals::test_support::MockApprovalDecider;
+        let dec = MockApprovalDecider::default();
+        let mut app = App::new();
+        app.dismiss_splash();
+        app.replace_approvals(vec![ap(7)]);
+        app.enter_approvals_modal();
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Char('n')),
+            &dec,
+            &NoopSender,
+            &EmptyMailbox,
+        );
+        assert!(
+            dec.calls.lock().unwrap().is_empty(),
+            "lowercase n must not route through the decider"
+        );
+        assert_eq!(
+            app.stage,
+            Stage::ApprovalsModal,
+            "stale lowercase n leaves the modal open"
+        );
     }
 
     #[test]

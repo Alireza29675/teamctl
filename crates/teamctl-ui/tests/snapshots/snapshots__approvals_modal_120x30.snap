@@ -1,6 +1,5 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-assertion_line: 265
 expression: s
 ---
 ⚠  approvals: 1 pending — `a` to review                                                                                 
@@ -15,7 +14,7 @@ expression: s
 │                   │                                                                              │                   │
 │                   │Post the morning brief to r/yourcity                                          │                   │
 │                   │                                                                              │                   │
-│                   │[Y] approve  ·  [N] deny  ·  [j/k] cycle  ·  [Esc] close                      │                   │
+│                   │[y] approve  ·  [Shift-N] deny  ·  [j/k] cycle  ·  [Esc] close                │                   │
 │                   │                                                                              │                   │
 │                   │                                                                              │                   │
 │                   │                                                                              │                   │
@@ -32,4 +31,4 @@ expression: s
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
 └──────────────────────────┘└──────────────────────────────────────────────────────────┘└──────────────────────────────┘
-/ search · ⏎ open · @ send · q quit                                                                  ? help · t tutorial
+Tab cycle panes  ·  / search · ⏎ open · @ send · q quit                                              ? help · t tutorial

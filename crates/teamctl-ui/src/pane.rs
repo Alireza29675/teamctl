@@ -21,15 +21,28 @@ pub trait PaneSource: Send + Sync {
 }
 
 /// Production implementation — shells out to `tmux capture-pane`.
-/// `-J` joins wrapped lines, `-p` writes to stdout, `-S -3000`
-/// pulls the last 3000 lines of scrollback.
+/// `-e` preserves ANSI escape sequences (T-074 bug 3 fix; without
+/// `-e` the captured output is colour-stripped and the detail pane
+/// renders as monochrome regardless of terminal colour mode). `-J`
+/// joins wrapped lines, `-p` writes to stdout, `-S -3000` pulls the
+/// last 3000 lines of scrollback. Order of flags is incidental;
+/// keep `-e` adjacent to the other capture-shape flags for grep.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TmuxPaneSource;
 
 impl PaneSource for TmuxPaneSource {
     fn capture(&self, session: &str) -> Result<Vec<String>> {
         let output = Command::new("tmux")
-            .args(["capture-pane", "-p", "-J", "-S", "-3000", "-t", session])
+            .args([
+                "capture-pane",
+                "-e",
+                "-p",
+                "-J",
+                "-S",
+                "-3000",
+                "-t",
+                session,
+            ])
             .output()
             .with_context(|| format!("invoke tmux capture-pane -t {session}"))?;
         if !output.status.success() {

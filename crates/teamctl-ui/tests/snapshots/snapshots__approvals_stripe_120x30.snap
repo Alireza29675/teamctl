@@ -1,6 +1,5 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-assertion_line: 243
 expression: s
 ---
 ⚠  approvals: 2 pendings — `a` to review                                                                                
@@ -32,4 +31,4 @@ expression: s
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
 └──────────────────────────┘└──────────────────────────────────────────────────────────┘└──────────────────────────────┘
-/ search · ⏎ open · @ send · q quit                                                                  ? help · t tutorial
+Tab cycle panes  ·  / search · ⏎ open · @ send · q quit                                              ? help · t tutorial

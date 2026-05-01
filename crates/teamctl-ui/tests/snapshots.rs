@@ -262,7 +262,11 @@ fn approvals_modal_renders_action_summary_and_hint() {
     let s = buffer_to_string(&buf);
     assert!(s.contains("approvals · 1/1"), "modal title missing");
     assert!(s.contains("publish"), "action missing");
-    assert!(s.contains("[Y] approve"), "action hint missing");
+    assert!(s.contains("[y] approve"), "action hint missing");
+    assert!(
+        s.contains("[Shift-N] deny"),
+        "deny hint must signal Shift-gate"
+    );
     insta::assert_snapshot!("approvals_modal_120x30", s);
 }
 
