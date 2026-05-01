@@ -243,7 +243,6 @@ mod drain_tests {
     #[derive(Default)]
     struct MockSupervisor {
         calls: RefCell<Vec<&'static str>>,
-        signals: RefCell<u32>,
         /// On the Nth state() call (1-indexed), return Stopped. 0 =
         /// always Running.
         stop_after: u32,
