@@ -904,7 +904,14 @@ fn render_tutorial(area: Rect, buf: &mut Buffer, app: &App) {
         ratatui::text::Line::raw(""),
         ratatui::text::Line::styled("any key next  ·  k / ↑ / p back  ·  Esc skip", muted),
     ];
-    Paragraph::new(lines).render(inner, buf);
+    // T-074 bug 5: tutorial bodies are prose paragraphs, not pre-
+    // formatted lines — clip-on-overflow leaves them looking truncated
+    // on common (≤80 col) terminals. Soft-wrap with `trim: true` so
+    // long step descriptions reflow into the modal width instead of
+    // dropping off the right edge.
+    Paragraph::new(lines)
+        .wrap(ratatui::widgets::Wrap { trim: true })
+        .render(inner, buf);
 }
 
 fn draw_main(f: &mut Frame<'_>, area: Rect, app: &App) {
