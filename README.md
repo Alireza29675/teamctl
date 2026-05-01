@@ -92,11 +92,11 @@ Sources: each cell is from the project's own README at the time of writing — h
 
 ## Docs
 
-- [Getting started](./docs/getting-started.md)
-- [Concepts](./docs/concepts/) — projects, channels, runtimes, bridges, HITL
-- [Reference](./docs/reference/) — `team-compose.yaml`, CLI, runtimes
-- [Guides](./docs/guides/) — multi-runtime, Telegram bot, ops
-- [ADRs](./docs/adrs/) — architectural decisions
+- [Getting started](https://teamctl.run/getting-started/)
+- [Concepts](https://teamctl.run/concepts/projects/) — projects, channels, runtimes, bridges, HITL
+- [Reference](https://teamctl.run/reference/teamctl/) — `team-compose.yaml`, CLI, runtimes
+- [Guides](https://teamctl.run/guides/first-team/) — multi-runtime, Telegram bot, ops
+- [ADRs](https://teamctl.run/adrs/0001-sqlite-over-redis/) — architectural decisions
 
 ## License
 
