@@ -23,5 +23,5 @@ expression: buffer_to_string(&buf)
                 \/__/         \:\ \/__/        /:/  /        /:/  /     \:\  \        \/__/         \:\  \              
                                \:\__\         /:/  /        /:/  /       \:\__\                      \:\__\             
                                 \/__/         \/__/         \/__/         \/__/                       \/__/             
-                                        v0.4.0  ·  (no team loaded)  ·  0 agents                                        
+                                        v0.5.0  ·  (no team loaded)  ·  0 agents                                        
                                           Press `?` for help · `t` for tutorial
