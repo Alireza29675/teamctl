@@ -99,9 +99,11 @@ pub struct App {
     /// stacked-PRs (PR-UI-7) skip the tutorial after splash. PR-UI-1
     /// only reads the flag; nothing routes off it yet.
     pub tutorial_completed: bool,
-    /// Active tab inside the mailbox pane (PR-UI-3). `Tab` cycles
-    /// these when `focused_pane == Mailbox`; otherwise `Tab` cycles
-    /// the panes themselves (PR-UI-1 behaviour).
+    /// Active tab inside the mailbox pane (PR-UI-3). Walked with
+    /// `[` / `]` when `focused_pane == Mailbox` (T-074 bug 6).
+    /// `Tab` always cycles pane focus, never mailbox tabs — the
+    /// previous "Tab cycles tabs when mailbox is focused" shape
+    /// stranded operators inside the mailbox.
     pub mailbox_tab: MailboxTab,
     /// Per-tab buffers + cursors for the focused agent's mailbox
     /// view. Reset whenever the focused agent changes — switching
@@ -408,6 +410,10 @@ impl App {
 
     pub fn cycle_mailbox_tab(&mut self) {
         self.mailbox_tab = self.mailbox_tab.next();
+    }
+
+    pub fn cycle_mailbox_tab_back(&mut self) {
+        self.mailbox_tab = self.mailbox_tab.prev();
     }
 
     pub fn cycle_focus_back(&mut self) {
@@ -1259,13 +1265,26 @@ fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 // SHIFT — handle both.
                 KeyCode::BackTab => app.cycle_focus_back(),
                 KeyCode::Tab if k.modifiers.contains(KeyModifiers::SHIFT) => app.cycle_focus_back(),
-                // PR-UI-3: when the mailbox pane is focused, `Tab`
-                // cycles its three tabs (Inbox / Channel / Wire)
-                // rather than the panes — the mailbox is the only
-                // pane whose focus state has its own subnavigation,
-                // so this special-case stays narrow.
-                KeyCode::Tab if app.focused_pane == Pane::Mailbox => app.cycle_mailbox_tab(),
+                // T-074 bug 6: Tab always cycles pane focus, never
+                // mailbox tabs. Previously Tab routed into mailbox
+                // tab-cycling when the mailbox pane was focused —
+                // this stranded operators inside the mailbox with no
+                // discoverable way out (Alireza's exact report). The
+                // vim/tmux convention is "Tab moves between panes";
+                // honour it across every pane uniformly.
                 KeyCode::Tab => app.cycle_focus(),
+                // T-074 bug 6: mailbox sub-navigation moved to a
+                // dedicated chord pair (`[`/`]`) gated on the
+                // mailbox pane being focused. Vim's [t/]t mental
+                // model — `]` walks forward, `[` walks back. Keys
+                // do nothing when other panes are focused, so the
+                // chord stays unsurprising in every other context.
+                KeyCode::Char(']') if app.focused_pane == Pane::Mailbox => {
+                    app.cycle_mailbox_tab()
+                }
+                KeyCode::Char('[') if app.focused_pane == Pane::Mailbox => {
+                    app.cycle_mailbox_tab_back()
+                }
                 // PR-UI-6: in Wall layout, `j`/`k` (and arrows)
                 // scroll the tile grid — same vim shape, different
                 // surface. In Triptych roster focus they still
@@ -1557,12 +1576,13 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_focus_until_mailbox_then_cycles_mailbox_tabs() {
-        // PR-UI-3: Tab still cycles panes Roster → Detail →
-        // Mailbox, but once focused on Mailbox it cycles the
-        // mailbox subtabs (Inbox → Channel → Wire) instead of
-        // looping back to Roster. Shift+Tab pane reversal lands in
-        // a later PR.
+    fn tab_cycles_panes_uniformly_and_wraps_through_mailbox() {
+        // T-074 bug 6: Tab cycles pane focus only — Roster → Detail
+        // → Mailbox → Roster — at every step. The previous "Tab
+        // cycles tabs once focused on mailbox" shape stranded
+        // operators inside the mailbox; this test pins the corrected
+        // uniform cycle so a future refactor can't reintroduce the
+        // dead-end.
         let mut app = App::new();
         app.dismiss_splash();
         assert_eq!(app.focused_pane, Pane::Roster);
@@ -1570,14 +1590,63 @@ mod tests {
         assert_eq!(app.focused_pane, Pane::Detail);
         dispatch(&mut app, key(KeyCode::Tab));
         assert_eq!(app.focused_pane, Pane::Mailbox);
+        assert_eq!(
+            app.mailbox_tab,
+            MailboxTab::Inbox,
+            "Tab into mailbox does NOT touch the active mailbox tab"
+        );
+        dispatch(&mut app, key(KeyCode::Tab));
+        assert_eq!(
+            app.focused_pane,
+            Pane::Roster,
+            "Tab from mailbox wraps to roster, not into mailbox subtabs"
+        );
+        assert_eq!(
+            app.mailbox_tab,
+            MailboxTab::Inbox,
+            "mailbox tab still untouched"
+        );
+    }
+
+    #[test]
+    fn bracket_chords_walk_mailbox_tabs_when_mailbox_focused() {
+        // T-074 bug 6: `[` / `]` is the new mailbox-tab walker
+        // (vim-style [t/]t mental model). Gated on mailbox being
+        // the focused pane so the chord stays unsurprising in
+        // every other context.
+        let mut app = App::new();
+        app.dismiss_splash();
+        // Walk into mailbox via Tab.
+        dispatch(&mut app, key(KeyCode::Tab));
+        dispatch(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.focused_pane, Pane::Mailbox);
         assert_eq!(app.mailbox_tab, MailboxTab::Inbox);
-        dispatch(&mut app, key(KeyCode::Tab));
-        assert_eq!(app.focused_pane, Pane::Mailbox, "still on mailbox");
+
+        dispatch(&mut app, key(KeyCode::Char(']')));
         assert_eq!(app.mailbox_tab, MailboxTab::Channel);
-        dispatch(&mut app, key(KeyCode::Tab));
+        dispatch(&mut app, key(KeyCode::Char(']')));
         assert_eq!(app.mailbox_tab, MailboxTab::Wire);
-        dispatch(&mut app, key(KeyCode::Tab));
-        assert_eq!(app.mailbox_tab, MailboxTab::Inbox, "tabs wrap");
+        dispatch(&mut app, key(KeyCode::Char(']')));
+        assert_eq!(app.mailbox_tab, MailboxTab::Inbox, "] wraps");
+
+        dispatch(&mut app, key(KeyCode::Char('[')));
+        assert_eq!(app.mailbox_tab, MailboxTab::Wire, "[ walks back");
+    }
+
+    #[test]
+    fn bracket_chords_no_op_when_mailbox_not_focused() {
+        // The chord should not surprise an operator scrolling the
+        // roster — gate is load-bearing.
+        let mut app = App::new();
+        app.dismiss_splash();
+        assert_eq!(app.focused_pane, Pane::Roster);
+        let initial = app.mailbox_tab;
+        dispatch(&mut app, key(KeyCode::Char(']')));
+        dispatch(&mut app, key(KeyCode::Char('[')));
+        assert_eq!(
+            app.mailbox_tab, initial,
+            "[/] from non-mailbox panes must not flip the active tab"
+        );
     }
 
     #[test]

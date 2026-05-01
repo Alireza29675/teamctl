@@ -34,7 +34,7 @@ pub const STEPS: &[Step] = &[
     },
     Step {
         heading: "Mailbox tabs",
-        body: "Inbox / Channel / Wire — Tab cycles them when the mailbox pane is focused. Inbox is DMs to the focused agent; Wire is project-wide broadcasts.",
+        body: "Inbox / Channel / Wire — `]` walks forward, `[` walks back, when the mailbox pane is focused. Tab itself always cycles pane focus, never tabs. Inbox is DMs to the focused agent; Wire is project-wide broadcasts.",
     },
     Step {
         heading: "Approvals",

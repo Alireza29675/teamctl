@@ -32,6 +32,10 @@ pub const NAVIGATION: &[Binding] = &[
         description: "navigate within focused pane",
     },
     Binding {
+        chord: "[ / ]",
+        description: "walk mailbox tabs (when mailbox focused)",
+    },
+    Binding {
         chord: "Enter",
         description: "open / drill in",
     },

@@ -56,6 +56,14 @@ impl MailboxTab {
             MailboxTab::Wire => MailboxTab::Inbox,
         }
     }
+
+    pub fn prev(self) -> Self {
+        match self {
+            MailboxTab::Inbox => MailboxTab::Wire,
+            MailboxTab::Channel => MailboxTab::Inbox,
+            MailboxTab::Wire => MailboxTab::Channel,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
