@@ -48,15 +48,16 @@ pub fn pending(root: &Path) -> Result<()> {
 pub fn decide(root: &Path, id: i64, approved: bool, note: Option<&str>) -> Result<()> {
     let conn = open_db(root)?;
     let status = if approved { "approved" } else { "denied" };
+    let now_ts = now();
     // Order matters: status pin first, delivered_at flip second and
     // *only* when the status pin succeeded. The reverse order — flip
     // delivered_at unconditionally, then try the status pin — would
     // break the invariant `undeliverable ↔ delivered_at IS NULL` on
     // late CLI taps against rows that gc already moved to terminal.
     let n = conn.execute(
-        "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='cli', decision_note=?2
-         WHERE id=?3 AND status='pending'",
-        params![status, note, id],
+        "UPDATE approvals SET status=?1, decided_at=?2, decided_by='cli', decision_note=?3
+         WHERE id=?4 AND status='pending'",
+        params![status, now_ts, note, id],
     )?;
     if n == 0 {
         bail!("no pending approval with id {id}");
@@ -65,10 +66,17 @@ pub fn decide(root: &Path, id: i64, approved: bool, note: Option<&str>) -> Resul
     // saw the prompt on some surface (otherwise they couldn't decide).
     // Flip delivered_at when null so the row's lifecycle stays truthful.
     conn.execute(
-        "UPDATE approvals SET delivered_at=strftime('%s','now')
-         WHERE id=?1 AND delivered_at IS NULL",
-        params![id],
+        "UPDATE approvals SET delivered_at=?1
+         WHERE id=?2 AND delivered_at IS NULL",
+        params![now_ts, id],
     )?;
     println!("approval {id} {status}");
     Ok(())
+}
+
+fn now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
