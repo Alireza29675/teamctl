@@ -245,6 +245,117 @@ fn init_force_overwrites_existing_dot_team_cleanly() {
     );
 }
 
+// ── T-033: cli `teamctl approve` after TTL elapsed ──────────────────────
+
+#[test]
+fn approve_after_ttl_elapsed_returns_no_pending_error() {
+    // Pin the contract that `teamctl approve` cannot resurrect a row that
+    // `teamctl gc` has already moved to a terminal state. The CLI's
+    // `WHERE status='pending'` clause is what enforces this; the test
+    // would fail if a future change relaxed it (e.g. dropped the status
+    // pin, or pre-loaded the row before the gc check).
+    let tmp = tempdir().unwrap();
+    seed_compose(tmp.path());
+
+    // Bootstrap the mailbox so we can write directly. `seed_compose`
+    // doesn't create state/, so the directory has to come up first.
+    let db = tmp.path().join("state/mailbox.db");
+    std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    team_core::mailbox::ensure(&conn).unwrap();
+
+    // Seed a pending approval whose TTL is already in the past
+    // (requested_at = expires_at = T-1h, T-30m). delivered_at = NULL so
+    // gc routes it to `undeliverable`; the test would still pass against
+    // `expired` if delivered_at were set.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    let requested_at = now - 3600.0;
+    let expires_at = now - 1800.0;
+    conn.execute(
+        "INSERT INTO approvals (project_id, agent_id, action, summary, status,
+                                requested_at, expires_at)
+         VALUES ('hello', 'manager', 'publish', 'old request', 'pending', ?1, ?2)",
+        rusqlite::params![requested_at, expires_at],
+    )
+    .unwrap();
+    let id: i64 = conn.last_insert_rowid();
+    drop(conn);
+
+    // Run gc — flips the row to `undeliverable` (delivered_at IS NULL).
+    let gc_out = Command::new(bin())
+        .args(["--root", tmp.path().to_str().unwrap(), "gc"])
+        .output()
+        .unwrap();
+    assert!(
+        gc_out.status.success(),
+        "gc stderr: {}",
+        String::from_utf8_lossy(&gc_out.stderr)
+    );
+
+    // Confirm the row is no longer pending after gc.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM approvals WHERE id = ?1",
+            rusqlite::params![id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "undeliverable",
+        "gc should mark expired-undelivered row"
+    );
+    drop(conn);
+
+    // Now `teamctl approve <id>` must fail with the canonical error and
+    // must not flip the terminal-state fields back.
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "approve",
+            &id.to_string(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "approve on terminal row should exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("no pending approval with id {id}")),
+        "expected canonical error, got: {stderr}"
+    );
+
+    // Row's terminal-state fields unchanged. With the T-036 ordering
+    // fix in place (status pin first, delivered_at flip second), the
+    // CLI must NOT have flipped delivered_at on this terminal row —
+    // the invariant is `undeliverable ↔ delivered_at IS NULL`, and
+    // breaking it would mean the CLI's status-check came after the
+    // delivered_at write again.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let (status, decided_by, delivered_at): (String, Option<String>, Option<f64>) = conn
+        .query_row(
+            "SELECT status, decided_by, delivered_at FROM approvals WHERE id = ?1",
+            rusqlite::params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "undeliverable");
+    assert!(
+        decided_by.is_none() || decided_by.as_deref() != Some("cli"),
+        "cli should not have stamped decided_by on a terminal row"
+    );
+    assert!(
+        delivered_at.is_none(),
+        "delivered_at must stay NULL on undeliverable row (invariant); got {delivered_at:?}"
+    );
+}
+
 // ── T-035 PR B: reload --dry-run ────────────────────────────────────────
 
 #[test]
