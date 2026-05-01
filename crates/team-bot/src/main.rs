@@ -354,14 +354,13 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
             // T-027: when scoped to a manager, only surface approvals filed by
             // agents that report up to *this* bot's manager. With a manager
             // bot per tier (eng_lead, pm) Alireza sees one prompt per agent.
-            if let Some(scoped) = state.manager.as_deref() {
-                let routed = {
-                    let c = state.conn.lock().await;
-                    manager_of(&c, &agent).unwrap_or_else(|| agent.clone())
-                };
-                if routed != scoped {
-                    continue;
-                }
+            // Unscoped bots take the back-compat path (route everything).
+            let route_ok = {
+                let c = state.conn.lock().await;
+                should_route(state.manager.as_deref(), &agent, &c)
+            };
+            if !route_ok {
+                continue;
             }
             let kb = InlineKeyboardMarkup::new(vec![vec![
                 InlineKeyboardButton::callback("Approve", format!("approve:{id}")),
@@ -464,6 +463,22 @@ fn manager_of(conn: &Connection, agent_id: &str) -> Option<String> {
     }
     let role = reports_to?;
     Some(format!("{project}:{role}"))
+}
+
+/// Route an approval row to *this* bot iff:
+/// - `scoped` is `None` (unscoped bot — back-compat fallback for setups
+///   that predate per-manager scoping; surface every approval), or
+/// - `scoped` is `Some(<project>:<manager>)` and the agent that filed
+///   the approval rolls up to that manager (per `manager_of`).
+///
+/// Pulled out as a free function so the unscoped-vs-scoped semantics
+/// are unit-testable without spinning up an async tokio runtime.
+fn should_route(scoped: Option<&str>, agent_id: &str, conn: &Connection) -> bool {
+    let Some(scoped) = scoped else {
+        return true;
+    };
+    let routed = manager_of(conn, agent_id).unwrap_or_else(|| agent_id.to_string());
+    routed == scoped
 }
 
 /// Strip lightweight markdown so Telegram renders clean prose with emoji
@@ -679,6 +694,47 @@ mod tests {
             delivered_at.is_some(),
             "live decision implies delivery acknowledgement"
         );
+    }
+
+    /// T-039 — unscoped bot's back-compat path: when `state.manager` is
+    /// `None`, every approval routes to this bot regardless of which
+    /// agent filed it. The fallback is what makes pre-T-027 setups
+    /// (single team-wide bot) keep working after per-manager scoping
+    /// landed.
+    #[test]
+    fn unscoped_bot_routes_every_approval() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        // Worker, manager, and an unknown id all route through.
+        assert!(should_route(None, "p:dev1", &conn));
+        assert!(should_route(None, "p:eng_lead", &conn));
+        assert!(should_route(None, "p:ghost", &conn));
+        // Even agents from a different (unseeded) project route through —
+        // the unscoped bot is intentionally undiscriminating.
+        assert!(should_route(None, "other:agent", &conn));
+    }
+
+    #[test]
+    fn scoped_bot_routes_only_its_managers_chain() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        // Bot scoped to p:eng_lead. dev1 reports to eng_lead → routes.
+        assert!(should_route(Some("p:eng_lead"), "p:dev1", &conn));
+        // The manager themselves routes (manager_of returns self).
+        assert!(should_route(Some("p:eng_lead"), "p:eng_lead", &conn));
+        // pm is a sibling manager — does NOT route to eng_lead's bot.
+        assert!(!should_route(Some("p:eng_lead"), "p:pm", &conn));
+    }
+
+    #[test]
+    fn scoped_bot_with_unknown_agent_falls_back_to_self_routing() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        // Unknown agent: manager_of returns None → routed = agent_id;
+        // routed != scoped → does not route. This pins the fallback rule
+        // (don't surface unknown rows to a scoped bot) so a future
+        // change can't silently relax it.
+        assert!(!should_route(Some("p:eng_lead"), "p:ghost", &conn));
     }
 
     #[test]
