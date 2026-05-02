@@ -2,16 +2,29 @@
 title: Interfaces
 ---
 
-An **interface** is a pluggable human-facing channel. Telegram is one adapter; Discord, iMessage, CLI, and webhook are others. You can configure many at once — a manager might receive DMs on Telegram and approvals on iMessage.
+An **interface** is a pluggable human-facing channel. Telegram is the
+shipping adapter; Discord, iMessage, CLI, and webhook are planned.
+
+Telegram lives directly on the manager and is set up by `teamctl bot
+setup` (one bot per user-facing manager — DM the bot, the message
+goes to the matching manager). Other adapters use the top-level
+`interfaces:` array shape.
 
 ```yaml
-interfaces:
-  - type: telegram
-    name: tg-main
-    config:
-      bot_token_env: TEAMCTL_TELEGRAM_TOKEN
-      authorized_chat_ids: [75473051]
+# projects/news.yaml — Telegram on the manager itself
+managers:
+  head_editor:
+    runtime: claude-code
+    role_prompt: roles/head_editor.md
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_HEAD_EDITOR_TOKEN
+        chat_ids_env: TEAMCTL_TG_HEAD_EDITOR_CHATS
+```
 
+```yaml
+# team-compose.yaml — non-Telegram adapters
+interfaces:
   - type: discord
     name: discord-home-lab
     config:
@@ -28,7 +41,8 @@ interfaces:
     # No config. Reachable via `teamctl chat <project>:<manager>`.
 ```
 
-Each manager declares which interfaces it receives from. Approvals are routed to every attached interface until one of them decides.
+Approvals are routed to every attached interface until one of them
+decides.
 
 ## What interfaces do
 
@@ -44,7 +58,7 @@ Each manager declares which interfaces it receives from. Approvals are routed to
 
 An adapter is a process that:
 
-1. Reads new messages for subscribed managers (`inbox_peek` / `inbox_watch`, filtered by `telegram_inbox: true` etc).
+1. Reads new messages for subscribed managers (`inbox_peek` / `inbox_watch`, scoped via `--manager` for the Telegram adapter).
 2. Surfaces them to the human.
 3. Writes human replies back as `sender=user:<handle>` via SQL insert or team-mcp.
 4. Listens for approval notifications and renders inline decision UI.

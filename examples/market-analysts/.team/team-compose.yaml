@@ -22,13 +22,8 @@ hitl:
     - external_api_post
     - publish
 
-interfaces:
-  - type: telegram
-    name: tg-markets
-    config:
-      bot_token_env: MARKETS_BOT_TOKEN
-      authorized_chat_ids_env: MARKETS_CHAT_IDS
-      manager: markets:chief
+# Telegram is configured on the chief manager in projects/markets.yaml.
+# Run `teamctl bot setup` to wire it up.
 
 projects:
   - file: projects/markets.yaml

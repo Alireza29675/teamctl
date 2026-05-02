@@ -27,11 +27,14 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/maintainer.md
     permission_mode: auto
-    telegram_inbox: true
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [triage, bug_fix, docs, release_manager]
     can_broadcast: [triage, dev, release, all]
+    # Run `teamctl bot setup` to populate.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_MAINTAINER_TOKEN
+        chat_ids_env: TEAMCTL_TG_MAINTAINER_CHATS
 
 workers:
   triage:

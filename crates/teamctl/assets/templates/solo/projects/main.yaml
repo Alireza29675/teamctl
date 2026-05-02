@@ -40,7 +40,6 @@ managers:
     # Combine with `autonomy: low_risk_only` (the default) to keep
     # destructive actions behind `request_approval` HITL gates.
     permission_mode: auto
-    reports_to_user: true
     # ACLs: who can this agent DM, and which channels can it
     # broadcast to. Keep these tight — over-broad ACLs are how
     # multi-agent setups become noisy.

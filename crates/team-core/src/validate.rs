@@ -40,14 +40,9 @@ pub enum ValidationError {
     },
 
     #[error(
-        "project `{project}`: agent `{agent}` has `telegram_inbox: true` but is not a manager"
+        "project `{project}`: agent `{agent}` has an `interfaces.telegram` block but is not a manager"
     )]
     TelegramInboxOnWorker { project: String, agent: String },
-
-    #[error(
-        "project `{project}`: agent `{agent}` has `reports_to_user: true` but is not a manager"
-    )]
-    ReportsToUserOnWorker { project: String, agent: String },
 
     #[error(
         "worker `{project}:{agent}` declares `reports_to: {target}` but no such manager exists"
@@ -138,14 +133,8 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
                            id: &str,
                            a: &crate::compose::Agent,
                            is_manager: bool| {
-            if a.telegram_inbox && !is_manager {
+            if a.telegram().is_some() && !is_manager {
                 errs.push(ValidationError::TelegramInboxOnWorker {
-                    project: p.project.id.clone(),
-                    agent: id.into(),
-                });
-            }
-            if a.reports_to_user && !is_manager {
-                errs.push(ValidationError::ReportsToUserOnWorker {
                     project: p.project.id.clone(),
                     agent: id.into(),
                 });
@@ -213,14 +202,13 @@ mod tests {
                 model: Some("claude-opus-4-7".into()),
                 role_prompt: None,
                 permission_mode: None,
-                telegram_inbox: true,
-                reports_to_user: true,
                 autonomy: "low_risk_only".into(),
                 can_dm: vec![agent_dm_target.into()],
                 can_broadcast: vec!["team".into()],
                 reports_to: None,
                 on_rate_limit: None,
                 effort: None,
+                interfaces: None,
             },
         );
         let mut workers = BTreeMap::new();
@@ -231,14 +219,13 @@ mod tests {
                 model: None,
                 role_prompt: None,
                 permission_mode: None,
-                telegram_inbox: false,
-                reports_to_user: false,
                 autonomy: "low_risk_only".into(),
                 can_dm: vec!["mgr".into()],
                 can_broadcast: vec!["team".into()],
                 reports_to: Some("mgr".into()),
                 on_rate_limit: None,
                 effort: None,
+                interfaces: None,
             },
         );
         Compose {

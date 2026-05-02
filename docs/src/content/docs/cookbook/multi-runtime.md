@@ -33,8 +33,6 @@ managers:
   manager:
     runtime: claude-code
     model: claude-opus-4-7
-    telegram_inbox: true
-    reports_to_user: true
     can_dm: [backend, researcher]
     can_broadcast: [all]
 

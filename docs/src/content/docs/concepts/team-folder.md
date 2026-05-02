@@ -78,8 +78,8 @@ variable the compose tree references with placeholder values; commit it.
 ```
 $ teamctl env
 VAR                              STATE     REFERENCED FROM
-TEAMCTL_TELEGRAM_TOKEN           set       interfaces[tg-main].config.bot_token_env
-TEAMCTL_TELEGRAM_CHATS           UNSET     interfaces[tg-main].config.authorized_chat_ids_env
+TEAMCTL_TG_PM_TOKEN              set       managers.pm.interfaces.telegram.bot_token_env
+TEAMCTL_TG_PM_CHATS              UNSET     managers.pm.interfaces.telegram.chat_ids_env
 
 $ teamctl env --doctor
 1 required env var(s) unset

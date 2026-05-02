@@ -36,7 +36,7 @@ teamctl reload              # 4. apply edits to .team/team-compose.yaml
 
 **4. `teamctl reload`** picks up edits to `.team/team-compose.yaml` and restarts only the agents whose config actually changed. No full teardown, no lost mailbox state.
 
-**Talking to the team.** Copy `.team/.env.example` to `.team/.env`, fill in `TEAMCTL_TELEGRAM_TOKEN` and `TEAMCTL_TELEGRAM_CHATS`, and the manager bot will introduce itself when you DM it on Telegram. Brand-sensitive actions (`publish`, `deploy`, `release`, …) pause for inline Approve / Deny.
+**Talking to the team.** Run `teamctl bot setup` — the wizard walks BotFather → token → `/start` → chat id once per user-facing manager and writes everything into `.team/.env` and `projects/<id>.yaml`. Each manager gets its own Telegram bot; DM the bot in plain English and the message reaches that manager. Brand-sensitive actions (`publish`, `deploy`, `release`, …) pause for inline Approve / Deny.
 
 The full onboarding tutorial lives at [teamctl.run/getting-started](https://teamctl.run/getting-started/); curated example teams (`startup-team`, `oss-maintainer`, `indie-game-studio`, `newsletter-office`, `market-analysts`) ship under [`examples/`](https://github.com/Alireza29675/teamctl/tree/main/examples).
 

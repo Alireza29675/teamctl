@@ -46,6 +46,37 @@ pub struct Interface {
     pub config: serde_yaml::Value,
 }
 
+impl Interface {
+    pub fn is_telegram(&self) -> bool {
+        self.r#type == "telegram"
+    }
+
+    /// `<project>:<manager>` this interface routes to, when set.
+    pub fn manager(&self) -> Option<String> {
+        self.config_str("manager")
+    }
+
+    /// Env var name holding the bot token (e.g. `TEAMCTL_TG_PM_TOKEN`).
+    pub fn bot_token_env(&self) -> Option<String> {
+        self.config_str("bot_token_env")
+    }
+
+    /// Env var name holding a comma-separated allow-list of chat ids.
+    pub fn authorized_chat_ids_env(&self) -> Option<String> {
+        self.config_str("authorized_chat_ids_env")
+    }
+
+    fn config_str(&self, key: &str) -> Option<String> {
+        match &self.config {
+            serde_yaml::Value::Mapping(m) => m
+                .get(serde_yaml::Value::String(key.into()))
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Budget {
     #[serde(default)]
@@ -282,10 +313,6 @@ pub struct Agent {
     pub role_prompt: Option<PathBuf>,
     #[serde(default)]
     pub permission_mode: Option<String>,
-    #[serde(default)]
-    pub telegram_inbox: bool,
-    #[serde(default)]
-    pub reports_to_user: bool,
     #[serde(default = "default_autonomy")]
     pub autonomy: String,
     #[serde(default)]
@@ -306,6 +333,46 @@ pub struct Agent {
     /// wrapper default.
     #[serde(default)]
     pub effort: Option<EffortLevel>,
+
+    /// Per-manager human-facing interfaces. Today's only adapter is
+    /// `telegram`; the shape is reserved for future adapters
+    /// (`discord`, `imessage`, …) so a manager can declare every
+    /// channel it speaks on in one place. Workers leave this unset.
+    #[serde(default)]
+    pub interfaces: Option<AgentInterfaces>,
+}
+
+/// Container for per-manager interface adapters. Open shape so adding
+/// `discord:` / `imessage:` later is a strictly-additive YAML edit.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentInterfaces {
+    /// 1:1 Telegram bot for this manager. When set, `teamctl up`
+    /// spawns a `team-bot` tmux session scoped to this manager so the
+    /// human DMs the bot directly (no `/dm role text` required).
+    /// Configured by `teamctl bot setup`.
+    #[serde(default)]
+    pub telegram: Option<TelegramConfig>,
+}
+
+/// Per-manager Telegram bot config. Both fields are env-var *names* —
+/// the actual token/chat-ids live in `.team/.env` (kept out of git).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramConfig {
+    /// Env var holding the BotFather token. Default chosen by
+    /// `teamctl bot setup`: `TEAMCTL_TG_<MANAGER>_TOKEN`.
+    pub bot_token_env: String,
+    /// Env var holding a comma-separated list of authorized chat ids.
+    /// Default: `TEAMCTL_TG_<MANAGER>_CHATS`.
+    pub chat_ids_env: String,
+}
+
+impl Agent {
+    /// Convenience: pull the manager's Telegram config out of
+    /// `interfaces.telegram` without forcing every callsite to handle
+    /// the nested options.
+    pub fn telegram(&self) -> Option<&TelegramConfig> {
+        self.interfaces.as_ref().and_then(|i| i.telegram.as_ref())
+    }
 }
 
 /// Reasoning-effort level forwarded to the runtime. Maps 1:1 to
@@ -467,8 +534,18 @@ mod tests {
         let a: Agent = serde_yaml::from_str("model: claude-opus-4-7\n").unwrap();
         assert_eq!(a.runtime, "claude-code");
         assert_eq!(a.autonomy, "low_risk_only");
-        assert!(!a.telegram_inbox);
+        assert!(a.interfaces.is_none());
+        assert!(a.telegram().is_none());
         assert!(a.effort.is_none());
+    }
+
+    #[test]
+    fn agent_telegram_block_parses_under_interfaces() {
+        let yaml = "interfaces:\n  telegram:\n    bot_token_env: T\n    chat_ids_env: C\n";
+        let a: Agent = serde_yaml::from_str(yaml).unwrap();
+        let tg = a.telegram().expect("telegram parsed");
+        assert_eq!(tg.bot_token_env, "T");
+        assert_eq!(tg.chat_ids_env, "C");
     }
 
     #[test]

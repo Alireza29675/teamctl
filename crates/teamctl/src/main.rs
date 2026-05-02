@@ -170,6 +170,13 @@ enum Command {
         argv: Vec<String>,
     },
 
+    // ── Telegram bots ────────────────────────────────────────────────
+    /// Set up and inspect 1:1 manager↔Telegram bots.
+    Bot {
+        #[command(subcommand)]
+        action: BotAction,
+    },
+
     // ── Internal ────────────────────────────────────────────────────
     /// Wrap a runtime invocation, watching for rate-limit signatures.
     /// Used by `agent-wrapper.sh`; not normally invoked by hand.
@@ -193,6 +200,31 @@ enum ContextAction {
     Add { name: String, path: PathBuf },
     /// Remove a context.
     Rm { name: String },
+}
+
+#[derive(Subcommand)]
+enum BotAction {
+    /// Interactive wizard: walks BotFather → token → /start → chat id,
+    /// writes env vars to `.team/.env`, and adds an
+    /// `interfaces.telegram` block to the manager in
+    /// `projects/<id>.yaml`. Resumable — re-runs only ask for what's
+    /// still missing.
+    Setup {
+        /// Optional `<project>:<role>` to scope the wizard to one
+        /// manager. When omitted, walks every manager and skips ones
+        /// already fully wired up.
+        manager: Option<String>,
+        /// Re-run setup even when env vars are already populated
+        /// (re-asks for token + chat id).
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print every manager that has an `interfaces.telegram` block
+    /// with env-var status.
+    #[command(alias = "ls")]
+    List,
+    /// Show running/stopped tmux session for each bot.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -299,6 +331,16 @@ fn main() -> Result<()> {
         Command::Exec { target, argv } => cmd::exec::run(&root, &target, &argv),
         Command::Shell { target } => cmd::exec::shell(&root, &target),
         Command::Env { doctor } => cmd::env::run(&root, doctor),
+        Command::Bot { action } => {
+            let action = match action {
+                BotAction::Setup { force, manager } => {
+                    cmd::bot::BotAction::Setup { force, manager }
+                }
+                BotAction::List => cmd::bot::BotAction::List,
+                BotAction::Status => cmd::bot::BotAction::Status,
+            };
+            cmd::bot::run(&root, action)
+        }
         Command::Context { .. } => unreachable!("handled above"),
         Command::Init { .. } => unreachable!("handled above"),
         Command::Ui { .. } => unreachable!("handled above"),

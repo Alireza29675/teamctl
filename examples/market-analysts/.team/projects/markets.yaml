@@ -17,11 +17,14 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/chief.md
     permission_mode: auto
-    telegram_inbox: true
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [macro, equities, crypto, quant_risk]
     can_broadcast: [desk, alerts]
+    # Run `teamctl bot setup` to populate.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_CHIEF_TOKEN
+        chat_ids_env: TEAMCTL_TG_CHIEF_CHATS
 
 workers:
   macro:

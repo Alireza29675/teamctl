@@ -1,9 +1,9 @@
 //! `team-bot` — Telegram adapter for the teamctl `interfaces:` abstraction.
 //!
-//! Watches the mailbox for messages addressed to managers with
-//! `telegram_inbox: true` and for new pending approvals, and surfaces both to
-//! the authorized Telegram chat. Inbound user messages (DMs + callback
-//! button taps) write back into the mailbox.
+//! Watches the mailbox for messages addressed to managers with an
+//! `interfaces.telegram` block (and for new pending approvals), and
+//! surfaces both to the authorized Telegram chat. Inbound user
+//! messages (DMs + callback button taps) write back into the mailbox.
 //!
 //! Later interface adapters (`team-interface-discord`, `-imessage`, `-cli`)
 //! mirror this crate's shape: an async loop against the same SQLite mailbox
@@ -178,6 +178,22 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
                 bot.send_message(msg.chat.id, format!("→ {target}")).await?;
             }
         }
+    } else if !trimmed.is_empty() && !trimmed.starts_with('/') && state.manager.is_some() {
+        // Plain text on a manager-scoped bot: route the message to the
+        // bot's manager. The whole point of `teamctl bot setup`'s 1:1
+        // mapping is that DMing the bot reaches the matching manager
+        // without `/dm role text` ceremony.
+        let target = state.manager.as_deref().unwrap();
+        if let Some((project, _)) = target.split_once(':') {
+            let c = state.conn.lock().await;
+            let _ = c.execute(
+                "INSERT INTO messages (project_id, sender, recipient, text, sent_at)
+                 VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'))",
+                params![project, target, trimmed],
+            );
+            drop(c);
+            bot.send_message(msg.chat.id, format!("→ {target}")).await?;
+        }
     } else if trimmed == "/pending" {
         let c = state.conn.lock().await;
         let rows: Vec<(i64, String, String, String)> = {
@@ -206,13 +222,19 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
             bot.send_message(msg.chat.id, out).await?;
         }
     } else if trimmed == "/start" || trimmed == "/help" {
-        bot.send_message(
-            msg.chat.id,
-            "teamctl — Telegram interface\n\
-             /dm <project>:<agent> <message> — send a DM\n\
-             /pending — show pending approvals",
-        )
-        .await?;
+        let body = match state.manager.as_deref() {
+            Some(mgr) => format!(
+                "teamctl bot — connected to {mgr}\n\
+                 Just type a message and it goes straight to {mgr}.\n\
+                 /pending — show pending approvals\n\
+                 /dm <project>:<agent> <text> — send to a different agent (rare)"
+            ),
+            None => "teamctl — Telegram interface\n\
+                     /dm <project>:<agent> <message> — send a DM\n\
+                     /pending — show pending approvals"
+                .into(),
+        };
+        bot.send_message(msg.chat.id, body).await?;
     }
     Ok(())
 }

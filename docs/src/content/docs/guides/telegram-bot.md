@@ -2,46 +2,114 @@
 title: Telegram bot setup
 ---
 
-The `team-bot` binary is the first interface adapter — it connects a Telegram chat to the teamctl mailbox so you can DM managers and approve sensitive actions.
+Each user-facing manager gets its own Telegram bot. You DM the manager's
+bot in plain English; the message is routed straight to that manager's
+mailbox. Approvals and replies come back through the same chat.
+
+`teamctl bot setup` is the one command that wires everything: token,
+authorization, env vars, and the per-manager YAML block.
 
 ## Prerequisites
 
-1. Create a bot via [@BotFather](https://t.me/BotFather). Save the token.
-2. Find your Telegram chat id — send any message to [@userinfobot](https://t.me/userinfobot). It's a number.
+- `curl` on PATH (used during setup to call the Telegram API).
+- A Telegram account, ready to DM [@BotFather](https://t.me/BotFather).
+- At least one manager declared in `projects/<id>.yaml`. The wizard
+  enumerates every manager and lets you pick which to wire up.
 
-## Configuration
-
-```yaml
-# team-compose.yaml
-interfaces:
-  - type: telegram
-    name: tg-main
-    config:
-      bot_token_env: TEAMCTL_TELEGRAM_TOKEN
-      authorized_chat_ids: [75473051]
-```
-
-Then export the token and start the bot:
+## Run the wizard
 
 ```bash
-export TEAMCTL_TELEGRAM_TOKEN="123456:AAH…"
-export TEAMCTL_TELEGRAM_CHATS="75473051"
-team-bot --mailbox ./state/mailbox.db
+teamctl bot setup
 ```
 
-(An interactive `teamctl bot setup` wraps this in one command.)
+For each user-facing manager, the wizard walks you through:
 
-## What the bot does
+1. **Create a bot.** Open BotFather, send `/newbot`, follow prompts.
+   BotFather returns a token like `123456:AAH-…`. Paste it.
+2. **Verify the token.** The wizard hits `getMe` and shows the bot's
+   resolved username so you know it's the right one.
+3. **Authorize your chat.** The wizard prints "Send `/start` to
+   @your-bot." It long-polls for the next `/start` and captures your
+   chat id automatically.
+4. **Pick env-var names.** Defaults are `TEAMCTL_TG_<MANAGER>_TOKEN`
+   and `TEAMCTL_TG_<MANAGER>_CHATS`; press Enter to accept or type
+   your own.
 
-- **Forwards manager messages.** Any message addressed to an agent with `telegram_inbox: true` is sent to the authorized chat.
-- **Surfaces approvals.** New pending `request_approval` rows appear with Approve / Deny inline buttons.
-- **Accepts commands:**
-  - `/dm <project>:<agent> <text>` — send a message into the mailbox.
-  - `/pending` — list pending approvals.
-  - `/help` — this help.
+The wizard then:
+
+- Writes both values into `.team/.env` (creates it if missing,
+  upserts in place if present — your other vars are preserved).
+- Adds an `interfaces.telegram` block to that manager in
+  `projects/<id>.yaml`. Sibling adapters (`discord:` etc.) are
+  preserved on a re-run.
+
+Re-run `teamctl bot setup` any time. The wizard is **resumable**:
+
+- Fully-configured managers are skipped silently.
+- If the YAML already has env-var names, they're reused — you're not
+  asked to pick names again.
+- If only the token or only the chat-id is set in `.env`, the wizard
+  collects just the missing piece.
+- `--force` re-asks for everything.
+
+Scope to one manager by passing it as a positional argument:
+
+```bash
+teamctl bot setup news:head_editor
+```
+
+## Launch
+
+```bash
+teamctl up
+```
+
+`teamctl up` now also spawns a `team-bot` tmux session per manager
+that has an `interfaces.telegram` block. Open Telegram, find your
+bot, and start typing — every message flows into that manager's
+mailbox.
+
+Useful commands:
+
+- `teamctl bot list` — show every configured manager + env-var status.
+- `teamctl bot status` — show which bot tmux sessions are running.
+- `teamctl down` — stops bots alongside agents.
+
+## What you can send
+
+- **Plain text** — routed as a DM to the bot's manager. No `/dm`
+  prefix needed.
+- **`/pending`** — list pending approvals.
+- **Approve / Deny inline buttons** — appear under each approval
+  request the manager raises. One tap resolves it.
+- **`/dm <project>:<agent> <text>`** — escape hatch for talking to a
+  different agent through the same bot. Useful in a pinch; not the
+  daily-driver path.
+
+## YAML it produces
+
+```yaml
+# projects/news.yaml
+managers:
+  head_editor:
+    runtime: claude-code
+    role_prompt: roles/head_editor.md
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_HEAD_EDITOR_TOKEN
+        chat_ids_env: TEAMCTL_TG_HEAD_EDITOR_CHATS
+```
+
+```bash
+# .team/.env  (gitignored)
+TEAMCTL_TG_HEAD_EDITOR_TOKEN=123456:AAH-...
+TEAMCTL_TG_HEAD_EDITOR_CHATS=75473051
+```
 
 ## Security
 
-- Messages from chat ids not in `authorized_chat_ids` are silently dropped and logged.
-- Approval callbacks are rejected the same way.
-- The bot never calls Telegram from anywhere but a manager-addressed message or an approval — it is not a general-purpose notifier.
+- Messages from chat ids not in `chat_ids_env` are silently dropped.
+- Approval callbacks go through the same authorization gate.
+- `.env` is in the shipped `.gitignore`. Never commit tokens.
+- One bot per manager keeps blast radius minimal: a leaked PM token
+  doesn't expose eng_lead's approvals.

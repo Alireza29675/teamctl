@@ -11,5 +11,9 @@ pub fn run(root: &Path) -> Result<()> {
         sup.down(&spec)?;
         println!("down · {}", h.id());
     }
+    for spec in super::bot::bot_specs(&compose) {
+        super::bot::down_one(&spec);
+        println!("down · bot {}", spec.session);
+    }
     Ok(())
 }

@@ -17,7 +17,6 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/web_manager.md
     permission_mode: auto
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [frontend_dev, backend_dev]
     can_broadcast: [engineering, all]

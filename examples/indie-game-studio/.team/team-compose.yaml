@@ -19,13 +19,8 @@ hitl:
     - external_email
     - external_api_post
 
-interfaces:
-  - type: telegram
-    name: tg-director
-    config:
-      bot_token_env: DIRECTOR_BOT_TOKEN
-      authorized_chat_ids_env: DIRECTOR_CHAT_IDS
-      manager: studio:director
+# Telegram is configured on the director manager in projects/studio.yaml.
+# Run `teamctl bot setup` to wire it up.
 
 projects:
   - file: projects/studio.yaml

@@ -44,15 +44,14 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/pm.md
     permission_mode: auto
-    telegram_inbox: true
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [eng_lead, marketing]
     can_broadcast: [all, leads, marketing]
+    # Run `teamctl bot setup teamctl:pm` to populate this.
     interfaces:
       telegram:
-        id: pm
-        display_name: "teamctl PM"
+        bot_token_env: TEAMCTL_TG_PM_TOKEN
+        chat_ids_env: TEAMCTL_TG_PM_CHATS
 
   # Eng lead routes work, brokers reviews, executes the public-
   # write actions devs cannot perform on this repo (push, PR
@@ -67,16 +66,15 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/eng_lead.md
     permission_mode: bypassPermissions
-    telegram_inbox: true
-    reports_to_user: true
     autonomy: low_risk_only
     effort: max
     can_dm: [pm, dev1, dev2, dev3, qa]
     can_broadcast: [all, leads, dev]
+    # Run `teamctl bot setup teamctl:eng_lead` to populate.
     interfaces:
       telegram:
-        id: eng
-        display_name: "teamctl Eng Lead"
+        bot_token_env: TEAMCTL_TG_ENG_LEAD_TOKEN
+        chat_ids_env: TEAMCTL_TG_ENG_LEAD_CHATS
 
   # Marketing owns the public surface (README hero, docs/
   # landing, release announcements). `proposal_only` autonomy
@@ -89,15 +87,14 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/marketing.md
     permission_mode: auto
-    telegram_inbox: true
-    reports_to_user: true
     autonomy: proposal_only
     can_dm: [pm]
     can_broadcast: [all, leads, marketing]
+    # Run `teamctl bot setup teamctl:marketing` to populate.
     interfaces:
       telegram:
-        id: mkt
-        display_name: "teamctl Marketing"
+        bot_token_env: TEAMCTL_TG_MARKETING_TOKEN
+        chat_ids_env: TEAMCTL_TG_MARKETING_CHATS
 
 workers:
   # Three IC devs. `auto` permission_mode is right for code-

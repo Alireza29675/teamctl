@@ -43,18 +43,15 @@ hitl:
       scope: "morning-brief-*"
       until: "2026-05-01T09:00:00Z"
 
-interfaces:
-  - type: telegram
-    name: tg-main
-    config:
-      bot_token_env: TEAMCTL_TELEGRAM_TOKEN
-      authorized_chat_ids: [75473051]
-      manager: news:head_editor        # optional — scope bot to one manager
-
 projects:
   - file: projects/newsroom.yaml
   - file: projects/blog-site.yaml
 ```
+
+> Telegram bots live on the **manager** definition itself — see the
+> per-project example below — and are configured via `teamctl bot setup`,
+> which writes both the env vars and the `telegram:` block. The
+> top-level `interfaces:` array is no longer needed for Telegram.
 
 ## Per-project
 
@@ -78,11 +75,17 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/head_editor.md
     permission_mode: auto
-    telegram_inbox: true
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [fact_checker, news_writer, seo]
     can_broadcast: [editorial, all]
+    # Per-manager 1:1 Telegram bot. Run `teamctl bot setup` to populate
+    # both the env vars and this block. After setup, `teamctl up`
+    # spawns one team-bot per manager and DMing the bot reaches the
+    # manager directly — no `/dm role text` needed.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_HEAD_EDITOR_TOKEN
+        chat_ids_env: TEAMCTL_TG_HEAD_EDITOR_CHATS
 
 workers:
   fact_checker:
@@ -118,7 +121,7 @@ workers:
 | `budget.message_ttl_hours` | int | 24 | `teamctl gc` horizon. |
 | `hitl.globally_sensitive_actions` | list | (see default) | Actions that always gate through approval. |
 | `hitl.auto_approve_windows` | list | `[]` | Pre-authorization windows. |
-| `interfaces` | list | `[]` | Human-facing channels (telegram, discord, imessage, cli, webhook, email). |
+| `interfaces` | list | `[]` | Reserved for non-Telegram adapters (discord, imessage, cli, webhook, email). Telegram now lives on the manager. |
 | `projects` | list | `[]` | Each entry: `{ file: <path> }`. |
 
 ### Per-project
@@ -141,9 +144,10 @@ workers:
 | `model` | string | runtime default | Runtime-specific model id. |
 | `role_prompt` | path | — | System prompt file; passed via runtime-specific flag. |
 | `permission_mode` | string | runtime default | e.g. `auto`, `plan`, `acceptAll`. |
-| `telegram_inbox` | bool | `false` | Manager-only. Set `true` to receive Telegram forwards. |
-| `reports_to_user` | bool | `false` | Manager-only. May call `reply_to_user`. |
+| `interfaces.telegram` | map | — | Manager-only. 1:1 Telegram bot for this manager (presence implies it receives Telegram forwards and may call `reply_to_user`). |
 | `autonomy` | string | `low_risk_only` | `full` · `low_risk_only` · `proposal_only`. |
 | `can_dm` | list | `[]` = unrestricted | Short-names this agent may DM. |
 | `can_broadcast` | list | `[]` = unrestricted | Channel names this agent may post to. |
 | `reports_to` | string | — | Worker-only. The manager this worker answers to. |
+| `interfaces.telegram.bot_token_env` | string | — | Env var holding the BotFather token. Populated by `teamctl bot setup`. |
+| `interfaces.telegram.chat_ids_env` | string | — | Env var holding a comma-separated allow-list of chat ids. |
