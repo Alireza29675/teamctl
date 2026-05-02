@@ -4,6 +4,8 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-05-02
+
 ### Added
 
 - **`teamctl update` — self-update command.** Detects the install
@@ -13,7 +15,9 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   version first; no-ops when already current. Flags: `--check` (just
   print the version comparison), `--yes` (skip confirmation),
   `--method <shell|brew|cargo>` (override autodetect). New guide at
-  `/guides/updating/`.
+  `/guides/updating/`. Closes the gap that caused v0.5.2 and v0.6.0
+  to ship late — once update is in the wild, operators can pull each
+  release without remembering the curl-pipe by hand.
 
 ## [0.6.0] — 2026-05-02
 
