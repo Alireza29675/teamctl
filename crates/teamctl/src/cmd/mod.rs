@@ -1,5 +1,6 @@
 pub mod approval;
 pub mod attach;
+pub mod bot;
 pub mod bridge;
 pub mod budget;
 pub mod context;

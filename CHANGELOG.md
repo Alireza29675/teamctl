@@ -4,6 +4,62 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-02
+
+### Added
+
+- **`teamctl bot setup` — interactive 1:1 Telegram bot wizard.**
+  Walks BotFather → token → `/start` → chat id for every user-facing
+  manager (`reports_to_user: true`), prompts for env-var names with
+  sensible defaults, writes `.team/.env` (idempotent upsert; existing
+  vars preserved), and adds an `interfaces.telegram` block to that
+  manager in `projects/<id>.yaml`. `--manager <project>:<role>`
+  scopes a re-run; `--force` re-runs even when env vars are already
+  populated. Sibling `bot list` shows env-var status; `bot status`
+  shows running tmux sessions. ADR 0005.
+- **Per-manager Telegram bots auto-spawn under `teamctl up`.** One
+  `team-bot` tmux session per manager-with-`interfaces.telegram`,
+  named `<prefix>bot-<project>-<role>`, scoped via `--manager` so
+  each bot only sees its manager's traffic. `teamctl down` stops
+  them alongside agents. Skips with a warning when the token env var
+  is unset (no hard fail — agents still come up).
+- **DM-the-bot routing in `team-bot`.** Plain text on a manager-scoped
+  bot is now treated as a message to that manager; no `/dm role text`
+  ceremony required. The `/start` and `/help` replies on a scoped
+  bot tell the operator which manager they're talking to. `/dm`,
+  `/pending`, and inline approval buttons remain as escape hatches.
+
+### Changed
+
+- **Telegram config moved from top-level `interfaces:` to per-manager
+  `interfaces.telegram`.** The new shape lives directly on the
+  manager definition in `projects/<id>.yaml`, keeping related fields
+  together and removing a YAML cross-reference. The top-level
+  `interfaces:` array is reserved for non-Telegram adapters
+  (Discord, iMessage, CLI, webhook) — those still fit the
+  array-of-named-channels shape better.
+- **`telegram_inbox: true` is removed.** Presence of
+  `interfaces.telegram` on a manager is the new "this manager
+  receives Telegram forwards" signal. Validation now flags an
+  `interfaces.telegram` block on a worker the same way the old
+  `telegram_inbox: true` flag did.
+- Examples (`startup-team`, `oss-maintainer`, `indie-game-studio`,
+  `market-analysts`, `hello-team`) and the dogfood `.team/` migrated
+  to the new shape; their `.env.example` entries align with the
+  `TEAMCTL_TG_<MANAGER>_TOKEN` / `_CHATS` defaults the wizard picks.
+
+### Migration
+
+- If you wired Telegram by hand via the old top-level `interfaces:
+  - type: telegram` block, `team-bot` keeps running against
+  whatever you start manually. To switch to auto-spawn, run
+  `teamctl bot setup` (it will skip managers whose env vars are
+  already populated unless you pass `--force`) and remove the
+  legacy top-level entry.
+- If you had `telegram_inbox: true` on a manager, drop the line —
+  the new schema doesn't accept it. The validator will tell you if
+  any worker accidentally inherits an `interfaces.telegram` block.
+
 ## [0.5.1] — 2026-05-02
 
 ### Fixed

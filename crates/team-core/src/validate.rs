@@ -40,7 +40,7 @@ pub enum ValidationError {
     },
 
     #[error(
-        "project `{project}`: agent `{agent}` has `telegram_inbox: true` but is not a manager"
+        "project `{project}`: agent `{agent}` has an `interfaces.telegram` block but is not a manager"
     )]
     TelegramInboxOnWorker { project: String, agent: String },
 
@@ -138,7 +138,7 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
                            id: &str,
                            a: &crate::compose::Agent,
                            is_manager: bool| {
-            if a.telegram_inbox && !is_manager {
+            if a.telegram().is_some() && !is_manager {
                 errs.push(ValidationError::TelegramInboxOnWorker {
                     project: p.project.id.clone(),
                     agent: id.into(),
@@ -213,7 +213,6 @@ mod tests {
                 model: Some("claude-opus-4-7".into()),
                 role_prompt: None,
                 permission_mode: None,
-                telegram_inbox: true,
                 reports_to_user: true,
                 autonomy: "low_risk_only".into(),
                 can_dm: vec![agent_dm_target.into()],
@@ -221,6 +220,7 @@ mod tests {
                 reports_to: None,
                 on_rate_limit: None,
                 effort: None,
+                interfaces: None,
             },
         );
         let mut workers = BTreeMap::new();
@@ -231,7 +231,6 @@ mod tests {
                 model: None,
                 role_prompt: None,
                 permission_mode: None,
-                telegram_inbox: false,
                 reports_to_user: false,
                 autonomy: "low_risk_only".into(),
                 can_dm: vec!["mgr".into()],
@@ -239,6 +238,7 @@ mod tests {
                 reports_to: Some("mgr".into()),
                 on_rate_limit: None,
                 effort: None,
+                interfaces: None,
             },
         );
         Compose {

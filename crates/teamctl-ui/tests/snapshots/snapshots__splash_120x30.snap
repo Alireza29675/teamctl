@@ -1,6 +1,5 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-assertion_line: 40
 expression: buffer_to_string(&buf)
 ---
                                                                                                                         
@@ -23,5 +22,5 @@ expression: buffer_to_string(&buf)
                 \/__/         \:\ \/__/        /:/  /        /:/  /     \:\  \        \/__/         \:\  \              
                                \:\__\         /:/  /        /:/  /       \:\__\                      \:\__\             
                                 \/__/         \/__/         \/__/         \/__/                       \/__/             
-                                        v0.5.1  ·  (no team loaded)  ·  0 agents                                        
+                                        v0.6.0  ·  (no team loaded)  ·  0 agents                                        
                                           Press `?` for help · `t` for tutorial

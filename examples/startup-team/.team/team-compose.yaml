@@ -22,23 +22,9 @@ hitl:
     - external_api_post
     - merge_to_main
 
-interfaces:
-  # Two Telegram bots, each scoped to a single manager. They share the
-  # same SQLite mailbox but each only forwards traffic for its manager
-  # and only surfaces approvals from its project's agents.
-  - type: telegram
-    name: tg-founder
-    config:
-      bot_token_env: FOUNDER_BOT_TOKEN
-      authorized_chat_ids_env: FOUNDER_CHAT_IDS
-      manager: startup:founder
-
-  - type: telegram
-    name: tg-product
-    config:
-      bot_token_env: PRODUCT_BOT_TOKEN
-      authorized_chat_ids_env: PRODUCT_CHAT_IDS
-      manager: startup:product_manager
+# Telegram bots are now declared on each manager in projects/startup.yaml.
+# Run `teamctl bot setup` to walk through BotFather → token → /start →
+# chat id and have it write the env vars + telegram blocks for you.
 
 projects:
   - file: projects/startup.yaml

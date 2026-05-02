@@ -17,7 +17,6 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/head_editor.md
     permission_mode: auto
-    telegram_inbox: false
     reports_to_user: true
     autonomy: low_risk_only
     can_dm: [news_writer, fact_checker, seo_research]

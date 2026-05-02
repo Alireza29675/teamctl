@@ -28,6 +28,19 @@ pub fn run(root: &Path) -> Result<()> {
         println!("up · {}", h.id());
     }
 
+    // Spawn one team-bot per manager that carries a `telegram:` block.
+    // Each bot runs in its own tmux session and is scoped via
+    // --manager so DMs reach exactly that manager.
+    let team_bot = super::bot::team_bot_bin();
+    source_dotenv_into_process(&compose.root);
+    for spec in super::bot::bot_specs(&compose) {
+        match super::bot::up_one(&spec, &team_bot, &compose.root) {
+            Ok(true) => println!("up · bot {} → {}", spec.session, spec.manager),
+            Ok(false) => {}
+            Err(e) => eprintln!("warn · bot {}: {e:#}", spec.session),
+        }
+    }
+
     // Persist the applied-state snapshot so a reload immediately
     // afterwards correctly sees zero diff. Before this, `up` left
     // `state/applied.json` absent, and the first reload misreported
@@ -262,3 +275,36 @@ pub fn ensure_wrapper_and_dirs(compose: &Compose) -> Result<()> {
 }
 
 const DEFAULT_WRAPPER: &str = include_str!("../../assets/agent-wrapper.sh");
+
+/// Pull `<root>/.env` (and `<root>/../.env`) into the process so the
+/// tmux session for `team-bot` inherits the bot token + chat-ids the
+/// operator wrote with `teamctl bot setup`. Mirrors the loader in
+/// `cmd::env::run`. Idempotent — never overwrites a value already in
+/// the environment.
+fn source_dotenv_into_process(root: &std::path::Path) {
+    for f in [
+        root.join(".env"),
+        root.parent().unwrap_or(root).join(".env"),
+    ] {
+        if !f.is_file() {
+            continue;
+        }
+        let Ok(raw) = fs::read_to_string(&f) else {
+            continue;
+        };
+        for line in raw.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let line = line.strip_prefix("export ").unwrap_or(line);
+            if let Some((k, v)) = line.split_once('=') {
+                let v = v.trim().trim_matches('"').trim_matches('\'');
+                if std::env::var_os(k).is_none() {
+                    // SAFETY: single-threaded CLI startup.
+                    unsafe { std::env::set_var(k, v) };
+                }
+            }
+        }
+    }
+}
