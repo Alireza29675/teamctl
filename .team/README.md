@@ -134,14 +134,22 @@ like once it lands here.
 ## Run
 
 ```bash
-cp .env.example .env        # add Telegram tokens if you want
-                            # the manager bots
 cd ..                        # teamctl repo root; teamctl walks
-                            # up from cwd to find `.team/`
+                             # up from cwd to find `.team/`
 teamctl validate
-teamctl up
+teamctl bot setup            # optional — walks each manager through
+                             # BotFather → token → /start → chat id
+                             # and writes .team/.env + the
+                             # interfaces.telegram blocks. Skip if
+                             # you don't want Telegram bots.
+teamctl up                   # also spawns one team-bot per
+                             # manager-with-`interfaces.telegram`
 teamctl ps
 ```
+
+> Already running? `teamctl update` re-runs the installer that
+> brought teamctl in (shell-installer / brew / cargo) so you
+> never need the curl-pipe by hand again.
 
 ## Send a message
 
