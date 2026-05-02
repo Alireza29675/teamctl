@@ -29,7 +29,7 @@
 - Bridges: `bridge open` / `close` / `list` / `log`.
 - Housekeeping: `budget`, `gc`, `rl-watch`.
 - Attach / exec: `attach` (read-only by default, `--rw` confirms), `exec`, `shell`.
-- Workspace UX: `env` / `env --doctor`, `context` (switch between named `.team/` roots), `bot setup` / `list` / `status` (per-manager Telegram bot wizard, ADR 0005).
+- Workspace UX: `env` / `env --doctor`, `context` (switch between named `.team/` roots), `bot setup` / `list` / `status` (per-manager Telegram bot wizard, ADR 0005), `update` (self-update by re-running shell installer / brew / cargo).
 
 ### Release & docs
 
