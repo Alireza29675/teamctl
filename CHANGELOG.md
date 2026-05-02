@@ -4,6 +4,17 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+- **`teamctl update` — self-update command.** Detects the install
+  method from `current_exe()`'s path (Cellar/teamctl → Homebrew,
+  `~/.cargo/bin/` → cargo, otherwise the shell installer) and re-runs
+  the matching update flow. Checks GitHub Releases for the latest
+  version first; no-ops when already current. Flags: `--check` (just
+  print the version comparison), `--yes` (skip confirmation),
+  `--method <shell|brew|cargo>` (override autodetect). New guide at
+  `/guides/updating/`.
+
 ## [0.6.0] — 2026-05-02
 
 ### Added

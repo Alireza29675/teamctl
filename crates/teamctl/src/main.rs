@@ -177,6 +177,22 @@ enum Command {
         action: BotAction,
     },
 
+    // ── Self-update ─────────────────────────────────────────────────
+    /// Update teamctl in place by re-running the installer that brought
+    /// it in. Detects shell-installer / Homebrew / cargo automatically;
+    /// override with `--method`.
+    Update {
+        /// Force a particular install method (`shell` · `brew` · `cargo`).
+        #[arg(long)]
+        method: Option<String>,
+        /// Print the version comparison and exit; don't update.
+        #[arg(long)]
+        check: bool,
+        /// Skip the "Proceed?" confirmation.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
     // ── Internal ────────────────────────────────────────────────────
     /// Wrap a runtime invocation, watching for rate-limit signatures.
     /// Used by `agent-wrapper.sh`; not normally invoked by hand.
@@ -273,6 +289,9 @@ fn main() -> Result<()> {
     if let Command::Ui { no_prompt, argv } = cli.command {
         return cmd::ui::run(no_prompt, argv);
     }
+    if let Command::Update { method, check, yes } = cli.command {
+        return cmd::update::run(method, check, yes);
+    }
     if let Command::Context { action } = &cli.command {
         return match action {
             ContextAction::Ls => cmd::context::ls(),
@@ -344,6 +363,7 @@ fn main() -> Result<()> {
         Command::Context { .. } => unreachable!("handled above"),
         Command::Init { .. } => unreachable!("handled above"),
         Command::Ui { .. } => unreachable!("handled above"),
+        Command::Update { .. } => unreachable!("handled above"),
     }
 }
 
