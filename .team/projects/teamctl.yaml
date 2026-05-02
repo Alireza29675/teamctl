@@ -44,11 +44,10 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/pm.md
     permission_mode: auto
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [eng_lead, marketing]
     can_broadcast: [all, leads, marketing]
-    # Run `teamctl bot setup --manager teamctl:pm` to populate this.
+    # Run `teamctl bot setup teamctl:pm` to populate this.
     interfaces:
       telegram:
         bot_token_env: TEAMCTL_TG_PM_TOKEN
@@ -67,12 +66,11 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/eng_lead.md
     permission_mode: bypassPermissions
-    reports_to_user: true
     autonomy: low_risk_only
     effort: max
     can_dm: [pm, dev1, dev2, dev3, qa]
     can_broadcast: [all, leads, dev]
-    # Run `teamctl bot setup --manager teamctl:eng_lead` to populate.
+    # Run `teamctl bot setup teamctl:eng_lead` to populate.
     interfaces:
       telegram:
         bot_token_env: TEAMCTL_TG_ENG_LEAD_TOKEN
@@ -89,11 +87,10 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/marketing.md
     permission_mode: auto
-    reports_to_user: true
     autonomy: proposal_only
     can_dm: [pm]
     can_broadcast: [all, leads, marketing]
-    # Run `teamctl bot setup --manager teamctl:marketing` to populate.
+    # Run `teamctl bot setup teamctl:marketing` to populate.
     interfaces:
       telegram:
         bot_token_env: TEAMCTL_TG_MARKETING_TOKEN

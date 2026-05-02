@@ -113,7 +113,6 @@ mod tests {
                 model: Some("claude-opus-4-7".into()),
                 role_prompt: Some(PathBuf::from("roles/mgr.md")),
                 permission_mode: Some("auto".into()),
-                reports_to_user: true,
                 autonomy: "low_risk_only".into(),
                 can_dm: vec![],
                 can_broadcast: vec![],

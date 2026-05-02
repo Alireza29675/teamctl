@@ -42,36 +42,27 @@ fn setup(root: &Path, force: bool, only_manager: Option<String>) -> Result<()> {
     source_env_files(root);
     let compose = super::load(root)?;
 
-    let targets = user_facing_managers(&compose);
-    if targets.is_empty() {
-        println!(
-            "No user-facing managers in compose.\n\
-             Mark a manager with `reports_to_user: true` in\n\
-             `projects/<id>.yaml` and re-run."
-        );
+    let all_managers = all_managers(&compose);
+    if all_managers.is_empty() {
+        println!("No managers in compose. Add one to `projects/<id>.yaml` and re-run.");
         return Ok(());
     }
 
     let filtered: Vec<String> = match only_manager.as_deref() {
         Some(m) => {
-            if !targets.contains(&m.to_string()) {
+            if !all_managers.contains(&m.to_string()) {
                 bail!(
-                    "manager `{m}` not found or not user-facing. Known: {}",
-                    targets.join(", ")
+                    "manager `{m}` not found. Known: {}",
+                    all_managers.join(", ")
                 );
             }
             vec![m.to_string()]
         }
-        None => targets.clone(),
+        None => all_managers.clone(),
     };
 
     println!("teamctl bot setup");
     println!("─────────────────");
-    println!(
-        "Found {} user-facing manager(s): {}\n",
-        targets.len(),
-        targets.join(", ")
-    );
 
     let mut configured = 0usize;
     let mut skipped = 0usize;
@@ -97,64 +88,117 @@ enum WizardOutcome {
     Cancelled,
 }
 
+/// Walk one manager through whatever steps remain. The wizard is
+/// **resumable**: if `interfaces.telegram` is already in the YAML we
+/// reuse those env-var names; if either env value is already in `.env`
+/// we keep it (re-validating the token via `getMe`) and only prompt
+/// for what's still missing. `--force` re-asks for everything.
 fn wizard_one(root: &Path, compose: &Compose, manager: &str, force: bool) -> Result<WizardOutcome> {
     let existing = manager_telegram(compose, manager);
-    if !force {
-        if let Some((tok_env, chats_env)) = &existing {
-            let tok_set = !std::env::var(tok_env).unwrap_or_default().is_empty();
-            let chats_set = !std::env::var(chats_env).unwrap_or_default().is_empty();
-            if tok_set && chats_set {
-                println!("✓ {manager} — already configured (skipped)");
-                return Ok(WizardOutcome::AlreadyConfigured);
-            }
-        }
+    let (token_env, chats_env, env_names_chosen_by_user) = match &existing {
+        Some((t, c)) => (t.clone(), c.clone(), false),
+        None => (default_token_env(manager), default_chats_env(manager), true),
+    };
+
+    let token_value = trimmed_env(&token_env);
+    let chats_value = trimmed_env(&chats_env);
+    let token_set = token_value.is_some();
+    let chats_set = chats_value.is_some();
+
+    // Fully wired and not forcing: skip silently.
+    if !force && existing.is_some() && token_set && chats_set {
+        println!("✓ {manager} — already configured (skipped)");
+        return Ok(WizardOutcome::AlreadyConfigured);
     }
 
     println!("\n── {manager} ──");
-    if !confirm(&format!("Set up Telegram bot for {manager}? [Y/n] "), true)? {
+    let prompt_msg = match (existing.is_some(), token_set, chats_set) {
+        (true, true, false) => format!(
+            "Resume Telegram setup for {manager}? Token already in {token_env}; \
+             we'll just collect the chat id. [Y/n] "
+        ),
+        (true, false, true) => format!(
+            "Resume Telegram setup for {manager}? Chat id already in {chats_env}; \
+             we'll just collect the token. [Y/n] "
+        ),
+        (true, _, _) => format!(
+            "Re-run Telegram setup for {manager}? Existing env-var names will be reused. [Y/n] "
+        ),
+        _ => format!("Set up Telegram bot for {manager}? [Y/n] "),
+    };
+    if !confirm(&prompt_msg, true)? {
         println!("  skipped");
         return Ok(WizardOutcome::Cancelled);
     }
 
-    println!(
-        "\nStep 1/4 — Create a bot.\n\
-           Open https://t.me/BotFather, send /newbot, follow prompts.\n\
-           BotFather will reply with a token like `123456:AAH-…`."
-    );
-    let token = prompt("Paste bot token: ")?.trim().to_string();
-    if token.is_empty() || !token.contains(':') {
-        bail!("invalid token (expected `<id>:<secret>` shape)");
-    }
+    // ── Token: existing one re-validated, otherwise prompt ─────────
+    let token = if force || !token_set {
+        if force && token_set {
+            println!(
+                "\nForce re-setup — paste a fresh token from BotFather (existing one in {token_env} will be overwritten):"
+            );
+        } else {
+            println!(
+                "\nStep — Create a bot.\n\
+                   Open https://t.me/BotFather, send /newbot, follow prompts.\n\
+                   BotFather will reply with a token like `123456:AAH-…`."
+            );
+        }
+        let t = prompt("Paste bot token: ")?.trim().to_string();
+        if t.is_empty() || !t.contains(':') {
+            bail!("invalid token (expected `<id>:<secret>` shape)");
+        }
+        t
+    } else {
+        println!("\nUsing existing token from {token_env}.");
+        token_value.clone().unwrap()
+    };
 
-    println!("\nStep 2/4 — Verify token with Telegram…");
+    println!("Verifying with Telegram…");
     let me = telegram_get_me(&token)?;
     let bot_username = me.username.as_deref().unwrap_or("your-bot");
     println!(
-        "  ✓ verified: @{bot_username} ({})",
+        "  ✓ @{bot_username} ({})",
         me.first_name.as_deref().unwrap_or("?")
     );
 
+    // ── Chat id: existing one trusted, otherwise /start ────────────
+    let chat_id = if force || !chats_set {
+        println!(
+            "\nStep — Authorize your chat.\n\
+               Open Telegram, search for @{bot_username}, send /start to it."
+        );
+        poll_for_start(&token, Duration::from_secs(120))?.to_string()
+    } else {
+        println!("Using existing chat id(s) from {chats_env}.");
+        chats_value.clone().unwrap()
+    };
+
+    // ── Env var names: only prompt when the YAML doesn't fix them ──
+    let (final_token_env, final_chats_env) = if env_names_chosen_by_user {
+        println!("\nStep — Pick env-var names (defaults are fine).");
+        let t = prompt_with_default("Token env var", &token_env)?;
+        let c = prompt_with_default("Chat-ids env var", &chats_env)?;
+        (t, c)
+    } else {
+        (token_env.clone(), chats_env.clone())
+    };
+
+    write_env_file(root, &final_token_env, &token, &final_chats_env, &chat_id)?;
+    upsert_manager_telegram(compose, manager, &final_token_env, &final_chats_env)?;
+
     println!(
-        "\nStep 3/4 — Authorize your chat.\n\
-           Open Telegram, search for @{bot_username}, send /start to it."
-    );
-    let chat_id = poll_for_start(&token, Duration::from_secs(120))?;
-    println!("  ✓ chat id: {chat_id}");
-
-    println!("\nStep 4/4 — Pick env-var names (defaults are fine).");
-    let default_tok = default_token_env(manager);
-    let default_chats = default_chats_env(manager);
-    let token_env = prompt_with_default("Token env var", &default_tok)?;
-    let chats_env = prompt_with_default("Chat-ids env var", &default_chats)?;
-
-    write_env_file(root, &token_env, &token, &chats_env, &chat_id.to_string())?;
-    upsert_manager_telegram(compose, manager, &token_env, &chats_env)?;
-
-    println!(
-        "  ✓ wrote {token_env}, {chats_env} into .team/.env\n\
-         \x20\x20✓ added telegram block to manager {manager} in projects/<id>.yaml"
+        "  ✓ wrote {final_token_env}, {final_chats_env} into .team/.env\n\
+         \x20\x20✓ telegram block on manager {manager} in projects/<id>.yaml is up to date"
     );
     Ok(WizardOutcome::Configured)
+}
+
+fn trimmed_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 // ── List / status ───────────────────────────────────────────────────
@@ -228,13 +272,11 @@ fn env_state(var: &str) -> String {
 
 // ── Discovery ───────────────────────────────────────────────────────
 
-fn user_facing_managers(compose: &Compose) -> Vec<String> {
+fn all_managers(compose: &Compose) -> Vec<String> {
     let mut out = BTreeSet::new();
     for proj in &compose.projects {
-        for (role, agent) in &proj.managers {
-            if agent.reports_to_user || agent.telegram().is_some() {
-                out.insert(format!("{}:{}", proj.project.id, role));
-            }
+        for role in proj.managers.keys() {
+            out.insert(format!("{}:{}", proj.project.id, role));
         }
     }
     out.into_iter().collect()

@@ -27,7 +27,6 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/maintainer.md
     permission_mode: auto
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [triage, bug_fix, docs, release_manager]
     can_broadcast: [triage, dev, release, all]

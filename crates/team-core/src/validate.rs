@@ -45,11 +45,6 @@ pub enum ValidationError {
     TelegramInboxOnWorker { project: String, agent: String },
 
     #[error(
-        "project `{project}`: agent `{agent}` has `reports_to_user: true` but is not a manager"
-    )]
-    ReportsToUserOnWorker { project: String, agent: String },
-
-    #[error(
         "worker `{project}:{agent}` declares `reports_to: {target}` but no such manager exists"
     )]
     UnknownManager {
@@ -144,12 +139,6 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
                     agent: id.into(),
                 });
             }
-            if a.reports_to_user && !is_manager {
-                errs.push(ValidationError::ReportsToUserOnWorker {
-                    project: p.project.id.clone(),
-                    agent: id.into(),
-                });
-            }
             for t in &a.can_dm {
                 if !all_agents.contains(t.as_str()) {
                     errs.push(ValidationError::DmUnknownTarget {
@@ -213,7 +202,6 @@ mod tests {
                 model: Some("claude-opus-4-7".into()),
                 role_prompt: None,
                 permission_mode: None,
-                reports_to_user: true,
                 autonomy: "low_risk_only".into(),
                 can_dm: vec![agent_dm_target.into()],
                 can_broadcast: vec!["team".into()],
@@ -231,7 +219,6 @@ mod tests {
                 model: None,
                 role_prompt: None,
                 permission_mode: None,
-                reports_to_user: false,
                 autonomy: "low_risk_only".into(),
                 can_dm: vec!["mgr".into()],
                 can_broadcast: vec!["team".into()],

@@ -19,11 +19,10 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/founder.md
     permission_mode: auto
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [product_manager, researcher]
     can_broadcast: [leads, all]
-    # Run `teamctl bot setup --manager startup:founder` to populate.
+    # Run `teamctl bot setup startup:founder` to populate.
     interfaces:
       telegram:
         bot_token_env: TEAMCTL_TG_FOUNDER_TOKEN
@@ -34,11 +33,10 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/product_manager.md
     permission_mode: auto
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [founder, eng_lead, eng_ic, researcher]
     can_broadcast: [leads, product, all]
-    # Run `teamctl bot setup --manager startup:product_manager` to populate.
+    # Run `teamctl bot setup startup:product_manager` to populate.
     interfaces:
       telegram:
         bot_token_env: TEAMCTL_TG_PRODUCT_MANAGER_TOKEN
@@ -51,7 +49,6 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/eng_lead.md
     permission_mode: auto
-    reports_to_user: false
     autonomy: low_risk_only
     can_dm: [product_manager, eng_ic]
     can_broadcast: [product]

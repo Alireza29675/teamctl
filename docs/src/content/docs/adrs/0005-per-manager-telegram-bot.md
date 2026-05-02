@@ -33,29 +33,33 @@ Three friction points keep biting:
 
 ## Decision
 
-1. **One Telegram bot per user-facing manager.** Each manager that
-   sets `reports_to_user: true` carries its own `interfaces.telegram`
-   block on the manager definition itself — *not* in the top-level
-   `interfaces:` array. The presence of the block is what signals
-   "this manager receives Telegram forwards", so the legacy
-   `telegram_inbox: true` flag is gone.
+1. **One Telegram bot per manager.** Each manager that wants Telegram
+   carries its own `interfaces.telegram` block on the manager
+   definition itself — *not* in the top-level `interfaces:` array.
+   The presence of the block is the only signal needed; the legacy
+   `telegram_inbox: true` and `reports_to_user: true` flags are both
+   retired (the latter was already functionally inert — `reply_to_user`
+   gates on `is_manager`, not the flag).
 
    ```yaml
    managers:
      pm:
        runtime: claude-code
-       reports_to_user: true
        interfaces:
          telegram:
            bot_token_env: TEAMCTL_TG_PM_TOKEN
            chat_ids_env: TEAMCTL_TG_PM_CHATS
    ```
 
-2. **`teamctl bot setup` is the wizard.** It enumerates user-facing
-   managers, walks BotFather → token → `/start` → chat id for each,
+2. **`teamctl bot setup` is the wizard.** It enumerates every manager
+   in compose, walks BotFather → token → `/start` → chat id for each,
    prompts for env-var names (with sensible defaults), persists the
    values into `.team/.env`, and upserts the `interfaces.telegram`
-   block into `projects/<id>.yaml`.
+   block into `projects/<id>.yaml`. The wizard is **resumable** —
+   already-configured managers skip silently, partials only ask for
+   the missing piece, and YAML-fixed env-var names are reused without
+   re-prompting. A positional `[manager]` argument scopes to one
+   manager (`teamctl bot setup news:head_editor`).
 
 3. **`teamctl up` spawns one `team-bot` per manager-with-`interfaces.telegram`.**
    Each runs in its own tmux session named `<prefix>bot-<project>-<role>`
@@ -101,10 +105,12 @@ Three friction points keep biting:
   Telegram entry keep working as long as they keep starting `team-bot`
   themselves — the schema accepts the legacy block (it lives under
   `Global.interfaces` for non-Telegram adapters anyway). The wizard
-  ignores it and writes to the new `interfaces.telegram` shape. The
-  `telegram_inbox: true` field is removed; presence of
-  `interfaces.telegram` is the new signal. Examples and the dogfood
-  team move to the new shape in 0.6.0.
+  ignores it and writes to the new `interfaces.telegram` shape. Both
+  `telegram_inbox: true` and `reports_to_user: true` are removed
+  (they were silently ignored on existing YAML during the 0.5.x
+  series; they're noise to drop now). Presence of `interfaces.telegram`
+  is the new signal. Examples and the dogfood team move to the new
+  shape in 0.6.0.
 - **Cost**: one Telegram bot per manager. BotFather is free and
   unlimited; each bot is one tmux session and one teloxide
   long-poll. Resource impact is negligible.

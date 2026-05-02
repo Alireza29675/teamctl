@@ -13,8 +13,8 @@ authorization, env vars, and the per-manager YAML block.
 
 - `curl` on PATH (used during setup to call the Telegram API).
 - A Telegram account, ready to DM [@BotFather](https://t.me/BotFather).
-- At least one manager declared with `reports_to_user: true` in
-  `projects/<id>.yaml`. The wizard discovers candidates from that flag.
+- At least one manager declared in `projects/<id>.yaml`. The wizard
+  enumerates every manager and lets you pick which to wire up.
 
 ## Run the wizard
 
@@ -43,9 +43,20 @@ The wizard then:
   `projects/<id>.yaml`. Sibling adapters (`discord:` etc.) are
   preserved on a re-run.
 
-Re-run `teamctl bot setup` any time. Already-configured managers are
-skipped unless you pass `--force`. Scope to one manager with
-`--manager <project>:<role>`.
+Re-run `teamctl bot setup` any time. The wizard is **resumable**:
+
+- Fully-configured managers are skipped silently.
+- If the YAML already has env-var names, they're reused — you're not
+  asked to pick names again.
+- If only the token or only the chat-id is set in `.env`, the wizard
+  collects just the missing piece.
+- `--force` re-asks for everything.
+
+Scope to one manager by passing it as a positional argument:
+
+```bash
+teamctl bot setup news:head_editor
+```
 
 ## Launch
 
@@ -83,7 +94,6 @@ managers:
   head_editor:
     runtime: claude-code
     role_prompt: roles/head_editor.md
-    reports_to_user: true
     interfaces:
       telegram:
         bot_token_env: TEAMCTL_TG_HEAD_EDITOR_TOKEN

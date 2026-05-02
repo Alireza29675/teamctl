@@ -9,13 +9,16 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 ### Added
 
 - **`teamctl bot setup` — interactive 1:1 Telegram bot wizard.**
-  Walks BotFather → token → `/start` → chat id for every user-facing
-  manager (`reports_to_user: true`), prompts for env-var names with
-  sensible defaults, writes `.team/.env` (idempotent upsert; existing
-  vars preserved), and adds an `interfaces.telegram` block to that
-  manager in `projects/<id>.yaml`. `--manager <project>:<role>`
-  scopes a re-run; `--force` re-runs even when env vars are already
-  populated. Sibling `bot list` shows env-var status; `bot status`
+  Walks BotFather → token → `/start` → chat id for every manager,
+  prompts for env-var names with sensible defaults, writes
+  `.team/.env` (idempotent upsert; existing vars preserved), and adds
+  an `interfaces.telegram` block to that manager in
+  `projects/<id>.yaml`. **Resumable**: fully-configured managers
+  skip silently, partials only re-ask for the missing piece (token or
+  chat id), and YAML-fixed env-var names are reused without
+  re-prompting. Positional `[manager]` arg scopes the wizard
+  (`teamctl bot setup news:head_editor`); `--force` re-asks for
+  everything. Sibling `bot list` shows env-var status; `bot status`
   shows running tmux sessions. ADR 0005.
 - **Per-manager Telegram bots auto-spawn under `teamctl up`.** One
   `team-bot` tmux session per manager-with-`interfaces.telegram`,
@@ -43,6 +46,13 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   receives Telegram forwards" signal. Validation now flags an
   `interfaces.telegram` block on a worker the same way the old
   `telegram_inbox: true` flag did.
+- **`reports_to_user: true` is removed.** The flag was already
+  functionally inert — `reply_to_user` gates on `is_manager`, not
+  this — and overlapped semantically with `interfaces.telegram`.
+  Dropping it is a strict simplification: one fewer field in the
+  schema, the docs, the templates, and every example. Old YAMLs
+  carrying the line still parse (the field is silently ignored, no
+  hard break).
 - Examples (`startup-team`, `oss-maintainer`, `indie-game-studio`,
   `market-analysts`, `hello-team`) and the dogfood `.team/` migrated
   to the new shape; their `.env.example` entries align with the
@@ -56,9 +66,11 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   `teamctl bot setup` (it will skip managers whose env vars are
   already populated unless you pass `--force`) and remove the
   legacy top-level entry.
-- If you had `telegram_inbox: true` on a manager, drop the line —
-  the new schema doesn't accept it. The validator will tell you if
-  any worker accidentally inherits an `interfaces.telegram` block.
+- If you had `telegram_inbox: true` or `reports_to_user: true` on
+  any agent, drop the lines — neither is in the new schema. They're
+  silently ignored on existing YAML, but cleaning them up is the
+  intended end state. The validator will tell you if any worker
+  accidentally inherits an `interfaces.telegram` block.
 
 ## [0.5.2] — 2026-05-02
 

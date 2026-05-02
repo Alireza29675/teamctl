@@ -15,7 +15,6 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/manager.md
     permission_mode: auto
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [dev]
     can_broadcast: [all]

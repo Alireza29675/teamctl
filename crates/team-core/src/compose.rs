@@ -313,8 +313,6 @@ pub struct Agent {
     pub role_prompt: Option<PathBuf>,
     #[serde(default)]
     pub permission_mode: Option<String>,
-    #[serde(default)]
-    pub reports_to_user: bool,
     #[serde(default = "default_autonomy")]
     pub autonomy: String,
     #[serde(default)]

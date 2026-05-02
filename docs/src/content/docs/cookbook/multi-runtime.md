@@ -33,7 +33,6 @@ managers:
   manager:
     runtime: claude-code
     model: claude-opus-4-7
-    reports_to_user: true
     can_dm: [backend, researcher]
     can_broadcast: [all]
 

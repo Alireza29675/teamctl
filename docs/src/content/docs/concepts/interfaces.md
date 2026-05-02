@@ -16,7 +16,6 @@ managers:
   head_editor:
     runtime: claude-code
     role_prompt: roles/head_editor.md
-    reports_to_user: true
     interfaces:
       telegram:
         bot_token_env: TEAMCTL_TG_HEAD_EDITOR_TOKEN

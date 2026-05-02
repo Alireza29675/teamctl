@@ -62,7 +62,6 @@ managers:
   manager:
     runtime: claude-code
     model: claude-opus-4-7
-    reports_to_user: true
     can_dm: [dev]
     can_broadcast: [all]
 
@@ -91,7 +90,6 @@ managers:
   editor:
     runtime: claude-code
     model: claude-opus-4-7
-    reports_to_user: true
     can_dm: [writer]
     can_broadcast: [all]
 

@@ -22,7 +22,6 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/director.md
     permission_mode: auto
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [designer, writer, playtest_critic]
     can_broadcast: [design, critique]

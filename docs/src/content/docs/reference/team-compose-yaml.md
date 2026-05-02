@@ -75,7 +75,6 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/head_editor.md
     permission_mode: auto
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [fact_checker, news_writer, seo]
     can_broadcast: [editorial, all]
@@ -145,8 +144,7 @@ workers:
 | `model` | string | runtime default | Runtime-specific model id. |
 | `role_prompt` | path | — | System prompt file; passed via runtime-specific flag. |
 | `permission_mode` | string | runtime default | e.g. `auto`, `plan`, `acceptAll`. |
-| `reports_to_user` | bool | `false` | Manager-only. May call `reply_to_user`. |
-| `interfaces.telegram` | map | — | Manager-only. 1:1 Telegram bot for this manager (presence implies it receives Telegram forwards). |
+| `interfaces.telegram` | map | — | Manager-only. 1:1 Telegram bot for this manager (presence implies it receives Telegram forwards and may call `reply_to_user`). |
 | `autonomy` | string | `low_risk_only` | `full` · `low_risk_only` · `proposal_only`. |
 | `can_dm` | list | `[]` = unrestricted | Short-names this agent may DM. |
 | `can_broadcast` | list | `[]` = unrestricted | Channel names this agent may post to. |

@@ -17,7 +17,6 @@ managers:
     model: claude-opus-4-7
     role_prompt: roles/chief.md
     permission_mode: auto
-    reports_to_user: true
     autonomy: low_risk_only
     can_dm: [macro, equities, crypto, quant_risk]
     can_broadcast: [desk, alerts]

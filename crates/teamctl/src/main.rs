@@ -205,17 +205,22 @@ enum ContextAction {
 #[derive(Subcommand)]
 enum BotAction {
     /// Interactive wizard: walks BotFather → token → /start → chat id,
-    /// writes env vars to `.team/.env`, and adds a `telegram:` block to
-    /// each user-facing manager in `projects/<id>.yaml`.
+    /// writes env vars to `.team/.env`, and adds an
+    /// `interfaces.telegram` block to the manager in
+    /// `projects/<id>.yaml`. Resumable — re-runs only ask for what's
+    /// still missing.
     Setup {
-        /// Re-run setup even when env vars are already populated.
+        /// Optional `<project>:<role>` to scope the wizard to one
+        /// manager. When omitted, walks every manager and skips ones
+        /// already fully wired up.
+        manager: Option<String>,
+        /// Re-run setup even when env vars are already populated
+        /// (re-asks for token + chat id).
         #[arg(long)]
         force: bool,
-        /// Scope wizard to one manager (`<project>:<role>`).
-        #[arg(long)]
-        manager: Option<String>,
     },
-    /// Print every manager that has a `telegram:` block, with env-var status.
+    /// Print every manager that has an `interfaces.telegram` block
+    /// with env-var status.
     #[command(alias = "ls")]
     List,
     /// Show running/stopped tmux session for each bot.
