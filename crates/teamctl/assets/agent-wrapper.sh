@@ -30,7 +30,7 @@ fi
 : "${SYSTEM_PROMPT_PATH:=}"
 : "${CLAUDE_PROJECT_DIR:=.}"
 : "${TEAMCTL_ROOT:=$CLAUDE_PROJECT_DIR}"
-: "${BOOTSTRAP_PROMPT:=Begin your shift as ${AGENT}. Open inbox_watch via the \`team\` MCP server and keep it open. Process any messages per your role and the system prompt. Stay running -- do not exit.}"
+: "${BOOTSTRAP_PROMPT:=Begin your shift as ${AGENT}. Team traffic is delivered to you as \`<channel source=\"team\">\` events via Claude Code Channels -- you do not need to poll. Process each event per your role and the system prompt, calling \`inbox_ack\` on the message ids you handle. Between events, idle. Use \`inbox_peek\` only for catch-up after a restart.}"
 
 cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || true
 
@@ -63,6 +63,14 @@ while :; do
             # default). Empty string is treated as unset.
             [ -n "$EFFORT" ] && set -- "$@" --effort "$EFFORT"
             [ -n "$MCP_CONFIG" ] && set -- "$@" --mcp-config "$MCP_CONFIG"
+            # Subscribe to the team mailbox via Claude Code Channels
+            # (v2.1.80+). team-mcp emits `notifications/claude/channel`
+            # for every new inbox row, which lands in this session as
+            # a `<channel source="team">` event -- so the agent reacts
+            # on arrival without polling and idles silently between
+            # events. `server:team` references the `team` entry in the
+            # MCP config rendered above.
+            set -- "$@" --channels server:team
             [ -n "$SYSTEM_PROMPT_PATH" ] && [ -f "$SYSTEM_PROMPT_PATH" ] && \
                 set -- "$@" --append-system-prompt "$(cat "$SYSTEM_PROMPT_PATH")"
             set -- "$@" "$BOOTSTRAP_PROMPT"

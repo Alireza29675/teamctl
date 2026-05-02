@@ -4,6 +4,23 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-05-02
+
+### Added
+
+- **`team-mcp` pushes new mail as Claude Code Channels notifications.**
+  When the connected client is Claude Code v2.1.80+ launched with
+  `--channels server:team`, `team-mcp` emits
+  `notifications/claude/channel` for every new inbox row addressed
+  to the agent. The runtime injects each event as a
+  `<channel source="team">` tag, so agents react on arrival without
+  polling and idle silently between events. The wrapper sets the
+  flag automatically for the claude-code runtime; bootstrap prompt
+  rewritten to expect channel events and use `inbox_peek` for
+  restart catch-up only. Codex/Gemini paths unchanged. README and
+  ROADMAP have promised this since v0.2.9 — first release that
+  actually ships it.
+
 ## [0.5.1] — 2026-05-02
 
 ### Fixed
