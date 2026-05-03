@@ -4,6 +4,27 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-05-03
+
+### Fixed
+
+- **Claude Code Channels never fired in-session.** `team-mcp`'s
+  `initialize` response advertised only the `tools` capability, so
+  Claude Code did not register a `notifications/claude/channel`
+  listener and silently dropped every event the notifier emitted —
+  mailbox rows accumulated without surfacing as `<channel
+  source="team">` events. Initialize now declares
+  `experimental.claude/channel: {}` (the documented capability that
+  registers the listener), ships a recommended `instructions` string,
+  and renames `serverInfo.name` from `team-mcp` to `team` so the
+  rendered tag matches the `.mcp.json` key and the bootstrap prompt.
+- **Agent wrapper used `--channels` for an off-allowlist server.**
+  Custom channels are silently dropped by `--channels` during the
+  research preview. Wrapper now uses
+  `--dangerously-load-development-channels server:team --` (with the
+  `--` separator so the variadic flag does not swallow the bootstrap
+  prompt).
+
 ## [0.6.2] — 2026-05-02
 
 ### Fixed
