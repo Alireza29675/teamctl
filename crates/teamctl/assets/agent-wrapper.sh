@@ -42,6 +42,32 @@ log() {
     printf '[agent-wrapper %s] %s\n' "$AGENT" "$*" >&2
 }
 
+# Claude Code shows a non-persistent confirmation dialog every time it
+# starts with `--dangerously-load-development-channels` for a server
+# that isn't on Anthropic's allowlist. team-mcp is off-allowlist during
+# the Channels research preview, so the dialog reappears on every
+# wrapper restart and strands the agent at "Press Enter to confirm".
+#
+# This watcher polls our own tmux pane for the dialog header and sends
+# one Enter when it appears, then exits. Bounded at 60s so it never
+# lingers past a genuine prompt the operator is answering. No-op once
+# team-mcp is allowlisted (the header never shows up), and no-op
+# outside tmux (TMUX_PANE unset).
+auto_confirm_dev_channels() {
+    pane="${TMUX_PANE:-${TMUX_SESSION:-}}"
+    [ -z "$pane" ] && return 0
+    command -v tmux >/dev/null 2>&1 || return 0
+    end=$(( $(date +%s) + 60 ))
+    while [ "$(date +%s)" -lt "$end" ]; do
+        if tmux capture-pane -t "$pane" -p 2>/dev/null \
+            | grep -qF "Loading development channels"; then
+            tmux send-keys -t "$pane" Enter
+            return 0
+        fi
+        sleep 0.5
+    done
+}
+
 # Build the runtime invocation as the script's positional parameters.
 # Doing this in-line (instead of in a function) keeps the args quoted —
 # previous versions stuffed everything into a single $BIN_ARGS string and
@@ -86,6 +112,7 @@ while :; do
             # BOOTSTRAP_PROMPT positional isn't slurped as another channel
             # entry.
             set -- "$@" -- "$BOOTSTRAP_PROMPT"
+            AUTO_CONFIRM=1
             ;;
         codex)
             BIN=codex
@@ -110,6 +137,13 @@ while :; do
             ;;
     esac
 
+    AUTO_CONFIRM_PID=
+    if [ "${AUTO_CONFIRM:-0}" = 1 ]; then
+        auto_confirm_dev_channels &
+        AUTO_CONFIRM_PID=$!
+    fi
+    AUTO_CONFIRM=0
+
     if command -v teamctl >/dev/null 2>&1; then
         teamctl --root "$TEAMCTL_ROOT" rl-watch "$AGENT" -- "$BIN" "$@"
     else
@@ -117,6 +151,12 @@ while :; do
         "$BIN" "$@"
     fi
     ec=$?
+
+    if [ -n "$AUTO_CONFIRM_PID" ]; then
+        kill "$AUTO_CONFIRM_PID" 2>/dev/null
+        wait "$AUTO_CONFIRM_PID" 2>/dev/null
+    fi
+
     log "runtime exited ec=$ec — restarting in 5s"
     sleep 5
 done
