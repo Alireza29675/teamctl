@@ -54,38 +54,23 @@ use teamctl_ui::approvals::test_support::MockApprovalDecider;
 use teamctl_ui::approvals::{Approval, Decision};
 use teamctl_ui::compose::test_support::MockMessageSender;
 use teamctl_ui::data::{AgentInfo, TeamSnapshot};
-use teamctl_ui::mailbox::{MailboxSource, MessageRow};
+use teamctl_ui::mailbox::test_support::MockMailboxSource;
 use teamctl_ui::triptych::{MainLayout, Pane};
-
-/// Mailbox source that returns no rows for any query. T-079-A
-/// mocks compose + approvals via the published `test_support`
-/// modules; the mailbox surface only needs an inert read-side here,
-/// so we keep the type local until a future sub-ticket needs the
-/// full-fat recorder.
-#[derive(Default)]
-pub struct EmptyMailbox;
-
-impl MailboxSource for EmptyMailbox {
-    fn inbox(&self, _agent_id: &str, _after_id: i64) -> anyhow::Result<Vec<MessageRow>> {
-        Ok(Vec::new())
-    }
-    fn channel_feed(&self, _agent_id: &str, _after_id: i64) -> anyhow::Result<Vec<MessageRow>> {
-        Ok(Vec::new())
-    }
-    fn wire(&self, _project_id: &str, _after_id: i64) -> anyhow::Result<Vec<MessageRow>> {
-        Ok(Vec::new())
-    }
-}
 
 /// Harness binds an `App` to its mock collaborators so every
 /// `dispatch_key` reaches the same recorders. Construct with
 /// `Harness::new()`; seed a team via `app.replace_team(...)` when
-/// the test needs roster state.
+/// the test needs roster state. The mailbox source is a recorder —
+/// `MockMailboxSource::default()` returns empty rows on every
+/// query, but tests that exercise mailbox traffic can seed
+/// `h.mailbox.inbox_rows` (etc.) before driving a refresh and then
+/// inspect `h.mailbox.inbox_calls.lock()` to verify the right filter
+/// was queried with the right (agent_id, after_id) pair.
 pub struct Harness {
     pub app: App,
     pub sender: MockMessageSender,
     pub decider: MockApprovalDecider,
-    pub mailbox: EmptyMailbox,
+    pub mailbox: MockMailboxSource,
 }
 
 impl Harness {
@@ -98,7 +83,7 @@ impl Harness {
             app: App::new(),
             sender: MockMessageSender::default(),
             decider: MockApprovalDecider::default(),
-            mailbox: EmptyMailbox,
+            mailbox: MockMailboxSource::default(),
         }
     }
 

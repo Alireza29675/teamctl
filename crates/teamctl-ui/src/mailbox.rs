@@ -262,15 +262,19 @@ impl MailboxBuffers {
     }
 }
 
-#[cfg(test)]
-mod tests {
+pub mod test_support {
+    //! Shared mock — public so unit tests, integration tests, and
+    //! downstream coverage can wire in a recorder without rolling
+    //! their own. Matches the shape used by `compose::test_support`
+    //! and `approvals::test_support`.
+
     use super::*;
     use std::sync::Mutex;
 
     /// Test stub — returns canned rows on each call, records every
     /// arg pair. Mailbox is the most-asserted test surface in
-    /// PR-UI-3 so the recorder lets snapshot tests verify "is the
-    /// right filter being asked the right thing."
+    /// PR-UI-3 so the recorder lets snapshot + interaction tests
+    /// verify "is the right filter being asked the right thing."
     #[derive(Default)]
     pub struct MockMailboxSource {
         pub inbox_rows: Vec<MessageRow>,
@@ -306,6 +310,12 @@ mod tests {
             Ok(self.wire_rows.clone())
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::*;
+    use super::*;
 
     fn row(id: i64, sender: &str, recipient: &str, text: &str) -> MessageRow {
         MessageRow {
