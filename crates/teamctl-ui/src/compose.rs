@@ -482,7 +482,6 @@ impl MessageSender for CliMessageSender {
     }
 }
 
-#[cfg(test)]
 pub mod test_support {
     use super::*;
     use std::sync::Mutex;
