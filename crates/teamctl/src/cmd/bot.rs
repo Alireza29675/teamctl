@@ -453,52 +453,30 @@ fn upsert_manager_telegram(
 }
 
 /// Rewrites managers.<role>.interfaces.telegram with the new env-var
-/// names. Other interface adapters under `interfaces:` (when we add
-/// them) are preserved. Comments may be reflowed on save — the file is
-/// reserialised via `serde_yaml`.
+/// names. Other interface adapters under `interfaces:` (e.g. `discord:`)
+/// are preserved, as are comments and blank-line clusters elsewhere in
+/// the file (via `team_core::yaml_edit`'s comment-preserving substrate).
 fn edit_manager_yaml(path: &Path, role: &str, token_env: &str, chats_env: &str) -> Result<()> {
-    let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let mut doc: serde_yaml::Value =
-        serde_yaml::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+    let doc = team_core::yaml_edit::load(path)?;
 
-    let managers = doc
-        .as_mapping_mut()
-        .and_then(|m| m.get_mut(serde_yaml::Value::String("managers".into())))
-        .and_then(|m| m.as_mapping_mut())
+    // Sanity-check that the parent path exists before we splice. Errors
+    // here match the pre-substrate behaviour callers rely on.
+    let root = doc
+        .as_mapping()
+        .ok_or_else(|| anyhow!("root of {} is not a mapping", path.display()))?;
+    let managers = root
+        .get_mapping("managers")
         .ok_or_else(|| anyhow!("`managers:` block missing in {}", path.display()))?;
+    if managers.get_mapping(role).is_none() {
+        return Err(anyhow!("manager `{role}` missing in {}", path.display()));
+    }
 
-    let entry = managers
-        .get_mut(serde_yaml::Value::String(role.into()))
-        .and_then(|v| v.as_mapping_mut())
-        .ok_or_else(|| anyhow!("manager `{role}` missing in {}", path.display()))?;
-
-    let mut tg = serde_yaml::Mapping::new();
-    tg.insert("bot_token_env".into(), token_env.into());
-    tg.insert("chat_ids_env".into(), chats_env.into());
-
-    // Upsert: preserve any sibling adapters (`discord:` etc.) under
-    // `interfaces:`; replace just the `telegram:` child.
-    let interfaces_key = serde_yaml::Value::String("interfaces".into());
-    let interfaces = match entry
-        .get_mut(&interfaces_key)
-        .and_then(|v| v.as_mapping_mut())
-    {
-        Some(m) => m,
-        None => {
-            entry.insert(
-                interfaces_key.clone(),
-                serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
-            );
-            entry
-                .get_mut(&interfaces_key)
-                .and_then(|v| v.as_mapping_mut())
-                .expect("just inserted")
-        }
-    };
-    interfaces.insert("telegram".into(), serde_yaml::Value::Mapping(tg));
-
-    let out = serde_yaml::to_string(&doc).context("reserialise project yaml")?;
-    fs::write(path, out).with_context(|| format!("write {}", path.display()))?;
+    let doc = team_core::yaml_edit::set_nested_mapping(
+        doc,
+        &["managers", role, "interfaces", "telegram"],
+        &[("bot_token_env", token_env), ("chat_ids_env", chats_env)],
+    )?;
+    team_core::yaml_edit::save(&doc, path)?;
     Ok(())
 }
 
