@@ -23,7 +23,7 @@ expression: s
 │                   │                                                                              │                   │
 │                   │                                                                              │                   │
 │                   │-- INSERT --                                                                  │                   │
-│                   │Ctrl+Enter send · Esc Esc cancel · Tab attach (TODO #32)                      │                   │
+│                   │Alt+Enter send · Esc Esc cancel · Tab attach (TODO #32)                       │                   │
 │                   └──────────────────────────────────────────────────────────────────────────────┘                   │
 │                          ││                                                          ││                              │
 │                          ││                                                          ││                              │
