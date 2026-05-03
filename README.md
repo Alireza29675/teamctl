@@ -13,7 +13,9 @@ Long-running AI agents — Claude Code, Codex, or Gemini sessions — organized 
 ```bash
 claude plugin marketplace add https://github.com/Alireza29675/teamctl
 claude plugin install teamctl@teamctl
+# inside a Claude Code session:
 /teamctl:init
+# back in your shell:
 teamctl ui
 ```
 
