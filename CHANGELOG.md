@@ -4,6 +4,12 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Changed
+
+- Plugin slash commands renamed: `/teamctl:teamctl-init` → `/teamctl:init`,
+  `/teamctl:teamctl` → `/teamctl:adjust`. Operators upgrading must use the
+  new invocation forms.
+
 ## [0.7.0] — 2026-05-03
 
 0.7.0 ships the Claude Code plugin. Install once (`claude plugin marketplace add https://github.com/Alireza29675/teamctl && claude plugin install teamctl@teamctl`), invoke `/teamctl-init`, and you're walked from no-teamctl-installed through a running supervised team in tmux in a few minutes. The plugin is teamctl's onboarding from inside Claude Code; the `.team/` directory it produces is the same hand-authorable YAML you've always had, byte-for-byte indistinguishable from one you'd type yourself. Parallel plugins for OpenCode, Codex CLI, and Gemini CLI are tracked at #59, #60, #61.

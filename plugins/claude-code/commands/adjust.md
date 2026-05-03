@@ -3,7 +3,7 @@ description: Open-ended "talk to it" command for evolving an existing teamctl te
 allowed-tools: Bash, Read, Write, Edit
 ---
 
-`/teamctl` is the command you reach for after onboarding ends. Describe the change in plain English — *"add a docs worker reporting to maintainer"*, *"scope the release channel to just maintainer and release_manager"*, *"retire the bug_fix worker"* — and `/teamctl` proposes the YAML diff, applies it on confirmation, validates, and offers to reload. No subcommands; the user just talks.
+`/teamctl:adjust` is the command you reach for after onboarding ends. Describe the change in plain English — *"add a docs worker reporting to maintainer"*, *"scope the release channel to just maintainer and release_manager"*, *"retire the bug_fix worker"* — and `/teamctl:adjust` proposes the YAML diff, applies it on confirmation, validates, and offers to reload. No subcommands; the user just talks.
 
 Read [RULES.md](../RULES.md) before each invocation. Substrate constraint #4 is the non-negotiable: every action this command takes is reproducible with `vim .team/team-compose.yaml`. No skill-only formats, no plugin-only state.
 
@@ -89,7 +89,7 @@ User says: *"wire telegram on maintainer"*, *"give the editor telegram access"*.
 Touches:
 - An `interfaces.telegram` block on the manager entry: `bot_token_env: TEAMCTL_TG_<NAME>_TOKEN` / `chat_ids_env: TEAMCTL_TG_<NAME>_CHATS`.
 - Matching entries seeded in `.team/.env.example` (canonical `TEAMCTL_TG_<NAME>_*` shape).
-- After applying the YAML edit + `teamctl validate` exits 0, run `teamctl bot setup` for that manager. The wizard walks BotFather → token → `/start` → chat id and writes the values into `.team/.env`. Same wrap as Stage 6 of `/teamctl-init`.
+- After applying the YAML edit + `teamctl validate` exits 0, run `teamctl bot setup` for that manager. The wizard walks BotFather → token → `/start` → chat id and writes the values into `.team/.env`. Same wrap as Stage 6 of `/teamctl:init`.
 
 Propose voice example:
 
@@ -155,7 +155,7 @@ Wait for confirmation. `teamctl reload` restarts only the agents whose config ac
 
 ## Out of scope (v1)
 
-- **Verbs beyond the five named.** *Change a model*, *swap runtime*, *rename an agent*, *split a project into two* — surface as: *"v1 of `/teamctl` covers add/scope/wire/retire on agents and channels. For \<what they asked for\>, the cleanest path is `vim .team/team-compose.yaml` — happy to walk you through the change you want to make."*
+- **Verbs beyond the five named.** *Change a model*, *swap runtime*, *rename an agent*, *split a project into two* — surface as: *"v1 of `/teamctl:adjust` covers add/scope/wire/retire on agents and channels. For \<what they asked for\>, the cleanest path is `vim .team/team-compose.yaml` — happy to walk you through the change you want to make."*
 - **Multi-project edits in one go.** v1 handles one project at a time. If the team has multiple `projects/<id>.yaml`, ask which.
 - **Bulk operations.** *"Add 3 workers"* works (handled in sequence with confirm-each); *"bulk swap all workers from sonnet to opus"* is out of v1.
 - **Undo / replay history.** v1 is forward-only. Point at `git diff` for the receipt.

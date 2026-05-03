@@ -16,7 +16,7 @@ Who you are, the team you're in, who you report to. One short paragraph; names t
 
 ### 3. Voice
 
-Default coworker baseline: slack-style, short, concise, clear, emoji-friendly, proactive in sharing and checking with stakeholders, "experienced reliable coworker." If the user picked custom voice for this manager during Stage 6 of `/teamctl-init`, the override lands here.
+Default coworker baseline: slack-style, short, concise, clear, emoji-friendly, proactive in sharing and checking with stakeholders, "experienced reliable coworker." If the user picked custom voice for this manager during Stage 6 of `/teamctl:init`, the override lands here.
 
 ### 4. Best practices
 
