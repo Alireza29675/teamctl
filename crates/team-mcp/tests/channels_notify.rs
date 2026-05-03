@@ -182,10 +182,22 @@ fn new_inbox_row_pushes_channel_notification_to_subscribed_agent() {
         .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
         .expect("expected notifications/claude/channel within 5s");
 
+    // Per the Channels wire format, `params.meta` is `Record<string, string>`.
+    // Numbers / nulls cause Claude Code to silently drop the notification, so
+    // every value must be a string and absent fields must be omitted (not null).
     assert_eq!(notif["params"]["content"], "ping via channels");
-    assert_eq!(notif["params"]["meta"]["sender"], "hello:mgr");
-    assert_eq!(notif["params"]["meta"]["recipient"], "hello:dev");
-    assert_eq!(notif["params"]["meta"]["id"], msg_id);
+    let meta = &notif["params"]["meta"];
+    assert_eq!(meta["sender"], "hello:mgr");
+    assert_eq!(meta["recipient"], "hello:dev");
+    assert_eq!(meta["id"], msg_id.to_string());
+    assert!(meta["sent_at"].is_string(), "sent_at must be a string");
+    assert!(
+        meta.get("thread_id").is_none() || meta["thread_id"].is_string(),
+        "thread_id must be absent or a string, never null"
+    );
+    for (k, v) in meta.as_object().expect("meta is an object") {
+        assert!(v.is_string(), "meta.{k} must be a string, got {v}");
+    }
 
     dev.shutdown();
     mgr.shutdown();

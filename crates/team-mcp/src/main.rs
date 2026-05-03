@@ -180,19 +180,27 @@ fn spawn_channel_watcher(
 /// Build the JSON-RPC notification per Claude Code's Channels wire format.
 /// `meta` fields surface as XML attributes on the `<channel>` tag the
 /// runtime injects into the session.
+///
+/// Per the Channels reference, `params.meta` is `Record<string, string>`
+/// — every value must be a string. Numbers and nulls are silently
+/// dropped (or, worse, drop the whole notification), so we serialise
+/// `id` / `sent_at` as strings and omit `thread_id` entirely when it is
+/// not set.
 fn format_channel_event(m: &store::Message) -> Value {
+    let mut meta = serde_json::Map::new();
+    meta.insert("id".into(), Value::String(m.id.to_string()));
+    meta.insert("sender".into(), Value::String(m.sender.clone()));
+    meta.insert("recipient".into(), Value::String(m.recipient.clone()));
+    meta.insert("sent_at".into(), Value::String(m.sent_at.to_string()));
+    if let Some(t) = m.thread_id.as_ref() {
+        meta.insert("thread_id".into(), Value::String(t.clone()));
+    }
     json!({
         "jsonrpc": "2.0",
         "method": "notifications/claude/channel",
         "params": {
             "content": m.text,
-            "meta": {
-                "id": m.id,
-                "sender": m.sender,
-                "recipient": m.recipient,
-                "thread_id": m.thread_id,
-                "sent_at": m.sent_at,
-            }
+            "meta": meta,
         }
     })
 }
