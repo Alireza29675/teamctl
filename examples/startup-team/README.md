@@ -56,15 +56,15 @@ scoped to one manager — the founder bot only forwards traffic for
 # Founder bot (in its own tmux window / terminal)
 team-bot \
   --mailbox ./state/mailbox.db \
-  --token   "$FOUNDER_BOT_TOKEN" \
-  --authorized-chat-ids "$FOUNDER_CHAT_IDS" \
+  --token   "$TEAMCTL_TG_FOUNDER_TOKEN" \
+  --authorized-chat-ids "$TEAMCTL_TG_FOUNDER_CHATS" \
   --manager startup:founder
 
 # Product bot (separate window / terminal)
 team-bot \
   --mailbox ./state/mailbox.db \
-  --token   "$PRODUCT_BOT_TOKEN" \
-  --authorized-chat-ids "$PRODUCT_CHAT_IDS" \
+  --token   "$TEAMCTL_TG_PRODUCT_MANAGER_TOKEN" \
+  --authorized-chat-ids "$TEAMCTL_TG_PRODUCT_MANAGER_CHATS" \
   --manager startup:product_manager
 ```
 

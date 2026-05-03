@@ -57,8 +57,8 @@ Now start the director's Telegram bot:
 ```bash
 team-bot \
   --mailbox ./state/mailbox.db \
-  --token   "$DIRECTOR_BOT_TOKEN" \
-  --authorized-chat-ids "$DIRECTOR_CHAT_IDS" \
+  --token   "$TEAMCTL_TG_DIRECTOR_TOKEN" \
+  --authorized-chat-ids "$TEAMCTL_TG_DIRECTOR_CHATS" \
   --manager studio:director
 ```
 
