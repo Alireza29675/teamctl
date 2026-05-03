@@ -4,6 +4,42 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-05-03
+
+### Fixed
+
+- **Claude Code Channels never fired in-session.** `team-mcp`'s
+  `initialize` response advertised only the `tools` capability, so
+  Claude Code did not register a `notifications/claude/channel`
+  listener and silently dropped every event the notifier emitted —
+  mailbox rows accumulated without surfacing as `<channel
+  source="team">` events. Initialize now declares
+  `experimental.claude/channel: {}` (the documented capability that
+  registers the listener), ships a recommended `instructions` string,
+  and renames `serverInfo.name` from `team-mcp` to `team` so the
+  rendered tag matches the `.mcp.json` key and the bootstrap prompt.
+- **Channel notifications were dropped as wire-format violations.**
+  `params.meta` is `Record<string, string>` per the Channels reference,
+  but the notifier emitted `id` / `sent_at` as numbers and `thread_id`
+  as `null` when unset. Claude Code dropped the malformed events
+  silently, so even with the listener registered the agent never saw
+  a `<channel>` tag — it was reaching the message only through the
+  old `inbox_watch` long-poll. All meta values are now strings, and
+  `thread_id` is omitted when not set.
+- **Agent wrapper used `--channels` for an off-allowlist server.**
+  Custom channels are silently dropped by `--channels` during the
+  research preview. Wrapper now uses
+  `--dangerously-load-development-channels server:team --` (with the
+  `--` separator so the variadic flag does not swallow the bootstrap
+  prompt).
+- **Dev-channels confirmation dialog stranded agents on every
+  restart.** Claude Code prompts "I am using this for local
+  development" each time it boots with a non-allowlisted dev channel,
+  with no persistent acceptance. Wrapper now side-spawns a watcher
+  that polls its own tmux pane for the dialog header and presses
+  Enter once, then exits (60 s deadline; no-op once team-mcp is
+  allowlisted or when running outside tmux).
+
 ## [0.6.2] — 2026-05-02
 
 ### Fixed

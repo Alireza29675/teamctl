@@ -119,6 +119,27 @@ impl Peer {
 }
 
 #[test]
+fn initialize_advertises_channel_capability() {
+    // Without `experimental.claude/channel: {}` Claude Code does not
+    // register a listener and silently drops every channel notification
+    // we emit — which is exactly the regression that landed in 0.6.x.
+    // `serverInfo.name` becomes the `<channel source="...">` attribute,
+    // and the bootstrap prompt + .mcp.json key both read "team".
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let mut p = Peer::spawn(&team_mcp_bin(), "hello:dev", &mailbox);
+    p.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let resp = p.lines.recv_json(Duration::from_secs(2));
+    assert_eq!(
+        resp["result"]["capabilities"]["experimental"]["claude/channel"],
+        json!({}),
+        "initialize must advertise the claude/channel capability; got {resp}"
+    );
+    assert_eq!(resp["result"]["serverInfo"]["name"], "team");
+    p.shutdown();
+}
+
+#[test]
 fn new_inbox_row_pushes_channel_notification_to_subscribed_agent() {
     let tmp = tempdir().unwrap();
     let mailbox = tmp.path().join("mailbox.db");
@@ -161,10 +182,22 @@ fn new_inbox_row_pushes_channel_notification_to_subscribed_agent() {
         .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
         .expect("expected notifications/claude/channel within 5s");
 
+    // Per the Channels wire format, `params.meta` is `Record<string, string>`.
+    // Numbers / nulls cause Claude Code to silently drop the notification, so
+    // every value must be a string and absent fields must be omitted (not null).
     assert_eq!(notif["params"]["content"], "ping via channels");
-    assert_eq!(notif["params"]["meta"]["sender"], "hello:mgr");
-    assert_eq!(notif["params"]["meta"]["recipient"], "hello:dev");
-    assert_eq!(notif["params"]["meta"]["id"], msg_id);
+    let meta = &notif["params"]["meta"];
+    assert_eq!(meta["sender"], "hello:mgr");
+    assert_eq!(meta["recipient"], "hello:dev");
+    assert_eq!(meta["id"], msg_id.to_string());
+    assert!(meta["sent_at"].is_string(), "sent_at must be a string");
+    assert!(
+        meta.get("thread_id").is_none() || meta["thread_id"].is_string(),
+        "thread_id must be absent or a string, never null"
+    );
+    for (k, v) in meta.as_object().expect("meta is an object") {
+        assert!(v.is_string(), "meta.{k} must be a string, got {v}");
+    }
 
     dev.shutdown();
     mgr.shutdown();

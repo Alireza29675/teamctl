@@ -65,10 +65,21 @@ pub async fn dispatch(ctx: &Ctx, req: Request) -> Option<Response> {
     let is_notification = req.id.is_none();
 
     let result = match req.method.as_str() {
+        // The `experimental.claude/channel` capability is what registers
+        // the channel listener on the Claude Code side; without it the
+        // runtime silently drops every `notifications/claude/channel`
+        // we emit. `serverInfo.name` becomes the `source=` attribute on
+        // the rendered `<channel source="team">` tag, so it must match
+        // both the `.mcp.json` key the wrapper renders and the bootstrap
+        // prompt the agent reads.
         "initialize" => Ok(json!({
             "protocolVersion": team_core::MCP_PROTOCOL_VERSION,
-            "capabilities": { "tools": { "listChanged": false } },
-            "serverInfo": { "name": "team-mcp", "version": team_core::VERSION },
+            "capabilities": {
+                "tools": { "listChanged": false },
+                "experimental": { "claude/channel": {} },
+            },
+            "serverInfo": { "name": "team", "version": team_core::VERSION },
+            "instructions": "Team traffic arrives as <channel source=\"team\"> events with meta attributes id, sender, recipient, thread_id, sent_at. Read the body, act per your role, then call inbox_ack on the meta.id you handled. Do not poll inbox_watch — channels are push-driven. Use inbox_peek only for catch-up after a restart.",
         })),
         "notifications/initialized" => Ok(Value::Null),
         "tools/list" => Ok(json!({ "tools": tools::schema() })),
