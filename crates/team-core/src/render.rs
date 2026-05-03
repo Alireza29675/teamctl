@@ -183,10 +183,7 @@ mod tests {
         let c = fixture();
         let h = c.agents().next().unwrap();
         let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
-        assert!(
-            env.contains("TEAMCTL_ROOT=/teamctl\n"),
-            "env was: {env}"
-        );
+        assert!(env.contains("TEAMCTL_ROOT=/teamctl\n"), "env was: {env}");
     }
 
     #[test]
