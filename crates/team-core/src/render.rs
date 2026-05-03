@@ -73,6 +73,14 @@ fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
         "CLAUDE_PROJECT_DIR={}\n",
         project.project.cwd.display()
     ));
+    // Absolute path to the compose root (the directory holding
+    // `team-compose.yaml`). The wrapper passes this to `teamctl --root`
+    // so rl-watch resolves the right tree regardless of where
+    // `cd "$CLAUDE_PROJECT_DIR"` lands the shell. Without this,
+    // wrapper falls back to CLAUDE_PROJECT_DIR (often a relative `..`)
+    // which compounds with the post-cd cwd and points at the wrong
+    // directory.
+    s.push_str(&format!("TEAMCTL_ROOT={}\n", compose.root.display()));
     s.push_str(&format!(
         "TMUX_SESSION={}{}-{}\n",
         compose.global.supervisor.tmux_prefix, h.project, h.agent
@@ -163,6 +171,19 @@ mod tests {
         assert!(env.contains("AGENT_ID=hello:mgr"));
         assert!(env.contains("TEAMCTL_MAILBOX=/teamctl/state/mailbox.db"));
         assert!(env.contains("TMUX_SESSION=a-hello-mgr"));
+    }
+
+    #[test]
+    fn env_pins_teamctl_root_to_compose_root() {
+        // Regression: when project.cwd is a relative path (e.g. `..`),
+        // the wrapper used to fall back to it for `--root`, which
+        // resolves against the post-cd cwd and points at the wrong
+        // directory. Rendering an absolute TEAMCTL_ROOT pins
+        // `teamctl --root` to the compose root regardless of cwd.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(env.contains("TEAMCTL_ROOT=/teamctl\n"), "env was: {env}");
     }
 
     #[test]

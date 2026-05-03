@@ -4,6 +4,27 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-05-02
+
+### Fixed
+
+- **`teamctl up` failed when `project.cwd` was a relative path.** The
+  rendered per-agent env file omitted `TEAMCTL_ROOT`, so the wrapper
+  fell back to `CLAUDE_PROJECT_DIR` (often a literal `..`). After the
+  wrapper's `cd "$CLAUDE_PROJECT_DIR"`, the subsequent
+  `teamctl --root ".." rl-watch …` resolved one directory above the
+  intended `.team/`, and the runtime crash-looped with
+  `read …/team-compose.yaml: No such file or directory`. Renderer now
+  emits an absolute `TEAMCTL_ROOT=<compose.root>` so `--root` is
+  pinned regardless of post-`cd` cwd.
+- **Agent-wrapper crashed under `set -u` for agents without an
+  `effort:` field.** The renderer only emits `EFFORT=` for agents
+  that set it, but the wrapper unconditionally referenced `$EFFORT`
+  via `[ -n "$EFFORT" ]`. With `set -u` active, that aborted the
+  wrapper before exec — visible only after the `TEAMCTL_ROOT` fix
+  let the wrapper progress past compose loading. Wrapper now
+  defaults `EFFORT` to empty alongside the other optional vars.
+
 ## [0.6.1] — 2026-05-02
 
 ### Added

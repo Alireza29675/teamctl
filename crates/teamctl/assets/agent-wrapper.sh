@@ -30,6 +30,10 @@ fi
 : "${SYSTEM_PROMPT_PATH:=}"
 : "${CLAUDE_PROJECT_DIR:=.}"
 : "${TEAMCTL_ROOT:=$CLAUDE_PROJECT_DIR}"
+# Rendered into the env file only when the YAML `effort:` field is set.
+# Default to empty here so `set -u` doesn't trip the `[ -n "$EFFORT" ]`
+# check below for agents that omit it.
+: "${EFFORT:=}"
 : "${BOOTSTRAP_PROMPT:=Begin your shift as ${AGENT}. Team traffic is delivered to you as \`<channel source=\"team\">\` events via Claude Code Channels -- you do not need to poll. Process each event per your role and the system prompt, calling \`inbox_ack\` on the message ids you handle. Between events, idle. Use \`inbox_peek\` only for catch-up after a restart.}"
 
 cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || true
