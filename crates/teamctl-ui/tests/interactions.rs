@@ -936,3 +936,238 @@ fn deny_followed_by_approve_routes_each_to_distinct_rows() {
         "queue empty after both decisions"
     );
 }
+
+// ── Mailbox + tab coverage (T-079-E) ────────────────────────────
+//
+// Mailbox tab interactions sit on `[` / `]` (gated by the Mailbox
+// pane having focus), Tab cycles pane focus only (T-074 bug 6 was
+// the Tab-cycles-tabs shape that stranded operators), agent-switch
+// resets every per-tab buffer, and `refresh_mailbox` fans out to
+// the three filter shapes (`inbox` / `channel_feed` / `wire`) with
+// the right `(agent_id, after_id)` / `(project_id, after_id)`
+// pairs. Recorder assertions use the harness's `MockMailboxSource`
+// fields directly.
+
+use teamctl_ui::app::refresh_mailbox;
+use teamctl_ui::mailbox::{MailboxTab, MessageRow};
+
+fn mb_row(id: i64, sender: &str, recipient: &str, text: &str) -> MessageRow {
+    MessageRow {
+        id,
+        sender: sender.into(),
+        recipient: recipient.into(),
+        text: text.into(),
+        sent_at: 0.0,
+    }
+}
+
+#[test]
+fn bracket_chord_cycles_mailbox_tabs_forward_when_mailbox_focused() {
+    // `]` cycles Inbox → Channel → Wire → Inbox once the mailbox
+    // pane has focus. The forward walker must wrap.
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    // Walk Tab focus to Mailbox.
+    h.dispatch_key(KeyCode::Tab);
+    h.dispatch_key(KeyCode::Tab);
+    assert_eq!(h.app.focused_pane, Pane::Mailbox);
+    assert_eq!(h.app.mailbox_tab, MailboxTab::Inbox);
+
+    h.dispatch_key(KeyCode::Char(']'));
+    assert_eq!(h.app.mailbox_tab, MailboxTab::Channel);
+
+    h.dispatch_key(KeyCode::Char(']'));
+    assert_eq!(h.app.mailbox_tab, MailboxTab::Wire);
+
+    h.dispatch_key(KeyCode::Char(']'));
+    assert_eq!(
+        h.app.mailbox_tab,
+        MailboxTab::Inbox,
+        "`]` from Wire wraps to Inbox"
+    );
+}
+
+#[test]
+fn bracket_chord_cycles_mailbox_tabs_backward_when_mailbox_focused() {
+    // `[` walks the other direction: Inbox → Wire → Channel → Inbox.
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    h.dispatch_key(KeyCode::Tab);
+    h.dispatch_key(KeyCode::Tab);
+    assert_eq!(h.app.focused_pane, Pane::Mailbox);
+
+    h.dispatch_key(KeyCode::Char('['));
+    assert_eq!(h.app.mailbox_tab, MailboxTab::Wire);
+
+    h.dispatch_key(KeyCode::Char('['));
+    assert_eq!(h.app.mailbox_tab, MailboxTab::Channel);
+
+    h.dispatch_key(KeyCode::Char('['));
+    assert_eq!(
+        h.app.mailbox_tab,
+        MailboxTab::Inbox,
+        "`[` from Channel wraps back to Inbox"
+    );
+}
+
+#[test]
+fn bracket_chord_is_no_op_when_mailbox_not_focused() {
+    // Gating on `focused_pane == Mailbox` is load-bearing — without
+    // it, an operator hammering bracket keys while scrolling the
+    // roster would see surprise tab switches. Pin the no-op.
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    assert_eq!(h.app.focused_pane, Pane::Roster);
+
+    h.dispatch_key(KeyCode::Char(']'));
+    h.dispatch_key(KeyCode::Char('['));
+
+    assert_eq!(
+        h.app.mailbox_tab,
+        MailboxTab::Inbox,
+        "bracket chords must not cycle tabs from Roster focus"
+    );
+}
+
+#[test]
+fn tab_into_mailbox_preserves_active_tab() {
+    // Tabbing pane focus INTO the mailbox must not silently reset
+    // `mailbox_tab` — operators returning to a tab they were on
+    // would otherwise lose place. Seed `mailbox_tab` to Channel
+    // before tabbing in, assert it survives.
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    // Walk into Mailbox, advance to Channel, walk back out.
+    h.dispatch_key(KeyCode::Tab);
+    h.dispatch_key(KeyCode::Tab);
+    h.dispatch_key(KeyCode::Char(']'));
+    assert_eq!(h.app.focused_pane, Pane::Mailbox);
+    assert_eq!(h.app.mailbox_tab, MailboxTab::Channel);
+    h.dispatch_key(KeyCode::Tab); // back to Roster
+    assert_eq!(h.app.focused_pane, Pane::Roster);
+
+    // Now tab back into Mailbox via Detail.
+    h.dispatch_key(KeyCode::Tab);
+    h.dispatch_key(KeyCode::Tab);
+    assert_eq!(h.app.focused_pane, Pane::Mailbox);
+    assert_eq!(
+        h.app.mailbox_tab,
+        MailboxTab::Channel,
+        "active mailbox tab survives the Tab-walk away and back"
+    );
+}
+
+#[test]
+fn switching_focused_agent_resets_mailbox_buffers() {
+    // The mailbox `inbox_after` / `channel_after` / `wire_after`
+    // cursors are per-focused-agent. Switching agents without a
+    // reset would skip historical rows for the new agent (next
+    // refresh would query `id > <prior agent's high water>` and
+    // miss everything older). `select_next` must `mailbox.reset()`
+    // on agent change.
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "writing",
+        vec![
+            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            synth_agent("writing:dev1", AgentState::Running, 0, 0),
+        ],
+    ));
+    h.app.dismiss_splash();
+    // Seed inbox buffer + cursor as if a refresh had already
+    // pulled rows for the manager.
+    h.app.mailbox.extend(
+        MailboxTab::Inbox,
+        vec![mb_row(7, "writing:dev1", "writing:manager", "ping")],
+    );
+    assert_eq!(h.app.mailbox.inbox.len(), 1);
+    assert_eq!(h.app.mailbox.inbox_after, 7);
+
+    h.app.select_next(); // manager → dev1
+
+    assert!(
+        h.app.mailbox.inbox.is_empty(),
+        "mailbox buffer cleared on agent switch"
+    );
+    assert_eq!(
+        h.app.mailbox.inbox_after, 0,
+        "inbox cursor reset to 0 on agent switch"
+    );
+}
+
+#[test]
+fn refresh_mailbox_fans_out_to_three_filters_with_recorded_args() {
+    // `refresh_mailbox` queries `inbox(agent_id, after)`,
+    // `channel_feed(agent_id, after)`, `wire(project_id, after)` —
+    // three calls, three filter shapes. The recorder verifies the
+    // right filter is asked the right thing.
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "writing",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    h.app.dismiss_splash();
+
+    refresh_mailbox(&mut h.app, &h.mailbox);
+
+    assert_eq!(
+        *h.mailbox.inbox_calls.lock().unwrap(),
+        vec![("writing:manager".into(), 0_i64)],
+        "inbox queried for the focused agent's id"
+    );
+    assert_eq!(
+        *h.mailbox.channel_calls.lock().unwrap(),
+        vec![("writing:manager".into(), 0_i64)],
+        "channel_feed queried for the focused agent's id (membership-scoped server-side)"
+    );
+    assert_eq!(
+        *h.mailbox.wire_calls.lock().unwrap(),
+        vec![("writing".into(), 0_i64)],
+        "wire queried for the project id, NOT the agent id"
+    );
+}
+
+#[test]
+fn refresh_mailbox_with_seeded_rows_extends_buffers_and_advances_cursors() {
+    // Seed canned rows into the recorder; `refresh_mailbox` should
+    // fold them into `app.mailbox.<tab>` and bump the matching
+    // `<tab>_after` cursor to the batch's high-water id.
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "writing",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    h.app.dismiss_splash();
+    h.mailbox.inbox_rows = vec![
+        mb_row(11, "writing:dev1", "writing:manager", "ready"),
+        mb_row(12, "writing:dev2", "writing:manager", "merged"),
+    ];
+    h.mailbox.wire_rows = vec![mb_row(20, "user:cli", "channel:writing:all", "release cut")];
+
+    refresh_mailbox(&mut h.app, &h.mailbox);
+
+    assert_eq!(h.app.mailbox.inbox.len(), 2);
+    assert_eq!(h.app.mailbox.inbox_after, 12);
+    assert_eq!(h.app.mailbox.wire.len(), 1);
+    assert_eq!(h.app.mailbox.wire_after, 20);
+    // Channel returned no rows → its buffer + cursor stay empty.
+    assert!(h.app.mailbox.channel.is_empty());
+    assert_eq!(h.app.mailbox.channel_after, 0);
+}
+
+#[test]
+fn refresh_mailbox_no_op_when_no_agent_focused() {
+    // With an empty roster, no agent is focused; `refresh_mailbox`
+    // must early-out without fanning out queries — there's no
+    // agent_id to filter on. The recorder's call vectors stay
+    // empty.
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    assert!(h.app.selected_agent.is_none());
+
+    refresh_mailbox(&mut h.app, &h.mailbox);
+
+    assert!(h.mailbox.inbox_calls.lock().unwrap().is_empty());
+    assert!(h.mailbox.channel_calls.lock().unwrap().is_empty());
+    assert!(h.mailbox.wire_calls.lock().unwrap().is_empty());
+}
