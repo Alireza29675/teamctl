@@ -66,8 +66,6 @@ Progressive disclosure — load only what the current task needs.
 
 - `@README.md` — project overview and user-facing install path.
 - `@CONTRIBUTING.md` — extended dev guide (build, lint, test, code style, PR process).
-- `@decisions.md` — architectural decisions log; pointer to the formal ADR series under `docs/src/content/docs/adrs/`.
-- `@patterns.md` — coding and repo patterns this project follows; accretes as the team learns.
 - `@ROADMAP.md` — direction.
 
 ## Pruning
