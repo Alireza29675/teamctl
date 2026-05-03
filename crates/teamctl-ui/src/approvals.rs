@@ -120,10 +120,9 @@ impl ApprovalDecider for CliApprovalDecider {
     }
 }
 
-#[cfg(test)]
 pub mod test_support {
-    //! Shared mocks — `pub` so `app::tests` and `tests/snapshots.rs`
-    //! can both reach them without each rolling its own.
+    //! Shared mocks — public so unit tests, integration tests, and
+    //! downstream coverage can wire them in without rolling their own.
 
     use super::*;
     use std::sync::Mutex;

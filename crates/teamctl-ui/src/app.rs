@@ -1158,7 +1158,7 @@ fn centered_rect(w: u16, h: u16, area: Rect) -> Rect {
     }
 }
 
-fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
+pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
     app: &mut App,
     ev: Event,
     decider: &D,
