@@ -14,15 +14,37 @@
 //! `tests/snapshots.rs`. This file pins state transitions; the
 //! snapshot file pins what they render to.
 //!
+//! ## Convention
+//!
+//! Set up state via direct method calls (`h.app.dismiss_splash()`,
+//! `h.app.replace_team(...)`, `h.app.select_next()`); exercise the
+//! verb under test via `dispatch_key` so the production
+//! `handle_event` routing is what's actually being asserted. That
+//! keeps the keystroke surface area narrow and the test signal
+//! sharp — a regression in `handle_event` shows up as a single
+//! failing dispatch, not a wall of setup that has to be untangled.
+//!
 //! ## Adding a test
+//!
+//! Negative shape (state-transition only):
 //!
 //! ```ignore
 //! let mut h = Harness::new();
 //! h.app.replace_team(fixture_team("t", vec![synth_agent("t:m", AgentState::Running, 0, 0)]));
-//! h.dispatch_key(KeyCode::Char(' '));        // dismiss splash
+//! h.app.dismiss_splash();
 //! h.dispatch_key(KeyCode::Char('@'));        // open DM compose
 //! assert_eq!(h.app.stage, Stage::ComposeModal);
 //! assert!(h.sender.dm_calls.lock().unwrap().is_empty());
+//! ```
+//!
+//! Affirmative shape (recorder captured the call):
+//!
+//! ```ignore
+//! // …open compose, type body, fire send chord…
+//! let calls = h.sender.dm_calls.lock().unwrap();
+//! assert_eq!(calls.len(), 1, "exactly one send fired");
+//! assert_eq!(calls[0].0, "t:m", "DM target is the focused agent");
+//! assert_eq!(calls[0].1, "hello", "captured body matches what was typed");
 //! ```
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
