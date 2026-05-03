@@ -39,8 +39,6 @@ teamctl up # starts the team
 teamctl ui # interactive team inspection
 ```
 
-`init` writes the `.team/` folder, `bot setup` wires Telegram for the manager, `up` brings the team online, `ui` shows you what's happening.
-
 ## Learn more 🔍
 
 - [Documentation](https://teamctl.run) — guides, concepts, reference, ADRs
