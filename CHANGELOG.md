@@ -4,6 +4,38 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-05-03
+
+### Fixed
+
+- **`reply_to_user` fanned out to every Telegram bot in the project.**
+  `team-bot`'s outbound loop only filtered reply rows by `project_id`,
+  so when a project ran one bot per manager (e.g. `pm`, `eng_lead`,
+  `marketing` all in `sooleh`), every bot forwarded every reply and
+  the operator received the same message three times under three bot
+  avatars. The forward loop now applies `should_route` per row —
+  mirroring the approvals path — so only the manager-scoped bot whose
+  chain `manager_of(sender)` matches actually surfaces the reply.
+  Unscoped bots keep the back-compat fallback (forward everything).
+
+### Changed
+
+- **Reply attribution moved to the end of the message.** Forwarded
+  replies used to lead with `[sender] body`, which buried the actual
+  content behind a tag the reader already knew (the bot avatar
+  identifies the manager). Now the body comes first and the sender
+  is appended as `\n\n— replied by <sender>`, so the message reads
+  naturally and the attribution is a footer.
+- **Expanded `reply_to_user` MCP tool description.** The tool now
+  spells out for the model that it is the only channel back to the
+  human (stdout never reaches the operator), that proactive replies
+  are welcome, and that long-running work should ack first then
+  reply on completion. The `text` field documents that delivery is
+  plain text — no markdown, no headings, no code fences — and
+  recommends sparing emoji use for scanability. `thread_id` now has
+  a description (group the reply with the inbound channel meta's
+  `thread_id`; omit for a fresh thread).
+
 ## [0.6.3] — 2026-05-03
 
 ### Fixed
