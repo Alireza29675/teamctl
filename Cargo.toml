@@ -19,7 +19,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 rust-version = "1.78"
 license = "MIT"
@@ -41,7 +41,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 notify = "6"
 schemars = "0.8"
-team-core = { path = "crates/team-core", version = "0.7.0" }
+team-core = { path = "crates/team-core", version = "0.7.1" }
 blake3 = "1"
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = "0.28"

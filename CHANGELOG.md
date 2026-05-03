@@ -4,11 +4,30 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-05-04
+
 ### Changed
 
 - Plugin slash commands renamed: `/teamctl:teamctl-init` → `/teamctl:init`,
   `/teamctl:teamctl` → `/teamctl:adjust`. Operators upgrading must use the
   new invocation forms.
+- README rewritten to a tighter two-section onboarding shape (Quick start
+  with the Claude Code plugin + Manual setup), -54 lines net. Comparison
+  content moved to <https://teamctl.run/compare/>. Hero motto updated to
+  *"Run real AI agent teams from one YAML. Each agent is a long-lived CLI
+  process."* with a body soft-analogy for readers who know docker-compose.
+
+### Fixed
+
+- TUI layout-switch chord `Ctrl+W` / `Ctrl+M` now triggers correctly when
+  CapsLock is engaged or Shift is held alongside Ctrl. Prior arms only
+  matched lowercase `Char('w')` / `Char('m')`, so the chord died silently on
+  uppercase variants.
+- TUI DM compose modal accepts `Alt+Enter` as a universal send chord on
+  standard terminals (xterm, Terminal.app, tmux). Prior `Ctrl+Enter` was the
+  only wired chord, but standard terminals strip the Control modifier from
+  Enter so the chord was unreachable except on kitty-keyboard-protocol
+  terminals. `Ctrl+Enter` still works on those terminals.
 
 ## [0.7.0] — 2026-05-03
 

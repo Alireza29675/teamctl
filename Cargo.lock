@@ -2216,7 +2216,7 @@ checksum = "20f34339676cdcab560c9a82300c4c2581f68b9369aedf0fae86f2ff9565ff3e"
 
 [[package]]
 name = "team-bot"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2232,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "team-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -2248,7 +2248,7 @@ dependencies = [
 
 [[package]]
 name = "team-mcp"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2265,7 +2265,7 @@ dependencies = [
 
 [[package]]
 name = "teamctl"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2288,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "teamctl-ui"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
