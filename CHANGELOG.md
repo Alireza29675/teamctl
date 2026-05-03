@@ -11,11 +11,16 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 - Plugin slash commands renamed: `/teamctl:teamctl-init` → `/teamctl:init`,
   `/teamctl:teamctl` → `/teamctl:adjust`. Operators upgrading must use the
   new invocation forms.
-- README rewritten to a tighter two-section onboarding shape (Quick start
-  with the Claude Code plugin + Manual setup), -54 lines net. Comparison
-  content moved to <https://teamctl.run/compare/>. Hero motto updated to
-  *"Run real AI agent teams from one YAML. Each agent is a long-lived CLI
-  process."* with a body soft-analogy for readers who know docker-compose.
+- `/teamctl:init` Stage 6 now defers to `teamctl bot setup` rather than
+  wrapping the BotFather/token/chat-id wizard inline. Onboarding now points
+  the user at the CLI wizard for Telegram setup instead of running it
+  through the model.
+- README rewritten to a tighter two-section onboarding shape (Interactive
+  Setup with the Claude Code plugin + Manual setup), -53 lines net.
+  Comparison content moved to <https://teamctl.run/compare/>. Hero motto
+  updated to *"Run real AI agent teams from one YAML. Each agent is a
+  long-lived CLI process."* with a body soft-analogy for readers who know
+  docker-compose.
 
 ### Fixed
 
