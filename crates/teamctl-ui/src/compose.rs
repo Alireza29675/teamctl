@@ -141,8 +141,16 @@ impl Editor {
             return EditorAction::Continue;
         }
 
-        // Ctrl+Enter sends from any mode — send is universal.
-        if k.code == KeyCode::Enter && k.modifiers.contains(KeyModifiers::CONTROL) {
+        // Send chord — Alt+Enter is the terminal-universal send
+        // (xterm / Terminal.app / tmux deliver it as Enter+ALT in
+        // their default modes). Ctrl+Enter is kept for terminals
+        // running the kitty keyboard protocol or modifyOtherKeys,
+        // where it does decode distinctly. Either chord fires send
+        // from any editor mode.
+        if k.code == KeyCode::Enter
+            && (k.modifiers.contains(KeyModifiers::ALT)
+                || k.modifiers.contains(KeyModifiers::CONTROL))
+        {
             return EditorAction::Send;
         }
 
