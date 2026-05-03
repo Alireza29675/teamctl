@@ -1,0 +1,35 @@
+---
+source: crates/teamctl-ui/tests/snapshots.rs
+assertion_line: 302
+expression: s
+---
+⚠  approvals: 3 pendings — `a` to review                                                                                
+┌ROSTER────────────────────┐┌DETAIL · writing:manager──────────────────────────────────┐┌MAILBOX───────────────────────┐
+│ *  manager               ││      (no scrollback yet — agent may be starting up)      ││ Inbox    Channel    Wire     │
+│                          ││                                                          ││           (no DMs)           │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                   ┌approvals · 2/3───────────────────────────────────────────────────────────────┐                   │
+│                   │#8  deploy                                                                    │                   │
+│                   │from: writing:manager                                                         │                   │
+│                   │                                                                              │                   │
+│                   │Ship docs site to production                                                  │                   │
+│                   │                                                                              │                   │
+│                   │[y] approve  ·  [Shift-N] deny  ·  [j/k] cycle  ·  [Esc] close                │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   │                                                                              │                   │
+│                   └──────────────────────────────────────────────────────────────────────────────┘                   │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+└──────────────────────────┘└──────────────────────────────────────────────────────────┘└──────────────────────────────┘
+Tab cycle panes  ·  / search · ⏎ open · @ send · q quit                                              ? help · t tutorial

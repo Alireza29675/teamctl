@@ -51,6 +51,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, Ke
 use team_core::supervisor::AgentState;
 use teamctl_ui::app::{self, render_to_buffer, App, Stage};
 use teamctl_ui::approvals::test_support::MockApprovalDecider;
+use teamctl_ui::approvals::{Approval, Decision};
 use teamctl_ui::compose::test_support::MockMessageSender;
 use teamctl_ui::data::{AgentInfo, TeamSnapshot};
 use teamctl_ui::mailbox::{MailboxSource, MessageRow};
@@ -664,5 +665,289 @@ fn ctrl_w_with_detail_split_open_arms_chord_not_layout() {
         h.app.layout,
         MainLayout::Triptych,
         "Ctrl+W with splits must not flip layout (chord wins)"
+    );
+}
+
+// ── Approvals modal coverage (T-079-D) ──────────────────────────
+//
+// Drive: `a` to enter when there's a pending row, j/k (or arrows)
+// to navigate, `y` / `Y` approve, `Shift+N` deny (asymmetric chord
+// is load-bearing — see T-074 bug 4 fix at app::handle_event), Esc
+// or `q` exit. Asserts target the `MockApprovalDecider`'s captured
+// (id, kind, note) tuple so the routing reaches the right row.
+
+/// Build an `Approval` with stable defaults — tests vary the id /
+/// action / summary fields and pin everything else.
+fn approval(id: i64, action: &str, summary: &str) -> Approval {
+    Approval {
+        id,
+        project_id: "writing".into(),
+        agent_id: "writing:manager".into(),
+        action: action.into(),
+        summary: summary.into(),
+        payload_json: String::new(),
+    }
+}
+
+/// Seed a fixture team + N pending approvals + dismiss splash.
+/// Returns the harness so each test drives the verb under test.
+fn approvals_setup(approvals: Vec<Approval>) -> Harness {
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "writing",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    h.app.dismiss_splash();
+    h.app.replace_approvals(approvals);
+    h
+}
+
+#[test]
+fn a_key_enters_approvals_modal_when_pending_non_empty() {
+    let mut h = approvals_setup(vec![approval(7, "publish", "post the brief")]);
+
+    h.dispatch_key(KeyCode::Char('a'));
+
+    assert_eq!(h.app.stage, Stage::ApprovalsModal);
+    assert_eq!(h.app.selected_approval, 0);
+}
+
+#[test]
+fn a_key_is_no_op_when_no_pending_approvals() {
+    // `enter_approvals_modal` early-returns on empty queue (app.rs
+    // L428). Without a pending row there's nothing to triage, so
+    // the chord is silent rather than opening an empty modal.
+    let mut h = approvals_setup(vec![]);
+
+    h.dispatch_key(KeyCode::Char('a'));
+
+    assert_eq!(h.app.stage, Stage::Triptych);
+}
+
+#[test]
+fn y_approves_focused_row_via_decider() {
+    // Affirmative path: open modal, hit `y`, the decider receives
+    // (focused-row-id, Approve, ""). Modal auto-closes because the
+    // queue is now empty.
+    let mut h = approvals_setup(vec![approval(7, "publish", "post the brief")]);
+    h.dispatch_key(KeyCode::Char('a'));
+
+    h.dispatch_key(KeyCode::Char('y'));
+
+    let calls = h.decider.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0], (7, Decision::Approve, String::new()));
+    assert_eq!(
+        h.app.stage,
+        Stage::Triptych,
+        "queue emptied — modal auto-closes"
+    );
+}
+
+#[test]
+fn capital_y_also_approves_focused_row() {
+    // Approve accepts both `y` and `Y` — matches the QuitConfirm
+    // loose convention. Pin both casings so the chord stays
+    // discoverable for CapsLock/Shift operators.
+    let mut h = approvals_setup(vec![approval(7, "publish", "post the brief")]);
+    h.dispatch_key(KeyCode::Char('a'));
+
+    h.dispatch_key_mods(KeyCode::Char('Y'), KeyModifiers::SHIFT);
+
+    let calls = h.decider.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1, Decision::Approve);
+}
+
+#[test]
+fn shift_n_denies_focused_row_via_decider() {
+    // Deny is the destructive side — Shift-gated (`N` only) per
+    // T-074 bug 4 fix. Drives the asymmetric-chord contract.
+    let mut h = approvals_setup(vec![approval(7, "publish", "post the brief")]);
+    h.dispatch_key(KeyCode::Char('a'));
+
+    h.dispatch_key_mods(KeyCode::Char('N'), KeyModifiers::SHIFT);
+
+    let calls = h.decider.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0], (7, Decision::Deny, String::new()));
+}
+
+#[test]
+fn lowercase_n_does_not_deny_destructive_chord_is_shift_gated() {
+    // Counter-test of the asymmetric chord: stray lowercase `n` in
+    // the modal must not fire deny. Operator hammering keys can't
+    // accidentally drop an approval on the floor.
+    let mut h = approvals_setup(vec![approval(7, "publish", "post the brief")]);
+    h.dispatch_key(KeyCode::Char('a'));
+
+    h.dispatch_key(KeyCode::Char('n'));
+
+    assert!(
+        h.decider.calls.lock().unwrap().is_empty(),
+        "lowercase n must not reach the decider"
+    );
+    assert_eq!(
+        h.app.stage,
+        Stage::ApprovalsModal,
+        "modal stays open on no-op key"
+    );
+}
+
+#[test]
+fn j_advances_focused_approval_and_k_retreats() {
+    let mut h = approvals_setup(vec![
+        approval(7, "publish", "first"),
+        approval(8, "deploy", "second"),
+        approval(9, "merge", "third"),
+    ]);
+    h.dispatch_key(KeyCode::Char('a'));
+    assert_eq!(h.app.selected_approval, 0);
+
+    h.dispatch_key(KeyCode::Char('j'));
+    assert_eq!(h.app.selected_approval, 1);
+
+    h.dispatch_key(KeyCode::Char('j'));
+    assert_eq!(h.app.selected_approval, 2);
+
+    h.dispatch_key(KeyCode::Char('k'));
+    assert_eq!(h.app.selected_approval, 1);
+}
+
+#[test]
+fn down_and_up_arrows_navigate_like_j_and_k() {
+    // Arrows mirror j/k for non-vim operators. Both shapes route
+    // through the same cycle_approval_next/prev — pin parity.
+    let mut h = approvals_setup(vec![
+        approval(7, "publish", "first"),
+        approval(8, "deploy", "second"),
+    ]);
+    h.dispatch_key(KeyCode::Char('a'));
+
+    h.dispatch_key(KeyCode::Down);
+    assert_eq!(h.app.selected_approval, 1);
+
+    h.dispatch_key(KeyCode::Up);
+    assert_eq!(h.app.selected_approval, 0);
+}
+
+#[test]
+fn j_wraps_at_end_of_queue() {
+    let mut h = approvals_setup(vec![
+        approval(7, "publish", "first"),
+        approval(8, "deploy", "second"),
+    ]);
+    h.dispatch_key(KeyCode::Char('a'));
+    h.dispatch_key(KeyCode::Char('j'));
+    assert_eq!(h.app.selected_approval, 1);
+
+    h.dispatch_key(KeyCode::Char('j'));
+
+    assert_eq!(
+        h.app.selected_approval, 0,
+        "j from last row wraps back to first"
+    );
+}
+
+#[test]
+fn k_wraps_at_start_of_queue() {
+    let mut h = approvals_setup(vec![
+        approval(7, "publish", "first"),
+        approval(8, "deploy", "second"),
+    ]);
+    h.dispatch_key(KeyCode::Char('a'));
+    assert_eq!(h.app.selected_approval, 0);
+
+    h.dispatch_key(KeyCode::Char('k'));
+
+    assert_eq!(h.app.selected_approval, 1, "k from first row wraps to last");
+}
+
+#[test]
+fn esc_closes_approvals_modal_without_decision() {
+    let mut h = approvals_setup(vec![approval(7, "publish", "post the brief")]);
+    h.dispatch_key(KeyCode::Char('a'));
+
+    h.dispatch_key(KeyCode::Esc);
+
+    assert_eq!(h.app.stage, Stage::Triptych);
+    assert!(h.decider.calls.lock().unwrap().is_empty());
+    assert_eq!(h.app.pending_approvals.len(), 1, "queue intact after Esc");
+}
+
+#[test]
+fn q_closes_approvals_modal_without_decision() {
+    // `q` is the alternative exit chord (matches QuitConfirm/Help
+    // overlay convention). No quit-confirm overlay should surface
+    // — the modal owns input.
+    let mut h = approvals_setup(vec![approval(7, "publish", "post the brief")]);
+    h.dispatch_key(KeyCode::Char('a'));
+
+    h.dispatch_key(KeyCode::Char('q'));
+
+    assert_eq!(h.app.stage, Stage::Triptych);
+    assert!(h.decider.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn navigate_then_approve_routes_correct_row_id_to_decider() {
+    // The end-to-end test the ticket flags: 3-row queue, navigate
+    // to the middle row, approve. Decider must receive the middle
+    // id (8), not the first (7) or last (9). Catches "selected_
+    // approval drifts but apply_decision uses index 0" regressions.
+    let mut h = approvals_setup(vec![
+        approval(7, "publish", "first"),
+        approval(8, "deploy", "second"),
+        approval(9, "merge", "third"),
+    ]);
+    h.dispatch_key(KeyCode::Char('a'));
+    h.dispatch_key(KeyCode::Char('j'));
+    assert_eq!(h.app.selected_approval, 1);
+
+    h.dispatch_key(KeyCode::Char('y'));
+
+    let calls = h.decider.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].0, 8,
+        "decider received the focused-row id (middle), not the head"
+    );
+    assert_eq!(calls[0].1, Decision::Approve);
+    assert_eq!(
+        h.app.pending_approvals.len(),
+        2,
+        "approved row removed from local queue optimistically"
+    );
+    assert_eq!(
+        h.app.stage,
+        Stage::ApprovalsModal,
+        "modal stays open while queue still has rows"
+    );
+}
+
+#[test]
+fn deny_followed_by_approve_routes_each_to_distinct_rows() {
+    // Two-step end-to-end: Shift-N denies the head row (id 7),
+    // selected_approval clamps onto the new head (id 8), `y` then
+    // approves it. Decider must show one Deny on 7 and one Approve
+    // on 8 — pins the optimistic-removal-and-clamp path through
+    // `apply_decision`.
+    let mut h = approvals_setup(vec![
+        approval(7, "publish", "first"),
+        approval(8, "deploy", "second"),
+    ]);
+    h.dispatch_key(KeyCode::Char('a'));
+
+    h.dispatch_key_mods(KeyCode::Char('N'), KeyModifiers::SHIFT);
+    h.dispatch_key(KeyCode::Char('y'));
+
+    let calls = h.decider.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0], (7, Decision::Deny, String::new()));
+    assert_eq!(calls[1], (8, Decision::Approve, String::new()));
+    assert_eq!(
+        h.app.stage,
+        Stage::Triptych,
+        "queue empty after both decisions"
     );
 }

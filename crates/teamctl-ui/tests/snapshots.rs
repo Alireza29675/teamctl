@@ -271,6 +271,38 @@ fn approvals_modal_renders_action_summary_and_hint() {
 }
 
 #[test]
+fn approvals_modal_multi_row_cursor_advanced_at_120x30() {
+    // T-079-D snapshot: 3-row queue with the cursor advanced once
+    // (operator hit `j`). Pins the title counter (`2/3`) and that
+    // the focused row's summary is the second one — the rendering
+    // proof that navigation reached the right row.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    app.replace_approvals(vec![
+        approval(7, "publish", "Post the morning brief to r/yourcity"),
+        approval(8, "deploy", "Ship docs site to production"),
+        approval(9, "merge", "Land PR #123 to main"),
+    ]);
+    app.enter_approvals_modal();
+    app.cycle_approval_next();
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(
+        s.contains("approvals · 2/3"),
+        "modal title must show 2/3 after one j: {s}"
+    );
+    assert!(
+        s.contains("Ship docs site to production"),
+        "focused row summary must be the second row: {s}"
+    );
+    insta::assert_snapshot!("approvals_modal_multi_row_at_2of3_120x30", s);
+}
+
+#[test]
 fn compose_modal_renders_target_body_and_attach_todo_footer() {
     // PR-UI-5: compose modal opens with the DM target in the
     // title bar, the editor body in the middle, and a footer
