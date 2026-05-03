@@ -3,7 +3,7 @@ description: First-run teamctl onboarding — from no-teamctl-installed to a run
 allowed-tools: Bash, Read, Write, Edit
 ---
 
-`/teamctl-init` is the first-run onboarding for teamctl. Seven stages: prerequisites and install (Stage 1), pick a team shape (Stage 2), confirm the proposed org (Stage 3), scaffold `.team/` and reveal the YAML (Stage 4), bring it up (Stage 5), wire Telegram (Stage 6), point at the lifecycle commands (Stage 7).
+`/teamctl:init` is the first-run onboarding for teamctl. Seven stages: prerequisites and install (Stage 1), pick a team shape (Stage 2), confirm the proposed org (Stage 3), scaffold `.team/` and reveal the YAML (Stage 4), bring it up (Stage 5), wire Telegram (Stage 6), point at the lifecycle commands (Stage 7).
 
 Read [RULES.md](../RULES.md) before each stage. Voice rails: 1-2 sentences per beat, "experienced reliable coworker", emojis sparingly. Body voice is runtime-neutral. *"Claude Code runtime"* is a fact about the agent and stays; *"Claude reads the file"* is voice drift and goes. Substrate constraints are non-negotiable. The flow is resumable and idempotent — re-running skips anything already done.
 
@@ -52,7 +52,7 @@ If the user picks 1, 2, 3, or 4, advance to Stage 3 with that named default. The
 
 If the user picks the escape hatch and describes a custom team, hold for v1 with this surface:
 
-> v1 ships with the four named defaults; describing your own team in plain English is on the way. Pick one of the four for now and you can edit afterwards with `/teamctl`.
+> v1 ships with the four named defaults; describing your own team in plain English is on the way. Pick one of the four for now and you can edit afterwards with `/teamctl:adjust`.
 
 Then reoffer the four picks. One graceful surface, no apology spiral.
 
@@ -137,9 +137,9 @@ Where N is `5` for OSS maintainer, `4` for editorial room, `4` for indie studio,
 
 If the user confirms with "ship it", "yes", "go", or similar, advance to Stage 4. If they push back — wanting to drop a worker, swap a model, route a manager through Slack instead of Telegram — surface this once:
 
-> v1 ships the four named defaults as-is; the `/teamctl` ongoing skill (after init) handles edits. Want to ship as-is and I'll point you at `/teamctl` afterwards?
+> v1 ships the four named defaults as-is; the `/teamctl:adjust` ongoing skill (after init) handles edits. Want to ship as-is and I'll point you at `/teamctl:adjust` afterwards?
 
-Take a yes/no. If yes, advance. If no, accept it gracefully and exit; the user can re-run `/teamctl-init` later or hand-author `.team/team-compose.yaml` directly.
+Take a yes/no. If yes, advance. If no, accept it gracefully and exit; the user can re-run `/teamctl:init` later or hand-author `.team/team-compose.yaml` directly.
 
 ## Stage 4 — Init + reveal
 
@@ -189,7 +189,7 @@ Substitutions are surgical:
 
 Everything else — broker block, supervisor type, budget, hitl `globally_sensitive_actions`, channels list, manager/worker definitions, env-var references in `interfaces.telegram.bot_token_env` / `chat_ids_env` — copies verbatim. The example folders already use the canonical `TEAMCTL_TG_<NAME>_TOKEN` / `TEAMCTL_TG_<NAME>_CHATS` shape; no env-var work needed here.
 
-**No plugin-specific markers anywhere.** No `# generated-by:` comments. No skill signatures. No "this file was scaffolded by /teamctl-init" preamble. A user opening `team-compose.yaml` should not be able to tell it came from a plugin (substrate constraint #3).
+**No plugin-specific markers anywhere.** No `# generated-by:` comments. No skill signatures. No "this file was scaffolded by /teamctl:init" preamble. A user opening `team-compose.yaml` should not be able to tell it came from a plugin (substrate constraint #3).
 
 ### Role-prompt generation
 
@@ -264,11 +264,11 @@ If the user picks "add Telegram", proceed to the defer beat — the wizard handl
 
 > All set up. Now let's connect your managers to Telegram.
 >
-> Run `teamctl bot setup` in a terminal — it'll walk you through it. (If anything breaks, run it again or skip and use `/teamctl` later.)
+> Run `teamctl bot setup` in a terminal — it'll walk you through it. (If anything breaks, run it again or skip and use `/teamctl:adjust` later.)
 
 That's the whole defer. No re-explanation of BotFather, no token-capture preview, no env-var section. The wizard handles all of it.
 
-The tail clause — *"If anything breaks, run it again or skip and use `/teamctl` later"* — is the substrate-constraint-#4 receipt at lighter weight. The wizard runs in the user's separate terminal, so the skill doesn't see exit codes; the one-line hint is the honest surface.
+The tail clause — *"If anything breaks, run it again or skip and use `/teamctl:adjust` later"* — is the substrate-constraint-#4 receipt at lighter weight. The wizard runs in the user's separate terminal, so the skill doesn't see exit codes; the one-line hint is the honest surface.
 
 ### Voice-customize sub-beat
 
@@ -308,7 +308,7 @@ Don't pad. The closing line is the load-bearing voice surface of the whole onboa
 
 In case any stage tempts a shortcut:
 
-1. The plugin name on the marketplace card is **`teamctl`** — internal command names stay descriptive (`/teamctl-init`, `/teamctl`).
+1. The plugin name on the marketplace card is **`teamctl`** — internal command names stay descriptive (`/teamctl:init`, `/teamctl:adjust`).
 2. The reveal beat ("I wrote `.team/team-compose.yaml` for you…") fires at the end of Stage 4 — verbatim. Don't pre-empt it earlier; don't restyle it later.
 3. The `.team/` output Stage 4 produces is byte-for-byte identical to a hand-authored team — no plugin-only state, no generated-by markers.
 4. Every action this command takes is reproducible by hand-editing YAML afterwards.

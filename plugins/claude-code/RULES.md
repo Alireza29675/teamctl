@@ -1,6 +1,6 @@
 # RULES
 
-Shared guardrails every command in this plugin reads off. Both `/teamctl-init` and `/teamctl` honour every rule below; reviewers check against this file.
+Shared guardrails every command in this plugin reads off. Both `/teamctl:init` and `/teamctl:adjust` honour every rule below; reviewers check against this file.
 
 ## Voice rails
 
@@ -18,9 +18,9 @@ These are positioning *invariants* — every command implements **with** them, n
    `teamctl-cc`, not `teamctl for Claude Code`, not
    `teamctl-onboarding`. The product name carries; the placement
    context (Claude Code marketplace) does the rest. Internal skill
-   names stay descriptive (`/teamctl-init`, `/teamctl`).
+   names stay descriptive (`/teamctl:init`, `/teamctl:adjust`).
 2. **Reveal the YAML at end of onboarding.** Final beat of
-   `/teamctl-init` says: *"I wrote `.team/team-compose.yaml` for
+   `/teamctl:init` says: *"I wrote `.team/team-compose.yaml` for
    you — open it, everything we just talked about is in there."*
    Keeps the team-as-code story honest on the conversational ramp.
 3. **`.team/` output is byte-for-byte identical to a hand-authored
@@ -28,7 +28,7 @@ These are positioning *invariants* — every command implements **with** them, n
    `# generated-by: teamctl-cc-plugin` comments, no skill-only
    state. A user inspecting the file should not be able to tell
    it came from a plugin.
-4. **`/teamctl` never locks users in.** Every action it takes is
+4. **`/teamctl:adjust` never locks users in.** Every action it takes is
    an action the user could have taken with
    `vim .team/team-compose.yaml`. No skill-only formats, no
    plugin-only state.
