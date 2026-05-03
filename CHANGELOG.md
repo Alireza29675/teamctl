@@ -24,6 +24,13 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   `--dangerously-load-development-channels server:team --` (with the
   `--` separator so the variadic flag does not swallow the bootstrap
   prompt).
+- **Dev-channels confirmation dialog stranded agents on every
+  restart.** Claude Code prompts "I am using this for local
+  development" each time it boots with a non-allowlisted dev channel,
+  with no persistent acceptance. Wrapper now side-spawns a watcher
+  that polls its own tmux pane for the dialog header and presses
+  Enter once, then exits (60 s deadline; no-op once team-mcp is
+  allowlisted or when running outside tmux).
 
 ## [0.6.2] — 2026-05-02
 
