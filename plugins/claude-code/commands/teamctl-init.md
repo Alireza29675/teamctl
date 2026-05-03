@@ -3,7 +3,7 @@ description: First-run teamctl onboarding — from no-teamctl-installed to a run
 allowed-tools: Bash, Read, Write, Edit
 ---
 
-`/teamctl-init` is the first-run onboarding for teamctl. Seven stages: prerequisites and install (Stage 1), pick a team shape (Stage 2), confirm the proposed org (Stage 3), scaffold `.team/` and reveal the YAML (Stage 4), bring it up (Stage 5), wire Telegram (Stage 6), point at the lifecycle commands (Stage 7).
+`/teamctl:teamctl-init` is the first-run onboarding for teamctl. Seven stages: prerequisites and install (Stage 1), pick a team shape (Stage 2), confirm the proposed org (Stage 3), scaffold `.team/` and reveal the YAML (Stage 4), bring it up (Stage 5), wire Telegram (Stage 6), point at the lifecycle commands (Stage 7).
 
 Read [RULES.md](../RULES.md) before each stage. Voice rails: 1-2 sentences per beat, "experienced reliable coworker", emojis sparingly. Body voice is runtime-neutral. *"Claude Code runtime"* is a fact about the agent and stays; *"Claude reads the file"* is voice drift and goes. Substrate constraints are non-negotiable. The flow is resumable and idempotent — re-running skips anything already done.
 
