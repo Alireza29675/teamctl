@@ -2,9 +2,11 @@
 
 Repo-root governance for human contributors and any Claude Code agents working in this repo. Read this before opening a PR; the rules here apply to every change.
 
-This file is short on purpose. The Anthropic guidance is to keep it under roughly 2K tokens and treat it like code — prune what Claude already does without being told, expand only what would otherwise produce a wrong outcome. When you add something here, run the pruning test:
+This file is short on purpose. Keep it under roughly 2K tokens and treat it like code — prune what an agent already does without being told, expand only what would otherwise produce a wrong outcome. When you add something here, run the pruning test:
 
-> **Would removing this instruction cause Claude to make a mistake?** If no, delete it.
+> **Would removing this instruction cause an agent to make a mistake?** If no, delete it.
+
+*further reading on writing effective CLAUDE.md files:* https://code.claude.com/docs/en/best-practices
 
 ## What this repo is
 
@@ -38,16 +40,16 @@ just build       # cargo build --release
 
 1. **Every release or substantive change to teamctl must consider impact on the plugin, the TUI, the docs, and the tests. Release PRs explicitly list which of those four surfaces were touched (and why each untouched one wasn't needed).**
 
-## Behavioral guidelines
+## How agents behave in this repo
 
-Distilled from Karpathy's CLAUDE.md (cited below). Four habits that catch the bulk of avoidable mistakes:
+Four habits that catch the bulk of avoidable mistakes:
 
 - **Think before coding.** Surface tradeoffs explicitly. Name what's confusing or under-specified rather than guessing. Ask a clarifying question if the right path branches on a fact you don't have.
 - **Simplicity first.** Write the minimum code that earns the test. No speculative abstractions, no future-proofing for hypothetical requirements. Before shipping a chunk, ask: *would a senior engineer call this overcomplicated?*
 - **Surgical changes.** Touch only what the ticket requires. Match the surrounding style. Don't refactor adjacent code "while you're there" — file a separate ticket. Diffs that drift past their stated scope cost more in review than they save in keystrokes.
 - **Goal-driven execution.** Translate the task into a verifiable success criterion before writing code. Write the test (or the manual repro) first; then make it pass. "Done" means the criterion is observably met, not "the code looks reasonable."
 
-*Adapted from [forrestchang/andrej-karpathy-skills · CLAUDE.md](https://github.com/forrestchang/andrej-karpathy-skills/blob/main/CLAUDE.md) — read the canonical for the longer treatment.*
+*further reading on agent behavioural guidelines:* https://github.com/forrestchang/andrej-karpathy-skills/blob/main/CLAUDE.md
 
 ## Repo etiquette
 
@@ -70,4 +72,4 @@ Progressive disclosure — load only what the current task needs.
 
 ## Pruning
 
-Treat this file like code: review it when something goes wrong, prune it on a regular cadence. The test is the same one from the header — *would removing this instruction cause Claude to make a mistake?* If no, delete it. Bloat causes Claude to ignore the rules that actually matter; every line that survives the pruning test earns its place. When you add something, write down the condition under which it could be removed.
+Treat this file like code: review it when something goes wrong, prune it on a regular cadence. The test is the same one from the header — *would removing this instruction cause an agent to make a mistake?* If no, delete it. Bloat causes the agent to ignore the rules that actually matter; every line that survives the pruning test earns its place. When you add something, write down the condition under which it could be removed.
