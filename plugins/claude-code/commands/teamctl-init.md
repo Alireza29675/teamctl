@@ -39,10 +39,10 @@ Single beat:
 
 Then the four named defaults, **verbatim**, in this order:
 
-> 1. OSS maintainer — a maintainer, a triage worker, a reviewer; pauses for you on releases and merges to main.
-> 2. Editorial room — an editor, a writer, a fact-checker; pauses for you before publish.
-> 3. Indie studio — a director, a designer, a programmer; pauses for you before releases or outbound emails.
-> 4. Solo triage — a manager, a research worker, an inbox worker; pauses for you before sending anything external.
+> 1. OSS maintainer — a maintainer + 4 workers (triage, bug-fix, docs, release-manager); pauses for you on releases and merges to main.
+> 2. Editorial room — an editor + 3 workers (writer, fact-checker, seo-research); pauses for you before publish.
+> 3. Indie studio — a director + 3 workers (designer, writer, playtest-critic); pauses for you before releases or outbound emails.
+> 4. Solo triage — a manager + 2 workers (research, inbox); pauses for you before sending anything external.
 
 Then the escape hatch, **verbatim**:
 
