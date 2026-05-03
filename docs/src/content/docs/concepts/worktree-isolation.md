@@ -103,4 +103,4 @@ teamctl never auto-runs `git init`. Initializing a repo is a real decision (comm
 
 teamctl's positioning is *"the runtime that decomposes context across focused sessions"*. Without worktree isolation, that property would be honest in marketing prose but unenforced at runtime — exactly the prose-runtime drift class the substrate constraints exist to prevent. v2-A pulls the property down into the runtime: the YAML and the supervisor enforce it together, so the marketing copy that sells five focused sessions describes what the bits actually do.
 
-See [ADR 0006](../adrs/0006-per-session-worktree.md) for the substrate decision context.
+See [ADR 0006](/adrs/0006-per-session-worktree/) for the substrate decision context.
