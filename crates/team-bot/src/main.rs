@@ -404,8 +404,10 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
         }
 
         // Forward replies addressed to the human. The agent-side `reply_to_user`
-        // tool inserts rows with `recipient = 'user:telegram'`; in scoped
-        // mode we only forward replies from the configured manager's project.
+        // tool inserts rows with `recipient = 'user:telegram'`. Project-scope
+        // is the SQL pre-filter; manager-level routing happens in Rust below
+        // via `should_route` so multiple bots in the same project (one per
+        // manager) don't fan out the same reply.
         let forwardable: Vec<(i64, String, String)> = {
             let c = state.conn.lock().await;
             let rows: Vec<(i64, String, String)> = match state.manager_project() {
@@ -449,8 +451,22 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
         };
         for (id, sender, text) in forwardable {
             last_msg_id = last_msg_id.max(id);
+            // Per-manager scoping: only forward replies whose sender rolls up
+            // to *this* bot's manager. Without this, every bot in the project
+            // forwarded every reply (e.g. eng_lead's reply landing in pm and
+            // marketing chats too). Unscoped bots take the back-compat path.
+            let route_ok = {
+                let c = state.conn.lock().await;
+                should_route(state.manager.as_deref(), &sender, &c)
+            };
+            if !route_ok {
+                continue;
+            }
             let _ = bot
-                .send_message(chat, format!("[{sender}] {}", render_plain(&text)))
+                .send_message(
+                    chat,
+                    format!("{}\n\n— replied by {sender}", render_plain(&text)),
+                )
                 .await;
             let c = state.conn.lock().await;
             let _ = c.execute(
@@ -757,6 +773,72 @@ mod tests {
         // (don't surface unknown rows to a scoped bot) so a future
         // change can't silently relax it.
         assert!(!should_route(Some("p:eng_lead"), "p:ghost", &conn));
+    }
+
+    fn insert_reply(conn: &Connection, sender: &str, text: &str) -> i64 {
+        let project = sender.split_once(':').map(|(p, _)| p).unwrap_or("p");
+        conn.execute(
+            "INSERT INTO messages (project_id, sender, recipient, text, sent_at)
+             VALUES (?1, ?2, 'user:telegram', ?3, strftime('%s','now'))",
+            params![project, sender, text],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    /// Regression: when two managers (`p:pm`, `p:eng_lead`) live in the same
+    /// project and each has its own scoped bot, a `reply_to_user` from one
+    /// manager must surface in *that* manager's bot only — not in sibling
+    /// bots. Pre-fix the project-id SQL filter was the only filter so all
+    /// in-project bots fanned out the same reply.
+    #[test]
+    fn reply_routes_only_to_its_senders_bot() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let pm_msg = insert_reply(&conn, "p:pm", "from pm");
+        let eng_msg = insert_reply(&conn, "p:eng_lead", "from eng");
+
+        // Pull the project-scoped pre-filter rows the way outbound_loop does.
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.id, m.sender, m.text FROM messages m
+                 WHERE m.id > 0
+                   AND m.recipient = 'user:telegram'
+                   AND m.acked_at IS NULL
+                   AND m.project_id = 'p'
+                 ORDER BY m.id",
+            )
+            .unwrap();
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(rows.len(), 2, "both replies share the project pre-filter");
+
+        // pm bot keeps only the pm reply.
+        let pm_routed: Vec<i64> = rows
+            .iter()
+            .filter(|(_, sender, _)| should_route(Some("p:pm"), sender, &conn))
+            .map(|(id, _, _)| *id)
+            .collect();
+        assert_eq!(pm_routed, vec![pm_msg]);
+
+        // eng_lead bot keeps only the eng_lead reply.
+        let eng_routed: Vec<i64> = rows
+            .iter()
+            .filter(|(_, sender, _)| should_route(Some("p:eng_lead"), sender, &conn))
+            .map(|(id, _, _)| *id)
+            .collect();
+        assert_eq!(eng_routed, vec![eng_msg]);
+
+        // Unscoped bot back-compat: forwards both.
+        let unscoped: Vec<i64> = rows
+            .iter()
+            .filter(|(_, sender, _)| should_route(None, sender, &conn))
+            .map(|(id, _, _)| *id)
+            .collect();
+        assert_eq!(unscoped, vec![pm_msg, eng_msg]);
     }
 
     #[test]
