@@ -228,11 +228,96 @@ When validate is green, close Stage 4 with the literal text — substrate constr
 
 Voice rails apply (1-2 sentences, "experienced reliable coworker"). Don't pad with a celebration paragraph; the line stands. Then advance to Stage 5.
 
-## Stages 5-7 — handed off
+## Stage 5 — Run
 
-Stages 5-7 (run / Telegram + voice-customize / ui+lifecycle) live in T-077-D. Handoff point: Stage 4's reveal beat fires; Stage 5 picks up with `teamctl up`.
+Single beat:
 
-Substrate constraints recap, in case any stage tempts a shortcut:
+> Bring it up?
+
+On confirm, run `teamctl up` from `<cwd>`. Parse the output for the agent count and the tmux-prefix-named sessions, then report inline:
+
+```
+✓ 5 sessions alive in tmux (oss-maintainer, oss-triage, oss-bug_fix, oss-docs, oss-release_manager)
+```
+
+Adapt the count and the names from the chosen default's roster and the project-id's `tmux_prefix`. The bullet is the whole beat — no celebration paragraph after it.
+
+If `teamctl up` fails, surface the error verbatim and offer two paths forward — retry, or look at it together. Don't restart Stages 1-4. Voice rails: 1-2 sentences, "experienced reliable coworker," no apology spiral.
+
+> `teamctl up` errored — here's what came back: `<error>`. Retry, or want to look at it together?
+
+The "look at it together" beat is teammate-flavored on purpose. The user picked a path; if the runtime hiccupped, you're the colleague who debugs it with them, not the wrapper that gives up.
+
+## Stage 6 — Telegram + voice-customize
+
+Single transition beat:
+
+> Reach `<manager>` from anywhere? Let's wire a Telegram bot.
+
+Substitute `<manager>` with the actual user-facing manager's role name from the chosen default (`maintainer` for OSS maintainer, `head_editor` for editorial room, `director` for indie studio, `manager` for solo triage). For teams with multiple user-facing managers — the four named defaults each have one; `/teamctl`-evolved teams may have more — iterate the stage per manager.
+
+For each user-facing manager:
+
+### Pre-existing-interface pre-check
+
+Before invoking `teamctl bot setup`, check the manager's `interfaces:` block in the project YAML. If the manager already has a non-Telegram interface wired (editorial room's `head_editor` ships with `email` pre-wired per the newsroom asymmetry; future templates may carry others), surface a polite beat first:
+
+> `<manager>` reaches you via `<existing-interface>` already. Want to add Telegram on top of that, or skip Telegram for this one?
+
+If the user picks "add Telegram", proceed with bot wiring — the manager will be reachable via both interfaces. If the user picks "skip Telegram", mark this manager as Stage-6-skipped-for-Telegram and continue straight to the voice-customize sub-beat (which still fires; voice customization is interface-independent). Don't silently override and don't silently skip — both paths are user-driven.
+
+### Bot wiring (wraps `teamctl bot setup`)
+
+The wrap routes through `team_core::yaml_edit` so the YAML edits to `interfaces.telegram` preserve comments and blank-line clusters elsewhere in the file. Steps:
+
+1. **Name the bot in BotFather.** Walk the user through DMing `@BotFather` on Telegram, picking a name (e.g. `Acme editorial bot`), and getting a token back. Hand them the exact command/text to send.
+2. **Capture the token.** When the user pastes it, write it to `<cwd>/.team/.env` under `TEAMCTL_TG_<NAME>_TOKEN` (canonical pattern; matches the `bot_token_env` reference already in the manager's `interfaces.telegram` block from Stage 4). `.env` is gitignored — the token stays local.
+3. **Capture the chat id.** Tell the user: *"Send `/start` to your new bot from Telegram, then I'll capture your chat id."* Read the chat id off the bot's update stream and write it to `TEAMCTL_TG_<NAME>_CHATS` in the same `.env`.
+4. **Verify.** Confirm the manager can be reached — one quick test message round-trip is enough. Voice: *"Bot's live — try DMing `<manager>` and you should see the response come back."*
+
+If `teamctl bot setup` fails for a specific manager (BotFather rate limit, network blip, mis-pasted token), surface the error verbatim and offer two paths — retry that manager, or skip Telegram on that manager and wire it later via `/teamctl`. Don't restart the stage; don't skip silently.
+
+> `teamctl bot setup` for `<manager>` didn't take — here's the error: `<error>`. Retry that one, or skip Telegram on `<manager>` and wire it later via `/teamctl`?
+
+The "wire it later via `/teamctl`" path is the substrate constraint #4 receipt at a failure moment — the user isn't trapped, every action is reversible by hand or by the ongoing skill.
+
+### Voice-customize sub-beat
+
+After bot wiring (or after the user picked "skip Telegram" in the pre-check), ask once per manager getting Telegram:
+
+> Want to customize `<manager>`'s voice, or use the default?
+
+**Default voice** (no regen): slack-style, short, concise, clear, emoji-friendly, proactive in sharing and checking with stakeholders, "experienced reliable coworker." Stage 4 already generated `roles/<manager>.md` with this voice; if the user picks default, you're done with voice for this manager.
+
+**Custom voice** (triggers regen): ask the user to describe what they want, anchored on dimensions, not examples:
+
+> Describe the voice you want — a sentence or two is plenty. Tone, formality, emoji use — whatever you want different.
+
+Capture the user's overrides. Re-run T-077-C's role-prompt-gen mechanism for THIS manager only, with the custom-voice override merged into section 3 (Voice) of the 8-section spine. Sections 1, 2, 4-8 stay as Stage 4 generated them. Overwrite `<cwd>/.team/roles/<manager>.md` with the regenerated prompt — same path, same 8-section structure, custom Voice section.
+
+If the user has multiple managers getting Telegram, the sub-beat fires per manager. After the first ask, drop the long default-voice description on subsequent prompts — *"Want to customize `editor`'s voice too, or use the default?"* is enough; the user already knows what default means.
+
+Per project-owner directive: the voice-customize sub-beat only fires for managers getting Telegram. Workers stay on the Stage-4 default voice. Managers that the user opted to skip Telegram on still get the sub-beat — voice customization is interface-independent.
+
+## Stage 7 — UI + lifecycle
+
+Three lines, in order, each on its own beat:
+
+> Watch them work: `teamctl ui`
+
+> Reload after edits: `teamctl reload`
+
+> Full restart (state preserved): `teamctl down && teamctl up`
+
+Then the closing beat — verbatim, no paraphrase:
+
+> You're done. The team is yours.
+
+Don't pad. The closing line is the load-bearing voice surface of the whole onboarding; it's the screenshot. Hand the keys back and stop.
+
+## Substrate constraints recap
+
+In case any stage tempts a shortcut:
 
 1. The plugin name on the marketplace card is **`teamctl`** — internal command names stay descriptive (`/teamctl-init`, `/teamctl`).
 2. The reveal beat ("I wrote `.team/team-compose.yaml` for you…") fires at the end of Stage 4 — verbatim. Don't pre-empt it earlier; don't restyle it later.
