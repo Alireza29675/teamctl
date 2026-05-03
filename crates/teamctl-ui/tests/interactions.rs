@@ -49,12 +49,12 @@
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 use team_core::supervisor::AgentState;
-use teamctl_ui::app::{self, App, Stage};
+use teamctl_ui::app::{self, render_to_buffer, App, Stage};
 use teamctl_ui::approvals::test_support::MockApprovalDecider;
 use teamctl_ui::compose::test_support::MockMessageSender;
 use teamctl_ui::data::{AgentInfo, TeamSnapshot};
 use teamctl_ui::mailbox::{MailboxSource, MessageRow};
-use teamctl_ui::triptych::Pane;
+use teamctl_ui::triptych::{MainLayout, Pane};
 
 /// Mailbox source that returns no rows for any query. T-079-A
 /// mocks compose + approvals via the published `test_support`
@@ -395,5 +395,274 @@ fn dm_compose_target_follows_roster_selection_after_cancel() {
     assert_eq!(
         calls[0].0, "writing:manager",
         "DM follows the new roster selection, not the prior cancelled target"
+    );
+}
+
+// ── Layout-switch coverage (T-079-C) ────────────────────────────
+//
+// Affirmative paths, return paths, cross-layout transitions, edge
+// cases (focused pane, modal stages). The render-side assertions
+// catch the "state flips but the view doesn't follow" failure mode
+// — the project-owner-reported bug shape.
+
+fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
+    let area = buf.area();
+    let mut out = String::with_capacity((area.width as usize + 1) * area.height as usize);
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let cell = &buf[(area.x + x, area.y + y)];
+            out.push_str(cell.symbol());
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[test]
+fn ctrl_w_switches_triptych_to_wall() {
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    assert_eq!(h.app.layout, MainLayout::Triptych);
+
+    h.dispatch_key_mods(KeyCode::Char('w'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.layout, MainLayout::Wall);
+}
+
+#[test]
+fn ctrl_w_returns_wall_to_triptych() {
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    h.dispatch_key_mods(KeyCode::Char('w'), KeyModifiers::CONTROL);
+    assert_eq!(h.app.layout, MainLayout::Wall);
+
+    h.dispatch_key_mods(KeyCode::Char('w'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.layout, MainLayout::Triptych);
+}
+
+#[test]
+fn ctrl_m_switches_triptych_to_mailbox_first() {
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    assert_eq!(h.app.layout, MainLayout::Triptych);
+
+    h.dispatch_key_mods(KeyCode::Char('m'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.layout, MainLayout::MailboxFirst);
+}
+
+#[test]
+fn ctrl_m_returns_mailbox_first_to_triptych() {
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    h.dispatch_key_mods(KeyCode::Char('m'), KeyModifiers::CONTROL);
+    assert_eq!(h.app.layout, MainLayout::MailboxFirst);
+
+    h.dispatch_key_mods(KeyCode::Char('m'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.layout, MainLayout::Triptych);
+}
+
+#[test]
+fn ctrl_m_from_wall_switches_to_mailbox_first() {
+    // Cross-layout: operator in Wall hits Ctrl+M, expects to land
+    // in MailboxFirst directly without a Triptych pit-stop.
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    h.dispatch_key_mods(KeyCode::Char('w'), KeyModifiers::CONTROL);
+    assert_eq!(h.app.layout, MainLayout::Wall);
+
+    h.dispatch_key_mods(KeyCode::Char('m'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.layout, MainLayout::MailboxFirst);
+}
+
+#[test]
+fn ctrl_w_from_mailbox_first_switches_to_wall() {
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    h.dispatch_key_mods(KeyCode::Char('m'), KeyModifiers::CONTROL);
+    assert_eq!(h.app.layout, MainLayout::MailboxFirst);
+
+    h.dispatch_key_mods(KeyCode::Char('w'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.layout, MainLayout::Wall);
+}
+
+#[test]
+fn ctrl_w_with_mailbox_pane_focused_still_switches_layout() {
+    // Layout-switch must work regardless of which pane has focus —
+    // Ctrl+W is a layout-level chord, not a pane-level one.
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    h.dispatch_key(KeyCode::Tab);
+    h.dispatch_key(KeyCode::Tab);
+    assert_eq!(h.app.focused_pane, Pane::Mailbox);
+
+    h.dispatch_key_mods(KeyCode::Char('w'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.layout, MainLayout::Wall);
+}
+
+#[test]
+fn compose_modal_blocks_layout_switch() {
+    // The compose modal owns input — Ctrl+W must NOT bypass the
+    // editor and flip the underlying main-view layout. Operator
+    // would see a confused state ("modal is up but layout
+    // changed") otherwise.
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "writing",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    h.app.dismiss_splash();
+    h.dispatch_key(KeyCode::Char('@'));
+    assert_eq!(h.app.stage, Stage::ComposeModal);
+
+    h.dispatch_key_mods(KeyCode::Char('w'), KeyModifiers::CONTROL);
+
+    assert_eq!(
+        h.app.layout,
+        MainLayout::Triptych,
+        "compose modal owns input — layout must not flip underneath"
+    );
+}
+
+#[test]
+fn quit_confirm_overlay_blocks_layout_switch() {
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    h.dispatch_key(KeyCode::Char('q'));
+    assert_eq!(h.app.stage, Stage::QuitConfirm);
+
+    h.dispatch_key_mods(KeyCode::Char('w'), KeyModifiers::CONTROL);
+
+    assert_eq!(
+        h.app.layout,
+        MainLayout::Triptych,
+        "quit-confirm overlay must not be bypassed by layout chord"
+    );
+}
+
+#[test]
+fn rendered_buffer_reflects_wall_after_ctrl_w() {
+    // The named bug shape: state flips but the rendered view
+    // doesn't follow. Triptych shows ROSTER + MAILBOX pane titles;
+    // Wall is a tile grid with no such pane chrome. If `app.layout`
+    // is Wall but `render_to_buffer` still emits ROSTER/MAILBOX,
+    // the user sees "switching layouts doesn't work."
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "writing",
+        vec![
+            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            synth_agent("writing:dev1", AgentState::Running, 0, 0),
+        ],
+    ));
+    h.app.dismiss_splash();
+
+    h.dispatch_key_mods(KeyCode::Char('w'), KeyModifiers::CONTROL);
+    assert_eq!(h.app.layout, MainLayout::Wall);
+
+    let s = buffer_to_string(&render_to_buffer(&h.app, 120, 30));
+    assert!(
+        !s.contains("ROSTER"),
+        "Wall buffer must not render the Triptych ROSTER pane title:\n{s}"
+    );
+    assert!(
+        !s.contains("MAILBOX"),
+        "Wall buffer must not render the Triptych MAILBOX pane title:\n{s}"
+    );
+}
+
+#[test]
+fn rendered_buffer_reflects_mailbox_first_after_ctrl_m() {
+    // Same shape for the MailboxFirst layout — the failure mode
+    // covered here is the project-owner-reported "switching
+    // layouts doesn't work" surface for Ctrl+M.
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "writing",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    h.app.dismiss_splash();
+
+    h.dispatch_key_mods(KeyCode::Char('m'), KeyModifiers::CONTROL);
+    assert_eq!(h.app.layout, MainLayout::MailboxFirst);
+
+    let s = buffer_to_string(&render_to_buffer(&h.app, 120, 30));
+    assert!(
+        !s.contains("ROSTER"),
+        "MailboxFirst buffer must not render the Triptych ROSTER pane title:\n{s}"
+    );
+    assert!(
+        !s.contains("DETAIL"),
+        "MailboxFirst buffer must not render the Triptych DETAIL pane title:\n{s}"
+    );
+}
+
+#[test]
+fn ctrl_shift_w_still_toggles_wall_layout() {
+    // The project-owner-reported "switching layouts doesn't work"
+    // surface. With CapsLock on, or with Shift held alongside
+    // Ctrl, crossterm reports `KeyCode::Char('W')` (uppercase)
+    // with `CONTROL` (and possibly `SHIFT`) modifiers. The current
+    // routing only matches lowercase `Char('w')`, so the chord
+    // dies silently and the operator sees a no-op. Layout chord
+    // must accept either casing — the user's intent is "Ctrl
+    // plus the W key," not "the lowercase glyph 'w'."
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+
+    h.dispatch_key_mods(
+        KeyCode::Char('W'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+
+    assert_eq!(h.app.layout, MainLayout::Wall);
+}
+
+#[test]
+fn ctrl_shift_m_still_toggles_mailbox_first_layout() {
+    // Mirror of the Ctrl+W case for Ctrl+M — same root cause,
+    // same fix surface.
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+
+    h.dispatch_key_mods(
+        KeyCode::Char('M'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+
+    assert_eq!(h.app.layout, MainLayout::MailboxFirst);
+}
+
+#[test]
+fn ctrl_w_with_detail_split_open_arms_chord_not_layout() {
+    // Documented PR-UI-7 behaviour pinned: when there's at least
+    // one detail split, Ctrl+W arms the close-split chord prefix
+    // rather than toggling the Wall layout. The chord follows
+    // with `q` (close focused split) or `o` (close others).
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "writing",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    h.app.dismiss_splash();
+    h.dispatch_key_mods(KeyCode::Char('|'), KeyModifiers::CONTROL);
+    assert_eq!(h.app.detail_splits.len(), 1);
+
+    h.dispatch_key_mods(KeyCode::Char('w'), KeyModifiers::CONTROL);
+
+    assert_eq!(
+        h.app.pending_chord,
+        Some(KeyCode::Char('w')),
+        "Ctrl+W with splits arms the chord prefix"
+    );
+    assert_eq!(
+        h.app.layout,
+        MainLayout::Triptych,
+        "Ctrl+W with splits must not flip layout (chord wins)"
     );
 }
