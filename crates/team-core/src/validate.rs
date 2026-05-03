@@ -71,6 +71,45 @@ pub enum ValidationError {
 
     #[error("supervisor.drain_timeout_secs={0} is unreasonable; expected 0..=600")]
     DrainTimeoutOutOfRange(u64),
+
+    #[error(
+        "project `{project}`: worktree_isolation requires a git repo at project.cwd ({cwd}). \
+         Run `git init` there or set `supervisor.worktree_isolation: false`."
+    )]
+    WorktreeIsolationRequiresGitRepo { project: String, cwd: String },
+}
+
+/// Non-blocking advisories surfaced alongside hard validation errors.
+/// `teamctl validate` prints these; `teamctl up` prints them before
+/// it boots agents but doesn't block on them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationWarning {
+    /// `supervisor.worktree_isolation` is absent. Treated as `true`
+    /// going forward (the v2-A default), but operators should set the
+    /// field explicitly so the team's stance is recorded in YAML.
+    WorktreeIsolationFieldAbsent,
+}
+
+impl std::fmt::Display for ValidationWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WorktreeIsolationFieldAbsent => write!(
+                f,
+                "supervisor.worktree_isolation is unset; defaulting to `true` (per-session \
+                 git worktrees). Set it explicitly to record the team's stance."
+            ),
+        }
+    }
+}
+
+/// Non-blocking advisories. Returned in addition to (not instead of)
+/// hard errors from [`validate`].
+pub fn warnings(compose: &Compose) -> Vec<ValidationWarning> {
+    let mut warns = Vec::new();
+    if compose.global.supervisor.worktree_isolation.is_none() {
+        warns.push(ValidationWarning::WorktreeIsolationFieldAbsent);
+    }
+    warns
 }
 
 pub fn validate(compose: &Compose) -> Vec<ValidationError> {
@@ -94,6 +133,25 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
         errs.push(ValidationError::DrainTimeoutOutOfRange(
             compose.global.supervisor.drain_timeout_secs,
         ));
+    }
+
+    // Worktree-isolation edge case: when EXPLICITLY on, project.cwd
+    // must be a git repo so `git worktree add` can derive per-agent
+    // worktrees off it. Field absent stays back-compat (warning only,
+    // not error) so existing pre-v2-A teams keep validating clean —
+    // their migration moment is when they explicitly set the field.
+    if compose.global.supervisor.worktree_isolation == Some(true) {
+        for p in &compose.projects {
+            let resolved = compose
+                .resolve_project_cwd(&p.project.id)
+                .unwrap_or_else(|| compose.root.clone());
+            if !crate::worktree::is_git_repo(&resolved) {
+                errs.push(ValidationError::WorktreeIsolationRequiresGitRepo {
+                    project: p.project.id.clone(),
+                    cwd: resolved.display().to_string(),
+                });
+            }
+        }
     }
 
     let mut seen_projects = BTreeSet::new();
@@ -209,6 +267,7 @@ mod tests {
                 on_rate_limit: None,
                 effort: None,
                 interfaces: None,
+                cwd_override: None,
             },
         );
         let mut workers = BTreeMap::new();
@@ -226,6 +285,7 @@ mod tests {
                 on_rate_limit: None,
                 effort: None,
                 interfaces: None,
+                cwd_override: None,
             },
         );
         Compose {
@@ -233,7 +293,10 @@ mod tests {
             global: Global {
                 version: 2,
                 broker: Default::default(),
-                supervisor: Default::default(),
+                supervisor: SupervisorCfg {
+                    worktree_isolation: Some(false),
+                    ..Default::default()
+                },
                 budget: Default::default(),
                 hitl: Default::default(),
                 rate_limits: Default::default(),
@@ -298,5 +361,41 @@ mod tests {
         assert!(!validate(&c)
             .iter()
             .any(|e| matches!(e, ValidationError::DrainTimeoutOutOfRange(_))));
+    }
+
+    #[test]
+    fn worktree_isolation_field_absent_emits_warning() {
+        let mut c = toy_compose("dev");
+        c.global.supervisor.worktree_isolation = None;
+        let w = warnings(&c);
+        assert_eq!(w, vec![ValidationWarning::WorktreeIsolationFieldAbsent]);
+    }
+
+    #[test]
+    fn worktree_isolation_explicit_emits_no_warning() {
+        let mut c = toy_compose("dev");
+        c.global.supervisor.worktree_isolation = Some(true);
+        assert!(warnings(&c).is_empty());
+        c.global.supervisor.worktree_isolation = Some(false);
+        assert!(warnings(&c).is_empty());
+    }
+
+    #[test]
+    fn worktree_isolation_on_non_git_cwd_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("not-a-repo");
+        std::fs::create_dir_all(&plain).unwrap();
+
+        let mut c = toy_compose("dev");
+        c.global.supervisor.worktree_isolation = Some(true);
+        c.root = dir.path().to_path_buf();
+        c.projects[0].project.cwd = plain.clone();
+
+        let errs = validate(&c);
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ValidationError::WorktreeIsolationRequiresGitRepo { .. })),
+            "expected WorktreeIsolationRequiresGitRepo, got: {errs:?}"
+        );
     }
 }

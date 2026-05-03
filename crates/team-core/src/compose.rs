@@ -227,6 +227,27 @@ pub struct SupervisorCfg {
     /// drain (matches pre-PR-B hard-kill behaviour).
     #[serde(default = "default_drain_timeout_secs")]
     pub drain_timeout_secs: u64,
+    /// Per-session worktree isolation. When `true` (the going-forward
+    /// default), every agent's tmux session launches in its own git
+    /// worktree under `<root>/state/worktrees/<agent>/` on its own
+    /// `agents/<agent-id>` branch, so concurrent file mutations across
+    /// sessions don't collide. When `false`, every agent shares the
+    /// project's `cwd` (back-compat, matches pre-v2-A behaviour).
+    ///
+    /// Field absent on existing teams: treated as `true` going
+    /// forward, with a one-time validate warning prompting explicit
+    /// confirmation. Per-agent `cwd_override` opts a single agent
+    /// out regardless of this flag.
+    #[serde(default)]
+    pub worktree_isolation: Option<bool>,
+}
+
+impl SupervisorCfg {
+    /// Effective worktree-isolation flag for callers — absent treated
+    /// as `true` (the going-forward default).
+    pub fn worktree_isolation_enabled(&self) -> bool {
+        self.worktree_isolation.unwrap_or(true)
+    }
 }
 
 impl Default for SupervisorCfg {
@@ -235,6 +256,7 @@ impl Default for SupervisorCfg {
             r#type: default_supervisor_type(),
             tmux_prefix: default_tmux_prefix(),
             drain_timeout_secs: default_drain_timeout_secs(),
+            worktree_isolation: None,
         }
     }
 }
@@ -340,6 +362,15 @@ pub struct Agent {
     /// channel it speaks on in one place. Workers leave this unset.
     #[serde(default)]
     pub interfaces: Option<AgentInterfaces>,
+
+    /// Opt this agent out of per-session worktree isolation. When set,
+    /// the agent's tmux session launches with this path as `cwd`
+    /// instead of the auto-derived `<root>/state/worktrees/<agent>/`.
+    /// Advanced use — lets an operator plug an externally-managed
+    /// worktree (e.g. a long-lived feature branch) into a session.
+    /// Relative paths resolve against the compose root.
+    #[serde(default)]
+    pub cwd_override: Option<PathBuf>,
 }
 
 /// Container for per-manager interface adapters. Open shape so adding
@@ -475,6 +506,54 @@ impl Compose {
         })
     }
 
+    /// Resolve the per-agent cwd given current schema settings.
+    ///
+    /// Resolution order:
+    /// 1. `agent.cwd_override` — explicit per-agent opt-out wins.
+    /// 2. Worktree isolation enabled (default) → `<root>/state/worktrees/<agent>/`.
+    /// 3. Fallback → the project's resolved `cwd` (back-compat).
+    ///
+    /// Relative `cwd_override` and `project.cwd` paths resolve against
+    /// the compose root.
+    pub fn resolve_agent_cwd(&self, h: &AgentHandle) -> PathBuf {
+        if let Some(o) = &h.spec.cwd_override {
+            return if o.is_absolute() {
+                o.clone()
+            } else {
+                self.root.join(o)
+            };
+        }
+        if self.global.supervisor.worktree_isolation_enabled() {
+            return self.root.join("state/worktrees").join(h.agent);
+        }
+        let project_cwd = self
+            .projects
+            .iter()
+            .find(|p| p.project.id == h.project)
+            .map(|p| &p.project.cwd);
+        match project_cwd {
+            Some(p) if p.is_absolute() => p.clone(),
+            Some(p) => self.root.join(p),
+            None => self.root.clone(),
+        }
+    }
+
+    /// Resolve the project's source-of-truth cwd (the directory git
+    /// worktree commands run against). The agent worktrees are derived
+    /// off this; for tests + edge-case validation we need it standalone.
+    pub fn resolve_project_cwd(&self, project_id: &str) -> Option<PathBuf> {
+        self.projects
+            .iter()
+            .find(|p| p.project.id == project_id)
+            .map(|p| {
+                if p.project.cwd.is_absolute() {
+                    p.project.cwd.clone()
+                } else {
+                    self.root.join(&p.project.cwd)
+                }
+            })
+    }
+
     /// Return every agent in the compose tree tagged with manager/worker.
     pub fn agents(&self) -> impl Iterator<Item = AgentHandle<'_>> {
         self.projects.iter().flat_map(|p| {
@@ -537,6 +616,128 @@ mod tests {
         assert!(a.interfaces.is_none());
         assert!(a.telegram().is_none());
         assert!(a.effort.is_none());
+        assert!(a.cwd_override.is_none());
+    }
+
+    #[test]
+    fn agent_cwd_override_parses() {
+        let a: Agent =
+            serde_yaml::from_str("runtime: claude-code\ncwd_override: ./custom\n").unwrap();
+        assert_eq!(a.cwd_override, Some(PathBuf::from("./custom")));
+    }
+
+    #[test]
+    fn supervisor_worktree_isolation_parses() {
+        let s: SupervisorCfg =
+            serde_yaml::from_str("type: tmux\nworktree_isolation: true\n").unwrap();
+        assert_eq!(s.worktree_isolation, Some(true));
+        assert!(s.worktree_isolation_enabled());
+
+        let absent: SupervisorCfg = serde_yaml::from_str("type: tmux\n").unwrap();
+        assert_eq!(absent.worktree_isolation, None);
+        assert!(
+            absent.worktree_isolation_enabled(),
+            "absent defaults to true"
+        );
+
+        let off: SupervisorCfg =
+            serde_yaml::from_str("type: tmux\nworktree_isolation: false\n").unwrap();
+        assert!(!off.worktree_isolation_enabled());
+    }
+
+    #[test]
+    fn resolve_agent_cwd_honors_override_isolation_and_fallback() {
+        let mut managers = BTreeMap::new();
+        let agent_with_override = Agent {
+            runtime: "claude-code".into(),
+            cwd_override: Some(PathBuf::from("custom-pane")),
+            ..base_agent()
+        };
+        let agent_isolated = Agent {
+            runtime: "claude-code".into(),
+            ..base_agent()
+        };
+        managers.insert("override_pm".into(), agent_with_override);
+        managers.insert("isolated_pm".into(), agent_isolated);
+
+        let mut compose = make_compose(managers);
+        compose.root = PathBuf::from("/repo/.team");
+        compose.projects[0].project.cwd = PathBuf::from("..");
+
+        // Case 1: cwd_override wins regardless of isolation flag.
+        compose.global.supervisor.worktree_isolation = Some(true);
+        let h = compose.agents().find(|a| a.agent == "override_pm").unwrap();
+        assert_eq!(
+            compose.resolve_agent_cwd(&h),
+            PathBuf::from("/repo/.team/custom-pane")
+        );
+
+        // Case 2: isolation true (default), no override → state/worktrees/<agent>.
+        let h = compose.agents().find(|a| a.agent == "isolated_pm").unwrap();
+        assert_eq!(
+            compose.resolve_agent_cwd(&h),
+            PathBuf::from("/repo/.team/state/worktrees/isolated_pm")
+        );
+
+        // Case 3: isolation false → fall through to project cwd.
+        compose.global.supervisor.worktree_isolation = Some(false);
+        let h = compose.agents().find(|a| a.agent == "isolated_pm").unwrap();
+        assert_eq!(
+            compose.resolve_agent_cwd(&h),
+            PathBuf::from("/repo/.team/..")
+        );
+
+        // Case 4: isolation absent → defaults to true.
+        compose.global.supervisor.worktree_isolation = None;
+        let h = compose.agents().find(|a| a.agent == "isolated_pm").unwrap();
+        assert_eq!(
+            compose.resolve_agent_cwd(&h),
+            PathBuf::from("/repo/.team/state/worktrees/isolated_pm")
+        );
+    }
+
+    fn base_agent() -> Agent {
+        Agent {
+            runtime: "claude-code".into(),
+            model: None,
+            role_prompt: None,
+            permission_mode: None,
+            autonomy: "low_risk_only".into(),
+            can_dm: vec![],
+            can_broadcast: vec![],
+            reports_to: None,
+            on_rate_limit: None,
+            effort: None,
+            interfaces: None,
+            cwd_override: None,
+        }
+    }
+
+    fn make_compose(managers: BTreeMap<String, Agent>) -> Compose {
+        Compose {
+            root: PathBuf::from("/teamctl"),
+            global: Global {
+                version: 2,
+                broker: Default::default(),
+                supervisor: Default::default(),
+                budget: Default::default(),
+                hitl: Default::default(),
+                rate_limits: Default::default(),
+                interfaces: vec![],
+                projects: vec![],
+            },
+            projects: vec![Project {
+                version: 2,
+                project: ProjectMeta {
+                    id: "proj".into(),
+                    name: "Proj".into(),
+                    cwd: PathBuf::from("."),
+                },
+                channels: vec![],
+                managers,
+                workers: BTreeMap::default(),
+            }],
+        }
     }
 
     #[test]

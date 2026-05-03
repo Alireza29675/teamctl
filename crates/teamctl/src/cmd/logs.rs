@@ -9,11 +9,7 @@ pub fn run(root: &Path, target: &str) -> Result<()> {
     let Some(handle) = compose.agents().find(|h| h.id() == target) else {
         bail!("no such agent: {target}");
     };
-    let spec = AgentSpec::from_handle(
-        handle,
-        &compose.root,
-        &compose.global.supervisor.tmux_prefix,
-    );
+    let spec = AgentSpec::from_handle(handle, &compose);
     if TmuxSupervisor.state(&spec)? == team_core::supervisor::AgentState::Stopped {
         bail!(
             "agent {target} is not running (tmux session {} absent)",

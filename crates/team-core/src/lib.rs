@@ -12,6 +12,7 @@ pub mod render;
 pub mod runtimes;
 pub mod supervisor;
 pub mod validate;
+pub mod worktree;
 pub mod yaml_edit;
 
 /// Semantic version of the teamctl workspace.

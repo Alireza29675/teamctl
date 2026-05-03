@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
 use team_core::render::{env_path, mcp_path, render_agent};
 use team_core::supervisor::{AgentSpec, Supervisor, TmuxSupervisor};
@@ -16,14 +16,18 @@ pub fn run(root: &Path) -> Result<()> {
         }
         bail!("{} validation error(s) — fix before up", errs.len());
     }
+    for w in team_core::validate::warnings(&compose) {
+        eprintln!("warn · {w}");
+    }
     ensure_wrapper_and_dirs(&compose)?;
     render_all_public(&compose)?;
     register_all_public(&compose)?;
     ensure_claude_trust(&compose)?;
+    ensure_agent_worktrees(&compose)?;
 
     let sup = TmuxSupervisor;
     for h in compose.agents() {
-        let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+        let spec = AgentSpec::from_handle(h, &compose);
         sup.up(&spec)?;
         println!("up · {}", h.id());
     }
@@ -48,6 +52,31 @@ pub fn run(root: &Path) -> Result<()> {
     let bin = super::team_mcp_bin().display().to_string();
     let snap = super::snapshot::compute(&compose, &bin);
     super::snapshot::write(&compose.root, &snap)?;
+    Ok(())
+}
+
+/// Idempotently provision per-agent git worktrees for every agent whose
+/// resolved cwd lives under `<root>/state/worktrees/`. Skips agents
+/// that opted out via `cwd_override` or `worktree_isolation: false`.
+///
+/// Source repo for `git worktree add` is the resolved `project.cwd`;
+/// the validate gate has already caught the non-git-repo case before
+/// we get here.
+fn ensure_agent_worktrees(compose: &Compose) -> Result<()> {
+    if !compose.global.supervisor.worktree_isolation_enabled() {
+        return Ok(());
+    }
+    for h in compose.agents() {
+        if h.spec.cwd_override.is_some() {
+            continue;
+        }
+        let Some(git_source) = compose.resolve_project_cwd(h.project) else {
+            continue;
+        };
+        let wt = team_core::worktree::default_worktree_path(&compose.root, h.agent);
+        team_core::worktree::ensure_worktree(&git_source, &wt, h.agent)
+            .with_context(|| format!("ensure worktree for {}", h.id()))?;
+    }
     Ok(())
 }
 

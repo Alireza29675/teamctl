@@ -5,6 +5,10 @@ use anyhow::{bail, Result};
 pub fn run(root: &Path) -> Result<()> {
     let compose = super::load(root)?;
     let errs = team_core::validate::validate(&compose);
+    let warns = team_core::validate::warnings(&compose);
+    for w in &warns {
+        eprintln!("warn · {w}");
+    }
     if errs.is_empty() {
         println!(
             "ok · {} project{} · {} agent{}",

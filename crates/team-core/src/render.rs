@@ -128,6 +128,7 @@ mod tests {
                 on_rate_limit: None,
                 effort: None,
                 interfaces: None,
+                cwd_override: None,
             },
         );
         Compose {
@@ -142,6 +143,7 @@ mod tests {
                     r#type: "tmux".into(),
                     tmux_prefix: "a-".into(),
                     drain_timeout_secs: 10,
+                    worktree_isolation: None,
                 },
                 budget: Default::default(),
                 hitl: Default::default(),

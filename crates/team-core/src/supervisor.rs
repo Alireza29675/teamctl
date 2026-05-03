@@ -4,14 +4,14 @@
 //! and Linux. `SystemdSupervisor` and `LaunchdSupervisor` plug in behind
 //! the same trait when the host supports them.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use crate::compose::AgentHandle;
+use crate::compose::{AgentHandle, Compose};
 
 #[derive(Debug, Clone)]
 pub struct AgentSpec {
@@ -24,14 +24,22 @@ pub struct AgentSpec {
 }
 
 impl AgentSpec {
-    pub fn from_handle(h: AgentHandle<'_>, root: &Path, tmux_prefix: &str) -> Self {
+    /// Build an [`AgentSpec`] for `h` against `compose`. The agent's
+    /// `cwd` is resolved via [`Compose::resolve_agent_cwd`] — typically
+    /// the per-session worktree path (default since v2-A) or the
+    /// project's shared `cwd` when isolation is off.
+    pub fn from_handle(h: AgentHandle<'_>, compose: &Compose) -> Self {
+        let cwd = compose.resolve_agent_cwd(&h);
         Self {
             project: h.project.into(),
             agent: h.agent.into(),
-            tmux_session: format!("{tmux_prefix}{}-{}", h.project, h.agent),
-            wrapper: root.join("bin/agent-wrapper.sh"),
-            cwd: root.to_path_buf(),
-            env_file: crate::render::env_path(root, h.project, h.agent),
+            tmux_session: format!(
+                "{}{}-{}",
+                compose.global.supervisor.tmux_prefix, h.project, h.agent
+            ),
+            wrapper: compose.root.join("bin/agent-wrapper.sh"),
+            cwd,
+            env_file: crate::render::env_path(&compose.root, h.project, h.agent),
         }
     }
 }

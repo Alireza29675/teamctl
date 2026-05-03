@@ -57,8 +57,15 @@ enum Command {
     Validate,
     /// Render artifacts and start every agent's tmux session.
     Up,
-    /// Stop every agent's tmux session. State is preserved.
-    Down,
+    /// Stop every agent's tmux session. State is preserved by default.
+    Down {
+        /// Also remove per-agent git worktrees + `agents/<id>` branches.
+        /// Destructive: drops local-only worker branches that haven't
+        /// been merged. Default leaves worktrees intact so `teamctl up`
+        /// resumes where the team left off.
+        #[arg(long)]
+        clean_worktrees: bool,
+    },
     /// Apply compose changes. Restarts changed agents only.
     Reload {
         /// Print the reload plan without rendering, registering, or
@@ -318,7 +325,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Validate => cmd::validate::run(&root),
         Command::Up => cmd::up::run(&root),
-        Command::Down => cmd::down::run(&root),
+        Command::Down { clean_worktrees } => cmd::down::run(&root, clean_worktrees),
         Command::Reload { dry_run } => cmd::reload::run(&root, dry_run),
         Command::Ps => cmd::status::run(&root),
         Command::Logs { target } => cmd::logs::run(&root, &target),

@@ -126,8 +126,7 @@ impl TeamSnapshot {
 
         let mut agents = Vec::new();
         for h in compose.agents() {
-            let spec =
-                AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+            let spec = AgentSpec::from_handle(h, &compose);
             let state = supervisor.state(&spec).unwrap_or(AgentState::Unknown);
             let id = h.id();
             let unread_mail = counts.unread.get(&id).copied().unwrap_or(0);

@@ -38,11 +38,7 @@ pub fn run(root: &Path, target: &str) -> Result<()> {
     println!("autonomy:   {}", handle.spec.autonomy);
     println!();
 
-    let spec = AgentSpec::from_handle(
-        handle,
-        &compose.root,
-        &compose.global.supervisor.tmux_prefix,
-    );
+    let spec = AgentSpec::from_handle(handle, &compose);
     let state = TmuxSupervisor.state(&spec)?;
     println!("supervisor: {:?}", state);
     println!("tmux:       {}", spec.tmux_session);

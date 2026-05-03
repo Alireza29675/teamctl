@@ -13,7 +13,7 @@ pub fn run(root: &Path) -> Result<()> {
         "AGENT", "MANAGER", "STATE", "TMUX",
     );
     for h in compose.agents() {
-        let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+        let spec = AgentSpec::from_handle(h, &compose);
         let state = match sup.state(&spec).unwrap_or(AgentState::Unknown) {
             AgentState::Running => "running",
             AgentState::Stopped => "stopped",
