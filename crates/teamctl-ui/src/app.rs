@@ -1204,8 +1204,11 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 // (the next key dispatches `q` close-split, `o`
                 // close-others). Tested BEFORE the wall-layout
                 // toggle below so the chord-prefix wins when
-                // relevant.
-                KeyCode::Char('w')
+                // relevant. Both casings accepted because CapsLock
+                // / Shift+Ctrl produce `Char('W')`; armed value is
+                // normalised to lowercase so the follow-up arms
+                // above can match a single literal.
+                KeyCode::Char('w') | KeyCode::Char('W')
                     if k.modifiers.contains(KeyModifiers::CONTROL)
                         && !app.detail_splits.is_empty() =>
                 {
@@ -1213,11 +1216,16 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 }
                 // PR-UI-6: layout toggles. `Ctrl+W` for Wall when
                 // there are no splits to chord on; `Ctrl+M` for
-                // MailboxFirst (always).
-                KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                // MailboxFirst (always). Both casings accepted —
+                // see the chord-arm comment above.
+                KeyCode::Char('w') | KeyCode::Char('W')
+                    if k.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
                     app.toggle_wall_layout()
                 }
-                KeyCode::Char('m') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('m') | KeyCode::Char('M')
+                    if k.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
                     app.toggle_mailbox_first_layout()
                 }
                 // PR-UI-7 splitscreen lift: `Ctrl+|` subdivides
