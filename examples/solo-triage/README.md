@@ -59,8 +59,8 @@ Now start the manager bot:
 ```bash
 team-bot \
   --mailbox ./state/mailbox.db \
-  --token   "$MANAGER_BOT_TOKEN" \
-  --authorized-chat-ids "$MANAGER_CHAT_IDS" \
+  --token   "$TEAMCTL_TG_MANAGER_TOKEN" \
+  --authorized-chat-ids "$TEAMCTL_TG_MANAGER_CHATS" \
   --manager triage:manager
 ```
 

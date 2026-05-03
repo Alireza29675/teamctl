@@ -63,8 +63,8 @@ Now start the maintainer bot:
 ```bash
 team-bot \
   --mailbox ./state/mailbox.db \
-  --token   "$MAINTAINER_BOT_TOKEN" \
-  --authorized-chat-ids "$MAINTAINER_CHAT_IDS" \
+  --token   "$TEAMCTL_TG_MAINTAINER_TOKEN" \
+  --authorized-chat-ids "$TEAMCTL_TG_MAINTAINER_CHATS" \
   --manager oss:maintainer
 ```
 

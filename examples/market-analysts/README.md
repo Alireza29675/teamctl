@@ -52,8 +52,8 @@ teamctl status
 # In a separate terminal: start the Telegram bot, scoped to the chief.
 team-bot \
   --mailbox ./state/mailbox.db \
-  --token   "$MARKETS_BOT_TOKEN" \
-  --authorized-chat-ids "$MARKETS_CHAT_IDS" \
+  --token   "$TEAMCTL_TG_CHIEF_TOKEN" \
+  --authorized-chat-ids "$TEAMCTL_TG_CHIEF_CHATS" \
   --manager markets:chief
 ```
 
