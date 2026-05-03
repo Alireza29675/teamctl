@@ -50,7 +50,7 @@ The full onboarding tutorial lives at [teamctl.run/getting-started](https://team
 
 ## Status
 
-Early but moving fast. v0.4.0 is the latest release (April 2026); MIT-licensed, working, and shipped in the open. See the [ROADMAP](./ROADMAP.md) and [CHANGELOG](./CHANGELOG.md) for the full picture.
+Early but moving fast. v0.7.0 is the latest release (May 2026); MIT-licensed, working, and shipped in the open. See the [ROADMAP](./ROADMAP.md) and [CHANGELOG](./CHANGELOG.md) for the full picture.
 
 ## What you get
 

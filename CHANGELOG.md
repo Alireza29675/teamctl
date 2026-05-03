@@ -4,6 +4,71 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-03
+
+0.7.0 ships the Claude Code plugin. Install once (`claude plugin marketplace add https://github.com/Alireza29675/teamctl && claude plugin install teamctl@teamctl`), invoke `/teamctl-init`, and you're walked from no-teamctl-installed through a running supervised team in tmux in a few minutes. The plugin is teamctl's onboarding from inside Claude Code; the `.team/` directory it produces is the same hand-authorable YAML you've always had, byte-for-byte indistinguishable from one you'd type yourself. Parallel plugins for OpenCode, Codex CLI, and Gemini CLI are tracked at #59, #60, #61.
+
+### Added
+
+- **Claude Code plugin** at `plugins/claude-code/` (T-077). Two slash-invokable
+  commands ship: `/teamctl-init` walks an operator from no-teamctl-installed
+  to a running supervised team in tmux through a 7-stage flow (detect+install
+  → pick a team shape from four named defaults → propose a named ASCII org
+  tree → scaffold `.team/` to match `examples/<chosen>/.team/` byte-for-byte
+  with role prompts generated against an 8-section spine → reveal beat
+  → `teamctl up` → defer to `teamctl bot setup` for Telegram + voice-customize
+  per manager → hand the keys back with the three lifecycle commands).
+  `/teamctl` is the open-ended ongoing skill the operator keeps invoking
+  afterwards: five v1 verbs (add manager, add worker, scope channel, wire
+  telegram, retire agent) each running a Read → Propose → Confirm → Apply
+  → Validate → Offer-reload loop with unified-diff receipts and substrate
+  constraint #4 enforced (every action reproducible by `vim
+  .team/team-compose.yaml`). Repo-root `.claude-plugin/marketplace.json`
+  registers teamctl as a single-plugin marketplace; install via
+  `claude plugin marketplace add https://github.com/Alireza29675/teamctl
+  && claude plugin install teamctl@teamctl`.
+- **Comment-preserving YAML edit substrate** at `team-core::yaml_edit`
+  (T-077-E-prereq). Wraps `yaml-edit` with a bounded line-anchored helper
+  for nested-block insertion. `teamctl bot setup`'s `interfaces.telegram`
+  upsert path now routes through the substrate, preserving comments,
+  blank-line clusters, and key ordering across edits — closing the
+  recurring `.team/projects/<id>.yaml` round-trip regression class
+  observed across 0.5.x and 0.6.x cascades.
+- **`examples/solo-triage/`** as the fourth named-default team folder
+  (T-077-B-prereq). Manager + research worker + inbox/journal worker;
+  HITL on `publish` and `external_email`. Mirrors `oss-maintainer/`'s
+  shape; serves as the byte-for-byte diff target for the plugin's
+  scaffolding when the operator picks "Solo triage."
+- **Repo-root `CLAUDE.md`** (T-077-F) carrying the cross-cutting rule
+  that every release or substantive change to teamctl must consider
+  impact on the plugin, the TUI, the docs, and the tests. Plus the
+  4-bullet behavioural-guidelines spine (think before coding,
+  simplicity first, surgical changes, goal-driven execution).
+- **Three sister-plugin GitHub issues** for OpenCode CLI (#59), Codex
+  CLI (#60), and Gemini CLI (#61). Each carries the spine sentence,
+  the four substrate constraints, and links to the marketing
+  positioning thread. External contributors can pick them up against
+  the canonical Claude Code plugin reference.
+
+### Changed
+
+- **Examples env-var naming aligned to the canonical
+  `TEAMCTL_TG_<NAME>_TOKEN/CHATS` pattern** (T-077-C-prereq). All five
+  example folders' `.env.example` and `README.md` files now match the
+  YAML-side env-var references — closing a drift class where copying
+  `.env.example` literally would have set env vars the YAML didn't
+  read. `startup-team` and `market-analysts` also gained yaml-canonical
+  alignments (`PRODUCT_BOT_*` → `TEAMCTL_TG_PRODUCT_MANAGER_*`;
+  `MARKETS_*` → `TEAMCTL_TG_CHIEF_*`).
+
+### Notes
+
+- **Tagged history note:** 0.5.2, 0.6.2, 0.6.3, and 0.6.4 were released
+  on `main` as version-bumped `Cargo.toml` + CHANGELOG entries but were
+  not tagged on origin (cargo-dist publish was not triggered for those
+  bumps). 0.7.0 is the next tagged release after `v0.6.1`, superseding
+  the 0.6.x untagged series.
+
 ## [0.6.4] — 2026-05-03
 
 ### Fixed
