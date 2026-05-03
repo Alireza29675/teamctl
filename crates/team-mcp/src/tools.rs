@@ -108,13 +108,19 @@ pub fn schema() -> Value {
         },
         {
             "name": "reply_to_user",
-            "description": "Send a reply to the human operator who DMed this agent. Available only to managers (`is_manager: true`); the configured interface adapter (Telegram, Discord, …) forwards it. Use this to answer the human operator, not `dm` (which is for inter-agent traffic and is project-scoped).",
+            "description": "Send a message to the human operator. Available only to managers (`is_manager: true`); the configured interface adapter (Telegram, Discord, …) forwards it. \n\nThis is the ONLY channel back to the human — anything you write outside this tool is invisible to them. Use it to answer their DMs, surface progress on long-running work, escalate blockers, or proactively share something they should know. Do NOT use `dm` for human traffic (it is project-scoped inter-agent). \n\nFor work that takes more than a minute, send a brief acknowledgement first (e.g. \"on it — checking the build\") and then a separate reply when done; do not leave the operator wondering whether you started.",
             "inputSchema": {
                 "type": "object",
                 "required": ["text"],
                 "properties": {
-                    "text":      { "type": "string" },
-                    "thread_id": { "type": "string" }
+                    "text":      {
+                        "type": "string",
+                        "description": "Plain text only — no markdown, no headings, no code fences (none of it renders on chat surfaces like Telegram). Use emojis sparingly to aid scanability (✅ done, ⚠️ caution, 🔧 working, ❓ question). Aim for short, chat-sized messages; split long output into multiple calls rather than sending a wall of text."
+                    },
+                    "thread_id": {
+                        "type": "string",
+                        "description": "Optional. Group this reply with an existing conversation thread. Pass the `thread_id` value you saw in the channel meta of the inbound message you are responding to; omit for a fresh thread."
+                    }
                 },
                 "additionalProperties": false
             }
