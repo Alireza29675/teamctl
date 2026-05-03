@@ -1,0 +1,24 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: solo-
+
+budget:
+  daily_usd_limit: 10.0
+  message_ttl_hours: 72
+
+hitl:
+  globally_sensitive_actions:
+    - publish
+    - external_email
+
+# Telegram is configured on the manager in projects/triage.yaml.
+# Run `teamctl bot setup` to wire it up.
+
+projects:
+  - file: projects/triage.yaml
