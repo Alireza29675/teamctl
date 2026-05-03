@@ -141,15 +141,102 @@ If the user confirms with "ship it", "yes", "go", or similar, advance to Stage 4
 
 Take a yes/no. If yes, advance. If no, accept it gracefully and exit; the user can re-run `/teamctl-init` later or hand-author `.team/team-compose.yaml` directly.
 
-## Stages 4-7 — handed off
+## Stage 4 — Init + reveal
 
-Stage 4 (init + reveal), Stages 5-7 (run / Telegram / lifecycle) live in T-077-C and T-077-D. The handoff point is the user saying "ship it" at the end of Stage 3; Stage 4 picks up from there with the `.team/` scaffolder.
+This is the moment the plugin commits to disk. Inputs handed off from Stages 2-3: the **chosen default** (one of the four named picks), the **team name** (e.g. "Acme editorial", never `team-1`), and the **cwd** to scaffold into.
+
+The plugin scaffolds `.team/` directly. **Don't shell out to `teamctl init`** — its static `solo` / `blank` templates can't express the four named defaults' richer shape (per-manager Telegram interfaces, scoped channels, full HITL `globally_sensitive_actions`, budget). The four `examples/<folder>/.team/` trees are the canonical golden output; Stage 4 reproduces them byte-for-byte modulo three intentional substitutions (project id, team name, `tmux_prefix`).
+
+### Default-name → example-folder mapping
+
+User-facing skill labels diverge from on-disk folder names for two of the four. Resolve before reading the source tree:
+
+| Skill label (Stage 2) | `examples/<folder>/` | project YAML |
+| --- | --- | --- |
+| OSS maintainer       | `oss-maintainer`     | `projects/oss.yaml` |
+| Editorial room       | `newsletter-office`  | `projects/newsroom.yaml` |
+| Indie studio         | `indie-game-studio`  | `projects/studio.yaml` |
+| Solo triage          | `solo-triage`        | `projects/triage.yaml` |
+
+The folder-rename tickets parked separately (per parent T-077 clarifications log); the skill maps the label to the folder, no apology surface needed.
+
+**Editorial room asymmetry.** `examples/newsletter-office/.team/team-compose.yaml` lists two projects (`newsroom.yaml` + `blog-site.yaml`) and carries a top-level `interfaces:` email block wired to `newsroom:head_editor`. The "Editorial room" pick maps to the **newsroom project only** (the 4-agent roster the user confirmed in Stage 3). Drop the `blog-site.yaml` entry from the user's `projects:` list. Keep the email-interface block — it's how head_editor is reached in this default and is part of what the user signed up for.
+
+### Derived inputs
+
+- **Project id** — kebab-case slug of the team name. Lowercase, alphanumeric + hyphens, collapse runs of hyphens, trim leading/trailing hyphens. "Acme editorial" → `acme-editorial`. "Side-project triage!" → `side-project-triage`.
+- **`tmux_prefix`** — `<project-id>-` (trailing hyphen). Used in the user's `team-compose.yaml`.
+- **Project-YAML filename** — `projects/<project-id>.yaml` in the user's tree (the example's filename, e.g. `oss.yaml`, gets renamed to the user's project id).
+- **Team display name** — the user's chosen string verbatim, written to the `name:` field in `projects/<project-id>.yaml`.
+
+### Files to write
+
+Read each file from `examples/<folder>/.team/` and write the same content under `<cwd>/.team/`, applying the three substitutions and one filename rename:
+
+```
+<cwd>/.team/
+├── team-compose.yaml         # copy from example; substitute tmux_prefix + projects: file:
+├── projects/<project-id>.yaml # copy from example's projects/<example-id>.yaml; substitute project.id + project.name
+├── roles/<role>.md           # one per agent — generated on the fly, see below
+├── .env.example              # copy from example verbatim (already canonical — TEAMCTL_TG_<NAME>_* for telegram defaults; NEWSROOM_EMAIL_* for editorial-room)
+└── .gitignore                # copy from example verbatim
+```
+
+Substitutions are surgical:
+
+- `team-compose.yaml`: change `tmux_prefix:` value (e.g. `oss-` → `acme-editorial-`); change the entry under `projects:` to `- file: projects/<project-id>.yaml` so it points at the user's renamed project YAML.
+- `projects/<project-id>.yaml`: change `project.id:` (e.g. `oss` → `acme-editorial`) and `project.name:` (e.g. `OSS Maintainer` → `Acme editorial`). Channels, managers, workers, ACLs, and interfaces stay byte-for-byte.
+
+Everything else — broker block, supervisor type, budget, hitl `globally_sensitive_actions`, channels list, manager/worker definitions, env-var references in `interfaces.telegram.bot_token_env` / `chat_ids_env` — copies verbatim. The example folders already use the canonical `TEAMCTL_TG_<NAME>_TOKEN` / `TEAMCTL_TG_<NAME>_CHATS` shape; no env-var work needed here.
+
+**No plugin-specific markers anywhere.** No `# generated-by:` comments. No skill signatures. No "this file was scaffolded by /teamctl-init" preamble. A user opening `team-compose.yaml` should not be able to tell it came from a plugin (substrate constraint #3).
+
+### Role-prompt generation
+
+For each agent in `projects/<project-id>.yaml` — managers and workers both — generate `roles/<agent-id>.md` on the fly. **Don't copy the example's role prompt verbatim**; the example is inspiration, not a template. Generation runs inside this Claude Code session — read the spine plus the role facts, then write the role prompt directly to disk.
+
+For each agent, supply the model with:
+
+1. **The 8-section spine**, read verbatim from `plugins/claude-code/role-prompt-style.md`. Every generated role prompt has all eight section headers in order: Identity, Mission, Voice, Best practices, Loop, Memory, Boundaries + HITL gates, Hard rules.
+2. **Role facts** drawn from the chosen project YAML and the team context:
+   - Agent id, agent kind (manager / worker), reports-to relationship, peers in the same project.
+   - Channels the agent is on (`can_dm`, `can_broadcast` from the YAML).
+   - HITL gates from the team's `globally_sensitive_actions`.
+   - Telegram-bound or not (manager only — read `interfaces.telegram` presence).
+3. **Substance inspiration** — the corresponding `examples/<folder>/.team/roles/<agent-id>.md`. Read it for *what kind of work this role does*; restate in the user's team's terms (the team name, the chosen default's project framing). The 8-section spine output may diverge in shape from the example's prose; substance should match.
+4. **Voice** — default coworker baseline at this stage (slack-style, short, concise, clear, emoji-friendly, "experienced reliable coworker"). Stage 6 regenerates Telegram-bound managers' prompts with custom-voice overrides if the user asks for one; Stage 4 doesn't pre-empt that.
+
+Write the prompt directly to `<cwd>/.team/roles/<agent-id>.md`. No CLAUDE attribution in the file. No "generated by" footer. The prompt should read like a careful human wrote it.
+
+### Validate
+
+Run `teamctl validate` from `<cwd>`. Exit 0 is the gate.
+
+If validate succeeds, advance to the reveal beat.
+
+If validate fails (theoretically shouldn't if the example folders are sound, but defensive):
+
+> Hmm, validate flagged this: `<error verbatim>`. Want me to undo the `.team/` and stop, or leave it for you to inspect?
+
+Surface the error **verbatim** — don't re-format, don't paraphrase, don't massage. The user gets the rollback choice or the inspect choice; honour either. Validation failure here means a plugin bug, and the honest surface is the recovery path.
+
+### Reveal beat
+
+When validate is green, close Stage 4 with the literal text — substrate constraint #2, verbatim required:
+
+> I wrote `.team/team-compose.yaml` for you — open it, everything we just talked about is in there.
+
+Voice rails apply (1-2 sentences, "experienced reliable coworker"). Don't pad with a celebration paragraph; the line stands. Then advance to Stage 5.
+
+## Stages 5-7 — handed off
+
+Stages 5-7 (run / Telegram + voice-customize / ui+lifecycle) live in T-077-D. Handoff point: Stage 4's reveal beat fires; Stage 5 picks up with `teamctl up`.
 
 Substrate constraints recap, in case any stage tempts a shortcut:
 
 1. The plugin name on the marketplace card is **`teamctl`** — internal command names stay descriptive (`/teamctl-init`, `/teamctl`).
-2. The reveal beat ("I wrote `.team/team-compose.yaml` for you…") fires at the end of Stage 4. Don't pre-empt it here.
+2. The reveal beat ("I wrote `.team/team-compose.yaml` for you…") fires at the end of Stage 4 — verbatim. Don't pre-empt it earlier; don't restyle it later.
 3. The `.team/` output Stage 4 produces is byte-for-byte identical to a hand-authored team — no plugin-only state, no generated-by markers.
-4. Every action this command takes is reproducible by hand-editing YAML afterwards. Stages 1-3 don't write `.team/`, so this constraint mostly binds Stage 4 onwards, but the prose here doesn't promise anything Stage 4 won't deliver.
+4. Every action this command takes is reproducible by hand-editing YAML afterwards.
 
 > See `.team/tasks/2026-05-03-teamctl-cc-plugin/SLICING.md` for the full slice plan.
