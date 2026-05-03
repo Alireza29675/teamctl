@@ -74,10 +74,18 @@ while :; do
             # on arrival without polling and idles silently between
             # events. `server:team` references the `team` entry in the
             # MCP config rendered above.
-            set -- "$@" --channels server:team
+            #
+            # `--dangerously-load-development-channels` (not `--channels`)
+            # is required while team-mcp is off Anthropic's allowlist
+            # during the Channels research preview. `--channels` would
+            # be silently dropped here.
+            set -- "$@" --dangerously-load-development-channels server:team
             [ -n "$SYSTEM_PROMPT_PATH" ] && [ -f "$SYSTEM_PROMPT_PATH" ] && \
                 set -- "$@" --append-system-prompt "$(cat "$SYSTEM_PROMPT_PATH")"
-            set -- "$@" "$BOOTSTRAP_PROMPT"
+            # `--` terminates the variadic dev-channels list so the bare
+            # BOOTSTRAP_PROMPT positional isn't slurped as another channel
+            # entry.
+            set -- "$@" -- "$BOOTSTRAP_PROMPT"
             ;;
         codex)
             BIN=codex

@@ -119,6 +119,27 @@ impl Peer {
 }
 
 #[test]
+fn initialize_advertises_channel_capability() {
+    // Without `experimental.claude/channel: {}` Claude Code does not
+    // register a listener and silently drops every channel notification
+    // we emit — which is exactly the regression that landed in 0.6.x.
+    // `serverInfo.name` becomes the `<channel source="...">` attribute,
+    // and the bootstrap prompt + .mcp.json key both read "team".
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let mut p = Peer::spawn(&team_mcp_bin(), "hello:dev", &mailbox);
+    p.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let resp = p.lines.recv_json(Duration::from_secs(2));
+    assert_eq!(
+        resp["result"]["capabilities"]["experimental"]["claude/channel"],
+        json!({}),
+        "initialize must advertise the claude/channel capability; got {resp}"
+    );
+    assert_eq!(resp["result"]["serverInfo"]["name"], "team");
+    p.shutdown();
+}
+
+#[test]
 fn new_inbox_row_pushes_channel_notification_to_subscribed_agent() {
     let tmp = tempdir().unwrap();
     let mailbox = tmp.path().join("mailbox.db");
