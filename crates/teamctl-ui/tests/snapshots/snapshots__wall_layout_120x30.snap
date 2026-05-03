@@ -1,0 +1,35 @@
+---
+source: crates/teamctl-ui/tests/snapshots.rs
+assertion_line: 433
+expression: buffer_to_string(&buf)
+---
+┌ * writing:manager ───────────────────────────────────────┐┌ * writing:worker-1 ──────────────────────────────────────┐
+│(focus this tile to stream)                               ││(focus this tile to stream)                               │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+└──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘
+┌ * writing:worker-2 ──────────────────────────────────────┐┌ x writing:critic ────────────────────────────────────────┐
+│(focus this tile to stream)                               ││(focus this tile to stream)                               │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+│                                                          ││                                                          │
+└──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘
+Tab cycle panes  ·  / search · ⏎ open · @ send · q quit                                              ? help · t tutorial

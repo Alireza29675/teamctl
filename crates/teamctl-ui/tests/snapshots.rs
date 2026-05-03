@@ -409,3 +409,46 @@ fn render_at_minimum_terminal_does_not_panic() {
     app.dismiss_splash();
     let _ = render_to_buffer(&app, 20, 8);
 }
+
+#[test]
+fn wall_layout_renders_tile_grid_at_120x30() {
+    // T-079-C snapshot: Wall layout (Ctrl+W) reached after the
+    // operator flips from Triptych. Tiles render as a 2×2 grid
+    // with the first four agents; the ROSTER/MAILBOX pane chrome
+    // from Triptych is gone, replaced by per-tile borders carrying
+    // the agent id + state glyph.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![
+            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            synth_agent("writing:worker-1", AgentState::Running, 0, 0),
+            synth_agent("writing:worker-2", AgentState::Running, 0, 0),
+            synth_agent("writing:critic", AgentState::Stopped, 0, 0),
+        ],
+    ));
+    app.toggle_wall_layout();
+    let buf = render_to_buffer(&app, 120, 30);
+    insta::assert_snapshot!("wall_layout_120x30", buffer_to_string(&buf));
+}
+
+#[test]
+fn mailbox_first_layout_renders_channel_focused_at_120x30() {
+    // T-079-C snapshot: MailboxFirst layout (Ctrl+M). Channel list
+    // / feed / participants split replaces the Triptych panes;
+    // first entry seeds the channel cursor per
+    // `toggle_mailbox_first_layout`.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![
+            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            synth_agent("writing:worker-1", AgentState::Running, 0, 0),
+        ],
+    ));
+    app.toggle_mailbox_first_layout();
+    let buf = render_to_buffer(&app, 120, 30);
+    insta::assert_snapshot!("mailbox_first_layout_120x30", buffer_to_string(&buf));
+}
