@@ -181,6 +181,21 @@ fn init_blank_template_scaffolds_minimal_tree() {
     // The scaffolded tree must validate. Exercises the substitution
     // pass + the schema together, so a typo in the template body
     // surfaces here rather than at first user-run.
+    //
+    // Templates ship `worktree_isolation: true` so per-session worktree
+    // isolation is the going-forward default; that requires the
+    // project's cwd (`./workspace` in the template) to be a git repo.
+    // Real users running `teamctl init` typically have a git repo
+    // around already (or run `git init` themselves); the test mirrors
+    // that by initialising one before validate.
+    let workspace = team_dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(&workspace)
+        .args(["init", "-q", "--initial-branch=main"])
+        .status()
+        .unwrap();
     let validate = Command::new(bin())
         .args(["--root", team_dir.to_str().unwrap(), "validate"])
         .output()
@@ -617,6 +632,19 @@ fn init_with_name_creates_team_folder_that_validates() {
     ] {
         assert!(team_dir.join(f).is_file(), "missing scaffolded file: {f}");
     }
+
+    // Templates ship `worktree_isolation: true`; project.cwd
+    // (`./workspace` in the template) needs to be a git repo for
+    // validate to clear. Real users typically have one already; the
+    // test initialises one to mirror that.
+    let workspace = team_dir.join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(&workspace)
+        .args(["init", "-q", "--initial-branch=main"])
+        .status()
+        .unwrap();
 
     let validate = Command::new(bin())
         .env_clear()

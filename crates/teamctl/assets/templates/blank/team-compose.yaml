@@ -7,6 +7,7 @@ broker:
 supervisor:
   type: tmux
   tmux_prefix: a-
+  worktree_isolation: true
 
 projects:
   - file: projects/main.yaml

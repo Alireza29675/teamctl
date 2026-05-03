@@ -6,7 +6,7 @@ Every agent in a teamctl team is its own focused session — its own context, it
 
 ## Layout
 
-When `worktree_isolation: true` (the going-forward default), `teamctl up` derives one worktree per agent under `<root>/state/worktrees/<agent>/` rooted off the project's resolved `cwd`:
+When `worktree_isolation: true` is set, `teamctl up` derives one worktree per agent under `<root>/state/worktrees/<agent>/` rooted off the project's resolved `cwd`:
 
 ```
 my-repo/
@@ -30,14 +30,16 @@ Each worktree is a real git working tree — `git status`, `git log`, branches, 
 
 ## Schema
 
-Project-level default in `team-compose.yaml`:
+Project-level setting in `team-compose.yaml`:
 
 ```yaml
 supervisor:
   type: tmux
   tmux_prefix: t-
-  worktree_isolation: true   # default going forward
+  worktree_isolation: true   # opt in to per-session worktrees
 ```
+
+Set explicitly. New teams scaffolded by `teamctl init` ship `worktree_isolation: true`; pre-v2-A teams keep their legacy single-cwd behaviour until they add the field.
 
 Per-agent opt-out for advanced cases (e.g. plugging an externally-managed worktree into a session):
 
@@ -55,8 +57,8 @@ managers:
 `teamctl` resolves an agent's tmux `cwd` in this order:
 
 1. **`agent.cwd_override`** — explicit per-agent opt-out wins.
-2. **Worktree isolation enabled** — `<root>/state/worktrees/<agent-id>/`, branched off the project's current HEAD as `agents/<agent-id>`.
-3. **Fallback (`worktree_isolation: false`)** — every agent shares the project's `cwd` (matches pre-v2-A behaviour).
+2. **`supervisor.worktree_isolation: true`** — `<root>/state/worktrees/<agent-id>/`, branched off the project's current HEAD as `agents/<agent-id>`.
+3. **`worktree_isolation: false` or absent** — every agent shares the project's `cwd` (legacy behaviour). Field-absent emits a validate warning; field-explicit-false is silent.
 
 ## Coordination
 
@@ -93,7 +95,7 @@ This removes every `state/worktrees/<agent>/` directory and deletes the `agents/
 
 teamctl never auto-runs `git init`. Initializing a repo is a real decision (commit history starts here, this becomes a tracked thing); a tool that does it silently steals the moment from the operator.
 
-**`worktree_isolation` field absent.** Pre-v2-A teams keep validating clean — the field is treated as `true` with a one-time warning prompting explicit confirmation. Set the field once and the warning goes away, no matter which value you pick.
+**`worktree_isolation` field absent.** Pre-v2-A teams keep their existing single-cwd behaviour at runtime — the field is treated as **`false`** (legacy) until you opt in. `teamctl validate` emits a one-time warning nudging you to set the field explicitly: `worktree_isolation: true` to opt in to per-session worktrees, or `worktree_isolation: false` to silence the warning while keeping legacy. Standard deprecate → warn → opt-in → next-major-flips cadence; nothing about your team moves until you say it does. New teams scaffolded by `teamctl init` ship `worktree_isolation: true` already wired in.
 
 **Worker uncommitted changes in `project.cwd`.** Agent worktrees are separate working trees; the operator's working tree is untouched.
 

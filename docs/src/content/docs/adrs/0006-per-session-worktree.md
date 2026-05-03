@@ -17,20 +17,22 @@ This is the prose-runtime drift class the existing substrate constraints exist t
 
 ## Decision
 
-Make per-session git-worktree isolation a first-class teamctl runtime primitive. Default `supervisor.worktree_isolation: true` going forward. Each agent's tmux session launches in its own worktree under `<root>/state/worktrees/<agent>/` on its own `agents/<agent-id>` branch.
+Make per-session git-worktree isolation a first-class teamctl runtime primitive, gated on explicit operator opt-in via `supervisor.worktree_isolation: true`. Each agent's tmux session then launches in its own worktree under `<root>/state/worktrees/<agent>/` on its own `agents/<agent-id>` branch.
 
 Schema additions:
 
-- Project-level: `supervisor.worktree_isolation: true | false` (default `true`).
+- Project-level: `supervisor.worktree_isolation: true | false`.
 - Per-agent: `cwd_override: <path>` for advanced opt-out.
 
 Resolution order for an agent's tmux `cwd`:
 
 1. `agent.cwd_override` if set.
-2. `<root>/state/worktrees/<agent-id>/` if `worktree_isolation` is `true` (or absent).
-3. The project's resolved `cwd` (back-compat — matches pre-v2-A behaviour).
+2. `<root>/state/worktrees/<agent-id>/` if `worktree_isolation` is **explicitly** `true`.
+3. The project's resolved `cwd` (legacy single-cwd behaviour — matches pre-v2-A and the field-absent / explicit-`false` paths).
 
-`teamctl up` provisions worktrees idempotently before tmux launch. `teamctl down` preserves them; `teamctl down --clean-worktrees` is the explicit destructive opt-in.
+**Field-absent runtime semantics: legacy.** Existing pre-v2-A teams upgrade without their tmux sessions silently moving directories. `teamctl validate` emits a one-time warning nudging operators to set the field explicitly: `worktree_isolation: true` to opt in, or `worktree_isolation: false` to silence the warning while keeping legacy. Standard deprecate → warn → opt-in → next-major-flips cadence. New teams scaffolded by `teamctl init` ship `worktree_isolation: true` already wired in.
+
+`teamctl up` provisions worktrees idempotently before tmux launch when the flag is on. `teamctl down` preserves them; `teamctl down --clean-worktrees` is the explicit destructive opt-in.
 
 Coordination back to a shared branch piggybacks on the existing HITL `merge_to_main` approval flow — no new mechanism. Worker commits land on `agents/<worker>`; manager merges from inside its own worktree; the operator's actual default branch (`main`) only moves on operator-approved merges.
 
@@ -51,7 +53,7 @@ Coordination back to a shared branch piggybacks on the existing HITL `merge_to_m
 
 ## Consequences
 
-- **Schema migration:** existing teams with `supervisor.worktree_isolation` absent see a one-time validate warning. Field absent is treated as `true` going forward (the v2-A default) but `teamctl validate` doesn't *block* on the git-repo edge case in the absent case — only on explicit `worktree_isolation: true` with a non-git `project.cwd`. Real teams that point at real repos keep validating clean; synthetic test fixtures and pre-v2-A teams without a repo at `project.cwd` are nudged to set the field explicitly.
+- **Schema migration:** existing pre-v2-A teams keep their legacy single-cwd behaviour at runtime — field-absent does NOT silently flip to per-session worktrees. Validate emits a one-time warning prompting explicit opt-in. The non-git-`project.cwd` hard-error fires only when `worktree_isolation: true` is set explicitly. New teams scaffolded by `teamctl init` ship the field set to `true`. Net effect: the substrate ships and is the going-forward default for new teams, while existing teams confirm their direction at the time of their next deliberate update — nothing about a running team moves under the operator's feet.
 - **`teamctl up` startup time:** first `up` adds one `git worktree add` per agent. ~50-100ms each on warm caches. Subsequent ups are no-ops (existing worktrees reused).
 - **Disk usage:** each worktree carries a working-tree-sized checkout. For a 5-agent team on a 100MB repo, that's ~500MB additional. Acceptable for teamctl's typical scale (small-to-mid repos, ≤10 agents).
 - **Coordination latency:** every code merge to `main` is HITL-gated. This is by design — operators don't want their main branch moving without their say-so.

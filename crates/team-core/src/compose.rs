@@ -227,26 +227,33 @@ pub struct SupervisorCfg {
     /// drain (matches pre-PR-B hard-kill behaviour).
     #[serde(default = "default_drain_timeout_secs")]
     pub drain_timeout_secs: u64,
-    /// Per-session worktree isolation. When `true` (the going-forward
-    /// default), every agent's tmux session launches in its own git
-    /// worktree under `<root>/state/worktrees/<agent>/` on its own
-    /// `agents/<agent-id>` branch, so concurrent file mutations across
-    /// sessions don't collide. When `false`, every agent shares the
-    /// project's `cwd` (back-compat, matches pre-v2-A behaviour).
+    /// Per-session worktree isolation. When `true`, every agent's
+    /// tmux session launches in its own git worktree under
+    /// `<root>/state/worktrees/<agent>/` on its own
+    /// `agents/<agent-id>` branch, so concurrent file mutations
+    /// across sessions don't collide. When `false`, every agent
+    /// shares the project's `cwd` (legacy single-cwd behaviour).
     ///
-    /// Field absent on existing teams: treated as `true` going
-    /// forward, with a one-time validate warning prompting explicit
-    /// confirmation. Per-agent `cwd_override` opts a single agent
-    /// out regardless of this flag.
+    /// Field absent → treated as `false` (legacy) at runtime so
+    /// existing pre-v2-A teams upgrade without their tmux sessions
+    /// silently moving. New teams scaffolded by `teamctl init` write
+    /// `worktree_isolation: true` explicitly; pre-v2-A teams see a
+    /// one-time validate warning nudging opt-in. Per-agent
+    /// `cwd_override` opts a single agent out regardless of this flag.
     #[serde(default)]
     pub worktree_isolation: Option<bool>,
 }
 
 impl SupervisorCfg {
-    /// Effective worktree-isolation flag for callers — absent treated
-    /// as `true` (the going-forward default).
+    /// Effective worktree-isolation flag for callers. Absent → `false`
+    /// (legacy single-cwd behaviour) so existing teams upgrade
+    /// without their tmux sessions silently moving directories. New
+    /// teams scaffolded by `teamctl init` write `worktree_isolation:
+    /// true` explicitly; pre-v2-A teams get a one-time validate
+    /// warning prompting opt-in. Industry-standard
+    /// deprecate→warn→opt-in→next-major-flips cadence.
     pub fn worktree_isolation_enabled(&self) -> bool {
-        self.worktree_isolation.unwrap_or(true)
+        self.worktree_isolation.unwrap_or(false)
     }
 }
 
@@ -636,8 +643,8 @@ mod tests {
         let absent: SupervisorCfg = serde_yaml::from_str("type: tmux\n").unwrap();
         assert_eq!(absent.worktree_isolation, None);
         assert!(
-            absent.worktree_isolation_enabled(),
-            "absent defaults to true"
+            !absent.worktree_isolation_enabled(),
+            "absent defaults to legacy single-cwd (false) per pm-ratified opt-in semantics"
         );
 
         let off: SupervisorCfg =
@@ -687,12 +694,12 @@ mod tests {
             PathBuf::from("/repo/.team/..")
         );
 
-        // Case 4: isolation absent → defaults to true.
+        // Case 4: isolation absent → legacy single-cwd (matches false).
         compose.global.supervisor.worktree_isolation = None;
         let h = compose.agents().find(|a| a.agent == "isolated_pm").unwrap();
         assert_eq!(
             compose.resolve_agent_cwd(&h),
-            PathBuf::from("/repo/.team/state/worktrees/isolated_pm")
+            PathBuf::from("/repo/.team/..")
         );
     }
 

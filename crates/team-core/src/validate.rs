@@ -95,8 +95,10 @@ impl std::fmt::Display for ValidationWarning {
         match self {
             Self::WorktreeIsolationFieldAbsent => write!(
                 f,
-                "supervisor.worktree_isolation is unset; defaulting to `true` (per-session \
-                 git worktrees). Set it explicitly to record the team's stance."
+                "`worktree_isolation` field missing; defaulting to LEGACY single-cwd \
+                 behavior. Add `worktree_isolation: true` to opt in to per-session \
+                 worktrees, or `worktree_isolation: false` to silence this warning \
+                 while keeping legacy."
             ),
         }
     }

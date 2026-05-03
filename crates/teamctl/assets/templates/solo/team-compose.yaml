@@ -18,9 +18,16 @@ broker:
 # `tmux_prefix` is your differentiator if you want two teams running
 # concurrently on the same host: change it from `a-` to something
 # unique per team.
+#
+# `worktree_isolation: true` gives every agent its own git worktree
+# under `state/worktrees/<agent>/` on its own `agents/<agent-id>`
+# branch, so concurrent sessions don't collide. Requires the project
+# directory to be a git repo. Set to `false` to share one cwd across
+# all agents (legacy behaviour).
 supervisor:
   type: tmux
   tmux_prefix: a-
+  worktree_isolation: true
 
 # Project files. One file per project; each file declares its agents,
 # channels, and ACLs. Keep the list in sync with `projects/`.
