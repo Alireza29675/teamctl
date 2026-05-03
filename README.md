@@ -4,9 +4,9 @@
 
 # teamctl
 
-**An AI team you can read.**
+**Run real AI agent teams from one YAML. Each agent is a long-lived CLI process.**
 
-Long-running AI agents — Claude Code, Codex, or Gemini sessions — organized as a team in YAML, supervised on your machine. Each agent runs in its own `tmux` pane. They coordinate through a shared mailbox. The manager pauses for you on anything that matters.
+Long-running AI agents — Claude Code, Codex, or Gemini sessions — declared in a YAML file you write yourself, supervised on your machine. Each agent runs in its own `tmux` pane; they coordinate through a shared mailbox. If you've used docker-compose, the shape is similar — declarative, supervised, file under your version control. The manager pauses for you on anything that matters.
 
 ## Quick start (with Claude Code)
 
