@@ -141,7 +141,14 @@ pub fn ensure(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(SCHEMA)?;
     // Additive migrations. SQLite has no `ADD COLUMN IF NOT EXISTS`, so each
     // migration tolerates the "duplicate column name" error to stay idempotent.
-    let migrations: &[&str] = &["ALTER TABLE approvals ADD COLUMN delivered_at REAL"];
+    let migrations: &[&str] = &[
+        "ALTER TABLE approvals ADD COLUMN delivered_at REAL",
+        // T-086-A: discriminator + structured payload for non-text mailbox kinds
+        // (image, file, reaction). Existing text rows have NULL on both — readers
+        // treat NULL kind as 'text' for back-compat.
+        "ALTER TABLE messages ADD COLUMN kind TEXT",
+        "ALTER TABLE messages ADD COLUMN structured_payload TEXT",
+    ];
     for stmt in migrations {
         if let Err(e) = conn.execute(stmt, []) {
             let msg = e.to_string();
