@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use rusqlite::{params, Connection};
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
+use teloxide::types::{BotCommand, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
 use tokio::sync::Mutex;
 
 #[derive(Parser, Clone)]
@@ -108,6 +108,29 @@ async fn main() -> Result<()> {
         manager: cli.manager,
         tmux_prefix: cli.tmux_prefix,
     });
+
+    // T-086-H: register the manager's runtime-appropriate slash commands
+    // with Telegram so the operator gets autocomplete on `/`. Manager-scoped
+    // CC bots register the curated `CC_SLASH_COMMANDS` list; non-CC and
+    // unscoped bots register nothing (clean degrade per Decision 6). The
+    // registration is best-effort — a Telegram API error is logged but
+    // doesn't abort startup, since slash-passthrough (PR-G) still works
+    // when the operator types the chord manually.
+    let runtime = if let Some(mgr) = state.manager.as_deref() {
+        let c = state.conn.lock().await;
+        agent_runtime(&c, mgr)
+    } else {
+        None
+    };
+    let commands = commands_for_runtime(runtime.as_deref());
+    if !commands.is_empty() {
+        if let Err(e) = bot.set_my_commands(commands).await {
+            tracing::warn!(
+                "set_my_commands failed (operator gets no autocomplete; \
+                 slash-passthrough still works manually): {e}"
+            );
+        }
+    }
 
     // Outbound: poll approvals + mailbox, surface to primary chat.
     {
@@ -722,8 +745,10 @@ fn should_route(scoped: Option<&str>, agent_id: &str, conn: &Connection) -> bool
 }
 
 /// Look up the registered runtime for an agent. Used by slash-passthrough
-/// (T-086-G) to feature-gate the chord on `runtime: claude-code`. Returns
-/// `None` if the agent isn't in the mailbox's `agents` table.
+/// (T-086-G) to feature-gate the chord on `runtime: claude-code` and by
+/// the setMyCommands registration (T-086-H) to pick the per-runtime
+/// command list. Returns `None` if the agent isn't in the mailbox's
+/// `agents` table.
 fn agent_runtime(conn: &Connection, agent_id: &str) -> Option<String> {
     conn.query_row(
         "SELECT runtime FROM agents WHERE id = ?1",
@@ -793,6 +818,53 @@ fn tmux_send_keys(session: &str, body: &str) -> Result<(), String> {
         return Err(format!("tmux exit {}: {trimmed}", output.status));
     }
     Ok(())
+}
+
+/// Curated subset of Claude Code slash commands surfaced via Telegram's
+/// `setMyCommands` API (T-086-H). Telegram restricts the `command` field to
+/// lowercase letters, digits, and underscores — the hyphenated CC commands
+/// (`output-style`, `pr-comments`, `release-notes`, `security-review`) are
+/// excluded for that reason; operators can still type them manually and the
+/// slash-passthrough lane (T-086-G) routes them to tmux just fine. Login
+/// flows (`login`, `logout`, `upgrade`) are also excluded — those are
+/// awkward over chat and rarely the daily-driver path.
+///
+/// **Maintenance note**: this list is hand-maintained on Claude Code
+/// version bumps. Drift cost is bounded — the CC slash command set is
+/// stable across patch releases. The dynamic-discovery alternative (parse
+/// CC's `/help` output at startup) is heavier substrate for marginal gain.
+/// Refresh in a polish-PR when CC ships a new minor version.
+const CC_SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("clear", "Clear conversation history"),
+    (
+        "compact",
+        "Compact conversation, optionally with focus instructions",
+    ),
+    ("cost", "Show token usage cost"),
+    ("help", "Show available commands and shortcuts"),
+    ("init", "Initialize a new CLAUDE.md file"),
+    ("mcp", "Manage MCP servers"),
+    ("model", "Set the AI model for Claude Code"),
+    ("permissions", "View and edit permissions"),
+    ("resume", "Resume a previous conversation"),
+    ("review", "Review a pull request"),
+    ("status", "Show Claude Code status"),
+    ("vim", "Toggle between vim and default editing modes"),
+];
+
+/// Build the runtime-appropriate `BotCommand` list for `setMyCommands`. CC
+/// managers get `CC_SLASH_COMMANDS`; everything else (codex, gemini,
+/// unknown, unscoped) gets an empty list — clean degrade per Decision 6
+/// (manager-only / CC-only routing). Pulled out as a free function so the
+/// per-runtime mapping is unit-testable without a real Telegram bot.
+fn commands_for_runtime(runtime: Option<&str>) -> Vec<BotCommand> {
+    match runtime {
+        Some("claude-code") => CC_SLASH_COMMANDS
+            .iter()
+            .map(|(c, d)| BotCommand::new(*c, *d))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Strip lightweight markdown so Telegram renders clean prose with emoji
@@ -1431,5 +1503,89 @@ mod tests {
         let argv = tmux_send_keys_argv("sess", "/compact focus on the cascade");
         assert_eq!(argv[3], "/compact focus on the cascade");
         assert_eq!(argv[4], "Enter");
+    }
+
+    // ── T-086-H setMyCommands registration ────────────────────────
+
+    #[test]
+    fn commands_for_runtime_returns_full_cc_list_for_claude_code() {
+        let cmds = commands_for_runtime(Some("claude-code"));
+        assert_eq!(
+            cmds.len(),
+            CC_SLASH_COMMANDS.len(),
+            "CC manager registers the full curated list"
+        );
+        let names: Vec<&str> = cmds.iter().map(|c| c.command.as_str()).collect();
+        // Spot-check a few representative entries — adding/removing
+        // entries from CC_SLASH_COMMANDS should consciously update
+        // these spot-checks rather than silently drift.
+        assert!(names.contains(&"clear"), "must include /clear: {names:?}");
+        assert!(
+            names.contains(&"compact"),
+            "must include /compact: {names:?}"
+        );
+        assert!(names.contains(&"help"), "must include /help: {names:?}");
+    }
+
+    #[test]
+    fn commands_for_runtime_returns_empty_for_codex() {
+        // Decision 6 manager-only / CC-only routing: non-CC managers
+        // register no autocomplete. Operator can still type slashes
+        // manually but won't see the CC menu.
+        assert!(commands_for_runtime(Some("codex")).is_empty());
+    }
+
+    #[test]
+    fn commands_for_runtime_returns_empty_for_gemini() {
+        assert!(commands_for_runtime(Some("gemini")).is_empty());
+    }
+
+    #[test]
+    fn commands_for_runtime_returns_empty_for_unknown_runtime() {
+        // Forward-compat: a future runtime ships before its
+        // command-list does. The empty-list fallback means an old
+        // team-bot binary against a new runtime degrades quietly.
+        assert!(commands_for_runtime(Some("a-future-runtime")).is_empty());
+    }
+
+    #[test]
+    fn commands_for_runtime_returns_empty_for_unscoped_bot() {
+        // Unscoped bot (no `--manager`) → no runtime → no commands.
+        // Slash-passthrough is gated on `state.manager.is_some()`
+        // anyway, so the autocomplete would be misleading without it.
+        assert!(commands_for_runtime(None).is_empty());
+    }
+
+    #[test]
+    fn cc_slash_command_names_satisfy_telegram_constraints() {
+        // Telegram restricts `BotCommand.command` to 1-32 chars,
+        // lowercase letters / digits / underscores only. Pinning here
+        // so a future CC slash-command-set update that adds a hyphen
+        // (e.g. `output-style`) trips this test before hitting the
+        // Telegram API and getting silently rejected.
+        for (cmd, _desc) in CC_SLASH_COMMANDS {
+            assert!(
+                !cmd.is_empty() && cmd.len() <= 32,
+                "command `{cmd}` violates 1-32 char limit"
+            );
+            assert!(
+                cmd.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "command `{cmd}` contains chars Telegram rejects (only [a-z0-9_])"
+            );
+        }
+    }
+
+    #[test]
+    fn cc_slash_command_descriptions_satisfy_telegram_constraints() {
+        // Telegram requires `BotCommand.description` to be 3-256 chars.
+        // Pinning here for the same reason as the command-name test.
+        for (cmd, desc) in CC_SLASH_COMMANDS {
+            assert!(
+                desc.len() >= 3 && desc.len() <= 256,
+                "description for `{cmd}` violates 3-256 char limit (got {} chars: {desc:?})",
+                desc.len()
+            );
+        }
     }
 }

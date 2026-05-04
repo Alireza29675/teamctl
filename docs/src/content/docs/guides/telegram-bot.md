@@ -91,6 +91,16 @@ Useful commands:
   the manager's conversation, `/compact` summarises it, and so on —
   whatever the runtime exposes. Non-Claude-Code managers reply with a
   feature-gate message naming the actual runtime.
+- **Slash-command autocomplete** — manager-scoped Claude Code bots
+  register a curated set of slash commands with Telegram on
+  startup, so typing `/` in the chat surfaces a menu (`/clear`,
+  `/compact`, `/cost`, `/help`, `/init`, `/mcp`, `/model`,
+  `/permissions`, `/resume`, `/review`, `/status`, `/vim`).
+  Hyphenated commands (`/output-style`, `/pr-comments`,
+  `/release-notes`, `/security-review`) aren't in the menu —
+  Telegram's bot-API restricts command names to `[a-z0-9_]` — but
+  you can still type them manually. Non-Claude-Code manager bots
+  register nothing.
 
 ## YAML it produces
 
