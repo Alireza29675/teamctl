@@ -1188,7 +1188,7 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                         app.selected_split = 0;
                     }
                 }
-                KeyCode::Char('q') => app.enter_quit_confirm(),
+                KeyCode::Char('q') if k.modifiers.is_empty() => app.enter_quit_confirm(),
                 // PR-UI-4: `a` opens the approvals modal when there's
                 // at least one pending row. No-op otherwise so the
                 // chord doesn't surprise anyone hammering keys.
@@ -1238,21 +1238,32 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                     app.add_detail_split_horizontal()
                 }
                 // Vim window-motion `Ctrl+H/J/K/L` cycles between
-                // splits when there's more than one.
-                KeyCode::Char('h') | KeyCode::Char('k')
+                // splits when there's more than one. Both casings
+                // accepted — see the Ctrl+W chord-arm comment above
+                // for the CapsLock + Shift+Ctrl rationale.
+                KeyCode::Char('h')
+                | KeyCode::Char('H')
+                | KeyCode::Char('k')
+                | KeyCode::Char('K')
                     if k.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.cycle_split_prev()
                 }
-                KeyCode::Char('l') | KeyCode::Char('j')
+                KeyCode::Char('l')
+                | KeyCode::Char('L')
+                | KeyCode::Char('j')
+                | KeyCode::Char('J')
                     if k.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.cycle_split_next()
                 }
                 // PR-UI-6 alias preserved for back-compat: `Ctrl+Q`
                 // closes the focused split. PR-UI-7 also wires the
-                // proper `Ctrl+W q` chord; both work.
-                KeyCode::Char('Q') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                // proper `Ctrl+W q` chord; both work. Both casings
+                // accepted for the same reason as Ctrl+W/M.
+                KeyCode::Char('q') | KeyCode::Char('Q')
+                    if k.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
                     app.close_focused_split()
                 }
                 // (chord-prefix follow-ups handled at top of arm

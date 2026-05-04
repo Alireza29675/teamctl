@@ -1171,3 +1171,143 @@ fn refresh_mailbox_no_op_when_no_agent_focused() {
     assert!(h.mailbox.channel_calls.lock().unwrap().is_empty());
     assert!(h.mailbox.wire_calls.lock().unwrap().is_empty());
 }
+
+// ── Ctrl+letter chord casing-fold sweep (T-082) ─────────────────
+//
+// Same root cause as T-079-C: with CapsLock or Shift+Ctrl,
+// crossterm reports `KeyCode::Char('X')` (uppercase) and the
+// chord arm dies silently if it only matches one casing. T-082
+// sweeps the remaining Ctrl+letter chord arms — Ctrl+H/J/K/L
+// (split-cycle) and Ctrl+Q (close-focused-split).
+
+fn harness_with_two_splits() -> Harness {
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "writing",
+        vec![
+            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            synth_agent("writing:dev1", AgentState::Running, 0, 0),
+        ],
+    ));
+    h.app.dismiss_splash();
+    h.app.add_detail_split_vertical();
+    h.app.add_detail_split_vertical();
+    assert_eq!(h.app.detail_splits.len(), 2);
+    h
+}
+
+#[test]
+fn ctrl_h_lowercase_cycles_split_prev() {
+    let mut h = harness_with_two_splits();
+    h.app.selected_split = 0;
+
+    h.dispatch_key_mods(KeyCode::Char('h'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.selected_split, 1);
+}
+
+#[test]
+fn ctrl_shift_h_cycles_split_prev() {
+    // CapsLock or Shift+Ctrl reports `Char('H')` — must still cycle.
+    let mut h = harness_with_two_splits();
+    h.app.selected_split = 0;
+
+    h.dispatch_key_mods(
+        KeyCode::Char('H'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+
+    assert_eq!(h.app.selected_split, 1);
+}
+
+#[test]
+fn ctrl_k_lowercase_cycles_split_prev() {
+    let mut h = harness_with_two_splits();
+    h.app.selected_split = 0;
+
+    h.dispatch_key_mods(KeyCode::Char('k'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.selected_split, 1);
+}
+
+#[test]
+fn ctrl_shift_k_cycles_split_prev() {
+    let mut h = harness_with_two_splits();
+    h.app.selected_split = 0;
+
+    h.dispatch_key_mods(
+        KeyCode::Char('K'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+
+    assert_eq!(h.app.selected_split, 1);
+}
+
+#[test]
+fn ctrl_l_lowercase_cycles_split_next() {
+    let mut h = harness_with_two_splits();
+    h.app.selected_split = 0;
+
+    h.dispatch_key_mods(KeyCode::Char('l'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.selected_split, 1);
+}
+
+#[test]
+fn ctrl_shift_l_cycles_split_next() {
+    let mut h = harness_with_two_splits();
+    h.app.selected_split = 0;
+
+    h.dispatch_key_mods(
+        KeyCode::Char('L'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+
+    assert_eq!(h.app.selected_split, 1);
+}
+
+#[test]
+fn ctrl_j_lowercase_cycles_split_next() {
+    let mut h = harness_with_two_splits();
+    h.app.selected_split = 0;
+
+    h.dispatch_key_mods(KeyCode::Char('j'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.selected_split, 1);
+}
+
+#[test]
+fn ctrl_shift_j_cycles_split_next() {
+    let mut h = harness_with_two_splits();
+    h.app.selected_split = 0;
+
+    h.dispatch_key_mods(
+        KeyCode::Char('J'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+
+    assert_eq!(h.app.selected_split, 1);
+}
+
+#[test]
+fn ctrl_q_uppercase_closes_focused_split() {
+    let mut h = harness_with_two_splits();
+
+    h.dispatch_key_mods(
+        KeyCode::Char('Q'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+
+    assert_eq!(h.app.detail_splits.len(), 1);
+}
+
+#[test]
+fn ctrl_q_lowercase_closes_focused_split() {
+    // Plain Ctrl+q without Shift — operator without CapsLock typing
+    // the natural unshifted form. Must still close the focused split.
+    let mut h = harness_with_two_splits();
+
+    h.dispatch_key_mods(KeyCode::Char('q'), KeyModifiers::CONTROL);
+
+    assert_eq!(h.app.detail_splits.len(), 1);
+}
