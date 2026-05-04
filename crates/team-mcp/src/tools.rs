@@ -108,14 +108,35 @@ pub fn schema() -> Value {
         },
         {
             "name": "reply_to_user",
-            "description": "Send a message to the human operator. Available only to managers (`is_manager: true`); the configured interface adapter (Telegram, Discord, …) forwards it. \n\nThis is the ONLY channel back to the human — anything you write outside this tool is invisible to them. Use it to answer their DMs, surface progress on long-running work, escalate blockers, or proactively share something they should know. Do NOT use `dm` for human traffic (it is project-scoped inter-agent). \n\nFor work that takes more than a minute, send a brief acknowledgement first (e.g. \"on it — checking the build\") and then a separate reply when done; do not leave the operator wondering whether you started.",
+            "description": "Send a message to the human operator. Available only to managers (`is_manager: true`); the configured interface adapter (Telegram, Discord, …) forwards it. \n\nThis is the ONLY channel back to the human — anything you write outside this tool is invisible to them. Use it to answer their DMs, surface progress on long-running work, escalate blockers, or proactively share something they should know. Do NOT use `dm` for human traffic (it is project-scoped inter-agent). \n\nFor work that takes more than a minute, send a brief acknowledgement first (e.g. \"on it — checking the build\") and then a separate reply when done; do not leave the operator wondering whether you started. \n\nAttach an `image` (jpg/png/webp/gif, ≤50MB) or `file` (any type, ≤50MB) by passing `{source: \"path\"|\"url\", value: \"<path or URL>\", caption?: \"<short caption>\"}`. Each of `text`, `image`, `file` lands as its own chat message; combine them in one call to send a screenshot with a follow-up sentence in a single tool invocation. At least one of `text`, `image`, `file` is required.",
             "inputSchema": {
                 "type": "object",
-                "required": ["text"],
                 "properties": {
                     "text":      {
                         "type": "string",
                         "description": "Plain text only — no markdown, no headings, no code fences (none of it renders on chat surfaces like Telegram). Use emojis sparingly to aid scanability (✅ done, ⚠️ caution, 🔧 working, ❓ question). Aim for short, chat-sized messages; split long output into multiple calls rather than sending a wall of text."
+                    },
+                    "image": {
+                        "type": "object",
+                        "description": "Image attachment. Sources: `path` (absolute path on the manager's machine) or `url` (publicly fetchable). Allowed types: jpg/jpeg/png/webp/gif. Path-source files must be ≤50MB.",
+                        "required": ["source", "value"],
+                        "properties": {
+                            "source":  { "type": "string", "enum": ["path", "url"] },
+                            "value":   { "type": "string", "description": "Absolute filesystem path or public URL." },
+                            "caption": { "type": "string", "description": "Optional caption rendered under the photo. Plain text, ≤1024 chars per Telegram." }
+                        },
+                        "additionalProperties": false
+                    },
+                    "file": {
+                        "type": "object",
+                        "description": "File attachment. Same sources as `image`, no mime restriction beyond Telegram's own. Path-source files must be ≤50MB.",
+                        "required": ["source", "value"],
+                        "properties": {
+                            "source":  { "type": "string", "enum": ["path", "url"] },
+                            "value":   { "type": "string" },
+                            "caption": { "type": "string" }
+                        },
+                        "additionalProperties": false
                     },
                     "thread_id": {
                         "type": "string",
@@ -257,9 +278,88 @@ async fn dm(ctx: &Ctx, args: Value) -> Result<Value, String> {
 
 #[derive(Deserialize)]
 struct ReplyToUserArgs {
-    text: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    image: Option<MediaArg>,
+    #[serde(default)]
+    file: Option<MediaArg>,
     #[serde(default)]
     thread_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MediaArg {
+    source: MediaSource,
+    value: String,
+    #[serde(default)]
+    caption: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum MediaSource {
+    Path,
+    Url,
+}
+
+/// Per-file size cap matching Telegram's bot-API ceiling for photo/document
+/// uploads. URLs bypass the local check — Telegram will validate on its end.
+const MEDIA_MAX_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Image extensions Telegram's `sendPhoto` reliably renders. We accept the
+/// caller's claim by extension; sniffing magic bytes would be more rigorous
+/// but the failure mode (Telegram rejects misnamed file) surfaces a
+/// recoverable error rather than data loss, so the cheap check earns its
+/// place over the expensive one.
+fn image_extension_allowed(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [".jpg", ".jpeg", ".png", ".webp", ".gif"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
+/// Validate a `path`-source media descriptor: file must exist, be ≤50MB,
+/// and (for images) carry an allowlisted extension. URL-source descriptors
+/// skip these checks — neither the size nor the mime is knowable without
+/// fetching, and Telegram performs both checks server-side anyway.
+fn validate_media(kind: &str, m: &MediaArg) -> Result<(), String> {
+    if matches!(m.source, MediaSource::Url) {
+        return Ok(());
+    }
+    let meta = std::fs::metadata(&m.value)
+        .map_err(|e| format!("reply_to_user: {kind} path not readable ({}): {e}", m.value))?;
+    if !meta.is_file() {
+        return Err(format!(
+            "reply_to_user: {kind} path is not a regular file: {}",
+            m.value
+        ));
+    }
+    if meta.len() > MEDIA_MAX_BYTES {
+        return Err(format!(
+            "reply_to_user: {kind} too large ({} bytes); 50MB cap per file",
+            meta.len()
+        ));
+    }
+    if kind == "image" && !image_extension_allowed(&m.value) {
+        return Err(format!(
+            "reply_to_user: image extension not in allowlist (jpg/jpeg/png/webp/gif): {}",
+            m.value
+        ));
+    }
+    Ok(())
+}
+
+fn payload_json(m: &MediaArg) -> String {
+    let source = match m.source {
+        MediaSource::Path => "path",
+        MediaSource::Url => "url",
+    };
+    let mut payload = json!({ "source": source, "value": m.value });
+    if let Some(caption) = &m.caption {
+        payload["caption"] = json!(caption);
+    }
+    payload.to_string()
 }
 
 async fn reply_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
@@ -274,19 +374,70 @@ async fn reply_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
             ctx.agent_id
         ));
     }
+    let text_present = a.text.as_deref().is_some_and(|t| !t.is_empty());
+    if !text_present && a.image.is_none() && a.file.is_none() {
+        return Err("reply_to_user: at least one of `text`, `image`, `file` must be set".into());
+    }
+    if let Some(m) = &a.image {
+        validate_media("image", m)?;
+    }
+    if let Some(m) = &a.file {
+        validate_media("file", m)?;
+    }
     let project = ctx.project().to_string();
     let recipient = "user:telegram";
-    let id = ctx
-        .store
-        .send_dm(
-            &project,
-            &ctx.agent_id,
-            recipient,
-            &a.text,
-            a.thread_id.as_deref(),
-        )
-        .map_err(|e| e.to_string())?;
-    Ok(content_json(&json!({ "id": id, "recipient": recipient })))
+    let thread = a.thread_id.as_deref();
+
+    let mut ids: Vec<i64> = Vec::with_capacity(3);
+    if text_present {
+        let id = ctx
+            .store
+            .send_dm(
+                &project,
+                &ctx.agent_id,
+                recipient,
+                a.text.as_deref().unwrap_or(""),
+                thread,
+            )
+            .map_err(|e| e.to_string())?;
+        ids.push(id);
+    }
+    if let Some(m) = &a.image {
+        let id = ctx
+            .store
+            .send_dm_kind(
+                &project,
+                &ctx.agent_id,
+                recipient,
+                m.caption.as_deref().unwrap_or(""),
+                thread,
+                "image",
+                &payload_json(m),
+            )
+            .map_err(|e| e.to_string())?;
+        ids.push(id);
+    }
+    if let Some(m) = &a.file {
+        let id = ctx
+            .store
+            .send_dm_kind(
+                &project,
+                &ctx.agent_id,
+                recipient,
+                m.caption.as_deref().unwrap_or(""),
+                thread,
+                "file",
+                &payload_json(m),
+            )
+            .map_err(|e| e.to_string())?;
+        ids.push(id);
+    }
+    // Back-compat: keep the legacy `id` field (= first inserted id) so
+    // existing text-only callers still see the same response shape.
+    let first = ids.first().copied().unwrap_or(0);
+    Ok(content_json(
+        &json!({ "id": first, "ids": ids, "recipient": recipient }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -481,5 +632,236 @@ async fn request_approval(ctx: &Ctx, args: Value) -> Result<Value, String> {
             })));
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::params;
+    use tempfile::NamedTempFile;
+
+    fn ctx_with_manager() -> (Ctx, NamedTempFile) {
+        let f = NamedTempFile::new().unwrap();
+        let store = Store::open(f.path()).unwrap();
+        store
+            .upsert_agent("p:mgr", "p", "P", "manager", "claude-code", true)
+            .unwrap();
+        (Ctx::new("p:mgr".to_string(), store), f)
+    }
+
+    fn fetch_message(store: &Store, id: i64) -> (String, Option<String>, Option<String>) {
+        let conn = store.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT text, kind, structured_payload FROM messages WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_text_only_back_compat() {
+        // Existing text-only callers see the legacy code path: kind +
+        // structured_payload stay NULL, response carries `id`. Pins R5
+        // back-compat from the umbrella's acceptance criteria.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = reply_to_user(&ctx, json!({ "text": "hello" }))
+            .await
+            .unwrap();
+        let id = resp["structuredContent"]["id"].as_i64().unwrap();
+        let (text, kind, payload) = fetch_message(&ctx.store, id);
+        assert_eq!(text, "hello");
+        assert!(kind.is_none(), "text-only must leave kind NULL");
+        assert!(payload.is_none());
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_image_url_inserts_structured_row() {
+        // URL source bypasses local validation — we trust the caller and
+        // let Telegram validate server-side. Pins the kind/payload columns.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = reply_to_user(
+            &ctx,
+            json!({
+                "image": {
+                    "source": "url",
+                    "value": "https://example.com/a.png",
+                    "caption": "PR ready"
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        let id = resp["structuredContent"]["id"].as_i64().unwrap();
+        let (text, kind, payload) = fetch_message(&ctx.store, id);
+        assert_eq!(text, "PR ready", "caption mirrors into text column");
+        assert_eq!(kind.as_deref(), Some("image"));
+        let p: Value = serde_json::from_str(&payload.unwrap()).unwrap();
+        assert_eq!(p["source"], "url");
+        assert_eq!(p["value"], "https://example.com/a.png");
+        assert_eq!(p["caption"], "PR ready");
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_image_path_round_trip() {
+        // path source: real file on disk under the size cap and within
+        // the mime allowlist. Pins the kind=image row + the structured
+        // payload string the bot's outbound dispatcher will parse.
+        let (ctx, _f) = ctx_with_manager();
+        let img = NamedTempFile::with_suffix(".png").unwrap();
+        std::fs::write(img.path(), b"not really a png").unwrap();
+        let resp = reply_to_user(
+            &ctx,
+            json!({
+                "image": {
+                    "source": "path",
+                    "value": img.path().to_str().unwrap(),
+                    "caption": "screenshot"
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        let id = resp["structuredContent"]["id"].as_i64().unwrap();
+        let (_, kind, payload) = fetch_message(&ctx.store, id);
+        assert_eq!(kind.as_deref(), Some("image"));
+        let p: Value = serde_json::from_str(&payload.unwrap()).unwrap();
+        assert_eq!(p["source"], "path");
+        assert_eq!(p["value"], img.path().to_str().unwrap());
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_text_plus_image_inserts_two_rows() {
+        // Multi-content shape: one tool call → one text row + one image
+        // row, returned as the `ids` array. Order is text-first, image-
+        // next so the operator reads the framing line before the photo.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = reply_to_user(
+            &ctx,
+            json!({
+                "text": "here's the latest design",
+                "image": { "source": "url", "value": "https://example.com/d.png" }
+            }),
+        )
+        .await
+        .unwrap();
+        let ids: Vec<i64> = resp["structuredContent"]["ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_i64().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        let (text0, kind0, _) = fetch_message(&ctx.store, ids[0]);
+        let (_, kind1, _) = fetch_message(&ctx.store, ids[1]);
+        assert_eq!(text0, "here's the latest design");
+        assert!(kind0.is_none(), "first row is text");
+        assert_eq!(kind1.as_deref(), Some("image"));
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_rejects_disallowed_image_extension() {
+        let (ctx, _f) = ctx_with_manager();
+        let f = NamedTempFile::with_suffix(".bmp").unwrap();
+        std::fs::write(f.path(), b"x").unwrap();
+        let err = reply_to_user(
+            &ctx,
+            json!({ "image": { "source": "path", "value": f.path().to_str().unwrap() } }),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("allowlist"),
+            "error must name the mime allowlist: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_rejects_oversize_path() {
+        let (ctx, _f) = ctx_with_manager();
+        let big = NamedTempFile::with_suffix(".png").unwrap();
+        // Sparse-write a file 1 byte past the 50MB cap — fast and doesn't
+        // need the bytes to be real.
+        big.as_file()
+            .set_len(MEDIA_MAX_BYTES + 1)
+            .expect("sparse extend");
+        let err = reply_to_user(
+            &ctx,
+            json!({ "image": { "source": "path", "value": big.path().to_str().unwrap() } }),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("50MB"),
+            "error must reference the size cap: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_rejects_missing_path() {
+        let (ctx, _f) = ctx_with_manager();
+        let err = reply_to_user(
+            &ctx,
+            json!({
+                "image": { "source": "path", "value": "/nonexistent/thing.png" }
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("not readable"),
+            "error must name the unreadable path: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_rejects_empty_call() {
+        let (ctx, _f) = ctx_with_manager();
+        let err = reply_to_user(&ctx, json!({})).await.unwrap_err();
+        assert!(
+            err.contains("at least one"),
+            "empty call must surface the at-least-one constraint: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_non_manager_is_rejected_before_validation() {
+        // R8 manager-gating: a worker call hits the is_manager check
+        // first, so we never even read the disk for path-source media.
+        let f = NamedTempFile::new().unwrap();
+        let store = Store::open(f.path()).unwrap();
+        store
+            .upsert_agent("p:dev", "p", "P", "dev", "claude-code", false)
+            .unwrap();
+        let ctx = Ctx::new("p:dev".to_string(), store);
+        let err = reply_to_user(
+            &ctx,
+            json!({
+                "image": { "source": "path", "value": "/nonexistent/x.png" }
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("only managers"),
+            "non-manager must be gated before media validation: {err}"
+        );
+    }
+
+    #[test]
+    fn image_extension_allowlist_accepts_canonical_set_and_rejects_others() {
+        for ok in [
+            "/tmp/a.jpg",
+            "/tmp/a.JPEG",
+            "/tmp/photo.PNG",
+            "/tmp/sticker.webp",
+            "/tmp/loop.gif",
+        ] {
+            assert!(image_extension_allowed(ok), "should accept: {ok}");
+        }
+        for bad in ["/tmp/a.bmp", "/tmp/a.tiff", "/tmp/a.svg", "/tmp/no_ext"] {
+            assert!(!image_extension_allowed(bad), "should reject: {bad}");
+        }
     }
 }

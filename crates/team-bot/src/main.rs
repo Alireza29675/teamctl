@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use rusqlite::{params, Connection};
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup};
+use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
 use tokio::sync::Mutex;
 
 #[derive(Parser, Clone)]
@@ -408,13 +408,18 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
         // is the SQL pre-filter; manager-level routing happens in Rust below
         // via `should_route` so multiple bots in the same project (one per
         // manager) don't fan out the same reply.
-        let forwardable: Vec<(i64, String, String)> = {
+        //
+        // T-086-A: rows now carry `kind` + `structured_payload` for image and
+        // file content. NULL `kind` means text (legacy callers + the
+        // text-only `reply_to_user` path), preserving back-compat against
+        // older databases without a forced migration.
+        let forwardable: Vec<MailboxRow> = {
             let c = state.conn.lock().await;
-            let rows: Vec<(i64, String, String)> = match state.manager_project() {
+            let rows: Vec<MailboxRow> = match state.manager_project() {
                 Some(project) => {
                     let mut stmt = c
                         .prepare(
-                            "SELECT m.id, m.sender, m.text FROM messages m
+                            "SELECT m.id, m.sender, m.text, m.kind, m.structured_payload FROM messages m
                              WHERE m.id > ?1
                                AND m.recipient = 'user:telegram'
                                AND m.acked_at IS NULL
@@ -422,57 +427,203 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
                              ORDER BY m.id",
                         )
                         .unwrap();
-                    stmt.query_map(params![last_msg_id, project], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                    })
-                    .unwrap()
-                    .flatten()
-                    .collect()
+                    stmt.query_map(params![last_msg_id, project], MailboxRow::from_row)
+                        .unwrap()
+                        .flatten()
+                        .collect()
                 }
                 None => {
                     let mut stmt = c
                         .prepare(
-                            "SELECT m.id, m.sender, m.text FROM messages m
+                            "SELECT m.id, m.sender, m.text, m.kind, m.structured_payload FROM messages m
                              WHERE m.id > ?1
                                AND m.recipient = 'user:telegram'
                                AND m.acked_at IS NULL
                              ORDER BY m.id",
                         )
                         .unwrap();
-                    stmt.query_map(params![last_msg_id], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                    })
-                    .unwrap()
-                    .flatten()
-                    .collect()
+                    stmt.query_map(params![last_msg_id], MailboxRow::from_row)
+                        .unwrap()
+                        .flatten()
+                        .collect()
                 }
             };
             rows
         };
-        for (id, sender, text) in forwardable {
-            last_msg_id = last_msg_id.max(id);
+        for row in forwardable {
+            last_msg_id = last_msg_id.max(row.id);
             // Per-manager scoping: only forward replies whose sender rolls up
             // to *this* bot's manager. Without this, every bot in the project
             // forwarded every reply (e.g. eng_lead's reply landing in pm and
             // marketing chats too). Unscoped bots take the back-compat path.
             let route_ok = {
                 let c = state.conn.lock().await;
-                should_route(state.manager.as_deref(), &sender, &c)
+                should_route(state.manager.as_deref(), &row.sender, &c)
             };
             if !route_ok {
                 continue;
             }
-            let _ = bot
-                .send_message(
-                    chat,
-                    format!("{}\n\n— replied by {sender}", render_plain(&text)),
-                )
-                .await;
+            forward_row(&bot, chat, &row).await;
             let c = state.conn.lock().await;
             let _ = c.execute(
                 "UPDATE messages SET acked_at = strftime('%s','now') WHERE id = ?1",
-                params![id],
+                params![row.id],
             );
+        }
+    }
+}
+
+/// One mailbox row in the shape the outbound loop forwards. `kind` is `None`
+/// for legacy text rows; structured kinds (image, file) carry the JSON
+/// payload describing source + value + optional caption.
+#[derive(Debug, Clone)]
+struct MailboxRow {
+    id: i64,
+    sender: String,
+    text: String,
+    kind: Option<String>,
+    payload: Option<String>,
+}
+
+impl MailboxRow {
+    fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: r.get(0)?,
+            sender: r.get(1)?,
+            text: r.get(2)?,
+            kind: r.get(3)?,
+            payload: r.get(4)?,
+        })
+    }
+}
+
+/// Parsed structured payload — `source` ("path"|"url"), `value` (the path or
+/// URL), optional caption. `parse_payload` turns the JSON string into this
+/// shape; failure cases fall back to text rendering with the raw payload
+/// surfaced so the operator still sees something.
+struct MediaPayload {
+    source: String,
+    value: String,
+    caption: Option<String>,
+}
+
+fn parse_payload(payload: &str) -> Option<MediaPayload> {
+    let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let source = v.get("source")?.as_str()?.to_string();
+    let value = v.get("value")?.as_str()?.to_string();
+    let caption = v
+        .get("caption")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+    Some(MediaPayload {
+        source,
+        value,
+        caption,
+    })
+}
+
+/// Build a teloxide `InputFile` from a parsed payload's source + value.
+/// `path` resolves to a local file; `url` parses the value as a URL the
+/// Telegram servers fetch directly.
+fn input_file_from(payload: &MediaPayload) -> Option<InputFile> {
+    match payload.source.as_str() {
+        "path" => Some(InputFile::file(&payload.value)),
+        "url" => Some(InputFile::url(payload.value.parse().ok()?)),
+        _ => None,
+    }
+}
+
+/// Decision the dispatcher makes for a row's `kind`. Kept as a plain enum so
+/// it's testable without instantiating a teloxide `Bot`; the actual API call
+/// happens in `forward_row` once the decision is made.
+#[derive(Debug, PartialEq, Eq)]
+enum DispatchKind {
+    Text,
+    Image,
+    File,
+    /// Structured row whose payload didn't parse — surface as a text
+    /// fallback so the operator sees the raw payload rather than nothing.
+    UnknownFallback,
+}
+
+fn classify_kind(kind: Option<&str>) -> DispatchKind {
+    match kind {
+        None | Some("text") | Some("") => DispatchKind::Text,
+        Some("image") => DispatchKind::Image,
+        Some("file") => DispatchKind::File,
+        _ => DispatchKind::UnknownFallback,
+    }
+}
+
+async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
+    let kind = classify_kind(row.kind.as_deref());
+    let attribution = format!("\n\n— replied by {}", row.sender);
+    match kind {
+        DispatchKind::Text => {
+            let _ = bot
+                .send_message(chat, format!("{}{attribution}", render_plain(&row.text)))
+                .await;
+        }
+        DispatchKind::Image | DispatchKind::File => {
+            let Some(payload) = row.payload.as_deref().and_then(parse_payload) else {
+                let _ = bot
+                    .send_message(
+                        chat,
+                        format!(
+                            "{} (media payload unparseable){attribution}",
+                            render_plain(&row.text)
+                        ),
+                    )
+                    .await;
+                return;
+            };
+            let Some(input) = input_file_from(&payload) else {
+                let _ = bot
+                    .send_message(
+                        chat,
+                        format!(
+                            "{} (unsupported media source `{}`){attribution}",
+                            render_plain(&row.text),
+                            payload.source
+                        ),
+                    )
+                    .await;
+                return;
+            };
+            let caption_text = payload
+                .caption
+                .as_deref()
+                .map(|c| format!("{}{attribution}", render_plain(c)))
+                .unwrap_or_else(|| attribution.trim_start().to_string());
+            let result = match kind {
+                DispatchKind::Image => bot
+                    .send_photo(chat, input)
+                    .caption(caption_text)
+                    .await
+                    .err(),
+                DispatchKind::File => bot
+                    .send_document(chat, input)
+                    .caption(caption_text)
+                    .await
+                    .err(),
+                _ => unreachable!(),
+            };
+            if let Some(e) = result {
+                tracing::warn!(
+                    "send_{} failed for mailbox row {}: {e}",
+                    if kind == DispatchKind::Image {
+                        "photo"
+                    } else {
+                        "document"
+                    },
+                    row.id
+                );
+            }
+        }
+        DispatchKind::UnknownFallback => {
+            let _ = bot
+                .send_message(chat, format!("{}{attribution}", render_plain(&row.text)))
+                .await;
         }
     }
 }
@@ -621,6 +772,174 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         seed(&conn);
         assert!(manager_of(&conn, "p:ghost").is_none());
+    }
+
+    // ── T-086-A dispatch tests ──────────────────────────────────
+
+    #[test]
+    fn classify_kind_treats_null_and_empty_as_text() {
+        // Back-compat pin: rows from before T-086-A migration have NULL
+        // kind; rows inserted via legacy `send_dm` still leave it NULL.
+        // Both must dispatch as plain text — otherwise older databases
+        // would suddenly fail the unknown-kind path.
+        assert_eq!(classify_kind(None), DispatchKind::Text);
+        assert_eq!(classify_kind(Some("text")), DispatchKind::Text);
+        assert_eq!(classify_kind(Some("")), DispatchKind::Text);
+    }
+
+    #[test]
+    fn classify_kind_routes_image_and_file() {
+        assert_eq!(classify_kind(Some("image")), DispatchKind::Image);
+        assert_eq!(classify_kind(Some("file")), DispatchKind::File);
+    }
+
+    #[test]
+    fn classify_kind_falls_back_for_unknown_kinds() {
+        // Forward-compat: a future kind ("reaction" once PR-E lands)
+        // surfaces as a text fallback rather than panicking on this
+        // crate's older binary.
+        assert_eq!(
+            classify_kind(Some("reaction")),
+            DispatchKind::UnknownFallback
+        );
+        assert_eq!(
+            classify_kind(Some("garbage")),
+            DispatchKind::UnknownFallback
+        );
+    }
+
+    #[test]
+    fn parse_payload_extracts_source_value_and_caption() {
+        let p = parse_payload(r#"{"source":"path","value":"/tmp/x.png","caption":"hi"}"#)
+            .expect("payload parses");
+        assert_eq!(p.source, "path");
+        assert_eq!(p.value, "/tmp/x.png");
+        assert_eq!(p.caption.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn parse_payload_handles_missing_caption() {
+        let p = parse_payload(r#"{"source":"url","value":"https://x.test/a.png"}"#)
+            .expect("payload parses");
+        assert_eq!(p.source, "url");
+        assert!(p.caption.is_none());
+    }
+
+    #[test]
+    fn parse_payload_returns_none_on_garbage() {
+        assert!(parse_payload("not json").is_none());
+        assert!(
+            parse_payload(r#"{"value":"x"}"#).is_none(),
+            "missing source"
+        );
+        assert!(
+            parse_payload(r#"{"source":"path"}"#).is_none(),
+            "missing value"
+        );
+    }
+
+    #[test]
+    fn input_file_from_path_and_url_both_construct() {
+        // We can't easily assert teloxide internals, but we can pin that
+        // both branches return Some() — the negative case (unknown
+        // source) is the regression risk and is covered by the next
+        // test.
+        let p = parse_payload(r#"{"source":"path","value":"/tmp/x.png"}"#).unwrap();
+        assert!(input_file_from(&p).is_some());
+        let p = parse_payload(r#"{"source":"url","value":"https://x.test/a.png"}"#).unwrap();
+        assert!(input_file_from(&p).is_some());
+    }
+
+    #[test]
+    fn input_file_from_unknown_source_returns_none() {
+        let p = MediaPayload {
+            source: "bytes".into(),
+            value: "abc".into(),
+            caption: None,
+        };
+        assert!(input_file_from(&p).is_none());
+    }
+
+    fn insert_row(
+        conn: &Connection,
+        sender: &str,
+        text: &str,
+        kind: Option<&str>,
+        payload: Option<&str>,
+    ) -> i64 {
+        let project = sender.split_once(':').map(|(p, _)| p).unwrap_or("p");
+        conn.execute(
+            "INSERT INTO messages (project_id, sender, recipient, text, sent_at, kind, structured_payload)
+             VALUES (?1, ?2, 'user:telegram', ?3, strftime('%s','now'), ?4, ?5)",
+            params![project, sender, text, kind, payload],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn outbound_select_returns_kind_and_payload_for_structured_rows() {
+        // Pins the SELECT-shape contract: outbound_loop's enriched query
+        // surfaces both new columns so the dispatcher can route on them.
+        // Without this, a structured row would still be fetched but with
+        // text-row defaults — silently degrading image/file to text.
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let id = insert_row(
+            &conn,
+            "p:eng_lead",
+            "shot",
+            Some("image"),
+            Some(r#"{"source":"path","value":"/tmp/a.png"}"#),
+        );
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.id, m.sender, m.text, m.kind, m.structured_payload FROM messages m
+                 WHERE m.id > ?1
+                   AND m.recipient = 'user:telegram'
+                   AND m.acked_at IS NULL
+                 ORDER BY m.id",
+            )
+            .unwrap();
+        let rows: Vec<MailboxRow> = stmt
+            .query_map(params![0i64], MailboxRow::from_row)
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id);
+        assert_eq!(rows[0].kind.as_deref(), Some("image"));
+        assert!(rows[0].payload.as_deref().unwrap().contains("/tmp/a.png"));
+    }
+
+    #[test]
+    fn outbound_select_returns_null_kind_for_legacy_text_rows() {
+        // Pre-T-086-A rows (and rows written by `send_dm`, which leaves
+        // kind NULL) still surface in the SELECT — the dispatcher's
+        // classify_kind treats NULL as Text, completing the back-compat
+        // round-trip.
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let id = insert_row(&conn, "p:eng_lead", "hello", None, None);
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.id, m.sender, m.text, m.kind, m.structured_payload FROM messages m
+                 WHERE m.id > ?1
+                   AND m.recipient = 'user:telegram'
+                   AND m.acked_at IS NULL
+                 ORDER BY m.id",
+            )
+            .unwrap();
+        let rows: Vec<MailboxRow> = stmt
+            .query_map(params![0i64], MailboxRow::from_row)
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id);
+        assert!(rows[0].kind.is_none());
+        assert!(rows[0].payload.is_none());
+        assert_eq!(classify_kind(rows[0].kind.as_deref()), DispatchKind::Text);
     }
 
     #[test]
