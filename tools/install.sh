@@ -46,9 +46,17 @@ case "$OS-$ARCH" in
 esac
 
 if [ "$VERSION" = "latest" ]; then
-  VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-            | grep '"tag_name":' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
-  if [ -z "$VERSION" ]; then
+  release_json="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")"
+  # Anchor on the `"tag_name":` field name. A heuristic that grabs
+  # the last quoted string on the line breaks on single-line JSON
+  # (the last quoted string is usually body content, not the tag).
+  if command -v jq >/dev/null 2>&1; then
+    VERSION="$(printf '%s' "$release_json" | jq -r '.tag_name')"
+  else
+    VERSION="$(printf '%s' "$release_json" \
+              | sed -nE 's/.*"tag_name": *"([^"]+)".*/\1/p' | head -1)"
+  fi
+  if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
     echo "could not resolve latest release tag from GitHub API" >&2
     exit 1
   fi
