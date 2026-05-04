@@ -583,6 +583,7 @@ mod tests {
             None,
             "image",
             payload,
+            None,
         )
         .unwrap();
         let msgs = s.inbox_peek("p:mgr", 10).unwrap();
@@ -600,7 +601,7 @@ mod tests {
         // message exactly as before T-086-A.
         let f = NamedTempFile::new().unwrap();
         let s = Store::open(f.path()).unwrap();
-        s.send_dm("p", "user:telegram", "p:mgr", "plain text", None)
+        s.send_dm("p", "user:telegram", "p:mgr", "plain text", None, None)
             .unwrap();
         let msgs = s.inbox_peek("p:mgr", 10).unwrap();
         assert_eq!(msgs.len(), 1);
