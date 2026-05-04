@@ -899,12 +899,9 @@ mod tests {
         // carries it forward so the bot's dispatcher attaches
         // `reply_parameters` on send.
         let (ctx, _f) = ctx_with_manager();
-        let resp = reply_to_user(
-            &ctx,
-            json!({ "text": "ack", "reply_to_message_id": 12345 }),
-        )
-        .await
-        .unwrap();
+        let resp = reply_to_user(&ctx, json!({ "text": "ack", "reply_to_message_id": 12345 }))
+            .await
+            .unwrap();
         let id = resp["structuredContent"]["id"].as_i64().unwrap();
         assert_eq!(fetch_telegram_msg_id(&ctx.store, id), Some(12345));
     }
@@ -916,9 +913,7 @@ mod tests {
         // did. Bot dispatcher reads NULL → omits `reply_parameters` →
         // message lands as a fresh post.
         let (ctx, _f) = ctx_with_manager();
-        let resp = reply_to_user(&ctx, json!({ "text": "ack" }))
-            .await
-            .unwrap();
+        let resp = reply_to_user(&ctx, json!({ "text": "ack" })).await.unwrap();
         let id = resp["structuredContent"]["id"].as_i64().unwrap();
         assert!(fetch_telegram_msg_id(&ctx.store, id).is_none());
     }
