@@ -30,6 +30,17 @@ pub struct Message {
     pub text: String,
     pub thread_id: Option<String>,
     pub sent_at: f64,
+    /// Mailbox-kind discriminator (T-086-A schema). `None` for legacy
+    /// text-only rows; `Some("image"|"file"|"media_error"|...)` for
+    /// structured rows the agent should handle differently from plain text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// JSON-encoded content descriptor for non-text rows. Shape depends on
+    /// `kind`: image/file rows carry `{path, caption?, mime?, size_bytes?}`;
+    /// media_error rows carry `{error, caption?}`. Agents parse this on
+    /// demand — text-only callers see `None` and ignore it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_payload: Option<String>,
 }
 
 impl Store {
@@ -131,7 +142,8 @@ impl Store {
     pub fn inbox_peek(&self, agent_id: &str, limit: usize) -> Result<Vec<Message>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT m.id, m.project_id, m.sender, m.recipient, m.text, m.thread_id, m.sent_at
+            "SELECT m.id, m.project_id, m.sender, m.recipient, m.text, m.thread_id, m.sent_at,
+                    m.kind, m.structured_payload
              FROM messages m
              WHERE m.acked_at IS NULL
                AND m.sender != ?1
@@ -156,6 +168,8 @@ impl Store {
                     text: r.get(4)?,
                     thread_id: r.get(5)?,
                     sent_at: r.get(6)?,
+                    kind: r.get(7)?,
+                    structured_payload: r.get(8)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -514,6 +528,48 @@ mod tests {
             .unwrap();
         assert_eq!(kind.as_deref(), Some("image"));
         assert_eq!(structured.as_deref(), Some(payload));
+    }
+
+    #[test]
+    fn inbox_peek_surfaces_kind_and_payload_for_structured_rows() {
+        // T-086-C contract: inbox_peek must surface the new columns so
+        // an agent inspecting a structured row sees the path/caption it
+        // needs to read bytes from disk. Without this, inbound media
+        // would land in the database but be invisible to the agent.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let payload = r#"{"path":"/tmp/in/7.jpg","mime":"image/jpeg","size_bytes":1024}"#;
+        s.send_dm_kind(
+            "p",
+            "user:telegram",
+            "p:mgr",
+            "look at this",
+            None,
+            "image",
+            payload,
+        )
+        .unwrap();
+        let msgs = s.inbox_peek("p:mgr", 10).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].kind.as_deref(), Some("image"));
+        assert_eq!(msgs[0].structured_payload.as_deref(), Some(payload));
+        assert_eq!(msgs[0].text, "look at this", "caption mirrors into text");
+    }
+
+    #[test]
+    fn inbox_peek_returns_null_kind_for_legacy_text_rows() {
+        // Back-compat round-trip: a row inserted via the legacy
+        // `send_dm` path comes back with `kind = None` and no payload,
+        // which the agent's JSON parser will treat as a plain text
+        // message exactly as before T-086-A.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        s.send_dm("p", "user:telegram", "p:mgr", "plain text", None)
+            .unwrap();
+        let msgs = s.inbox_peek("p:mgr", 10).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].kind.is_none());
+        assert!(msgs[0].structured_payload.is_none());
     }
 
     #[test]
