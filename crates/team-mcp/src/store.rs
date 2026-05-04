@@ -9,7 +9,7 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 
 pub struct Store {
-    conn: Mutex<Connection>,
+    pub(crate) conn: Mutex<Connection>,
 }
 
 fn try_open(path: &Path) -> Result<Connection> {
@@ -85,6 +85,43 @@ impl Store {
             "INSERT INTO messages (project_id, sender, recipient, text, thread_id, sent_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![project, sender, recipient, text, thread_id, Self::now()],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Insert a structured-content DM (image/file/etc.). `kind` is the
+    /// discriminator the bot's outbound dispatcher matches on; `payload` is
+    /// the JSON-encoded content descriptor (e.g. `{"source":"path",
+    /// "value":"/tmp/x.png","caption":"…"}`). The `text` column carries the
+    /// caption (if any) so legacy text-only readers still see something
+    /// meaningful; the structured payload is the source of truth for
+    /// dispatch.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_dm_kind(
+        &self,
+        project: &str,
+        sender: &str,
+        recipient: &str,
+        text: &str,
+        thread_id: Option<&str>,
+        kind: &str,
+        payload: &str,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO messages
+                (project_id, sender, recipient, text, thread_id, sent_at, kind, structured_payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                project,
+                sender,
+                recipient,
+                text,
+                thread_id,
+                Self::now(),
+                kind,
+                payload,
+            ],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -457,6 +494,52 @@ mod tests {
         assert_eq!(msgs[0].id, id);
         assert_eq!(s.inbox_ack(&[id]).unwrap(), 1);
         assert!(s.inbox_peek("hello:dev", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn send_dm_kind_persists_kind_and_payload() {
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let payload = r#"{"source":"path","value":"/tmp/x.png","caption":"hi"}"#;
+        let id = s
+            .send_dm_kind("p", "p:mgr", "user:telegram", "hi", None, "image", payload)
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        let (kind, structured): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT kind, structured_payload FROM messages WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind.as_deref(), Some("image"));
+        assert_eq!(structured.as_deref(), Some(payload));
+    }
+
+    #[test]
+    fn legacy_send_dm_leaves_kind_and_payload_null() {
+        // Back-compat pin: existing text-only callers route through `send_dm`
+        // unchanged. Both new columns must be NULL so readers that treat
+        // NULL as 'text' (the bot dispatch path) don't accidentally route a
+        // text row as media.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let id = s
+            .send_dm("p", "p:mgr", "user:telegram", "hello", None)
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        let (kind, structured): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT kind, structured_payload FROM messages WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(kind.is_none(), "legacy send_dm must leave kind NULL");
+        assert!(
+            structured.is_none(),
+            "legacy send_dm must leave structured_payload NULL"
+        );
     }
 
     #[test]
