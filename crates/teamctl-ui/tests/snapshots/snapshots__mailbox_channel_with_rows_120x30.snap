@@ -1,0 +1,34 @@
+---
+source: crates/teamctl-ui/tests/snapshots.rs
+expression: buffer_to_string(&buf)
+---
+┌ROSTER────────────────────┐┌DETAIL · writing:manager──────────────────────────────────┐┌MAILBOX───────────────────────┐
+│ *  manager               ││      (no scrollback yet — agent may be starting up)      ││ Inbox    Channel    Wire     │
+│                          ││                                                          ││[writing:dev1] stack rebased o│
+│                          ││                                                          ││[writing:critic] looks tight  │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+│                          ││                                                          ││                              │
+└──────────────────────────┘└──────────────────────────────────────────────────────────┘└──────────────────────────────┘
+Tab cycle panes  ·  [ / ] tabs · ⏎ open · ! broadcast · q quit                                       ? help · t tutorial

@@ -484,3 +484,73 @@ fn mailbox_first_layout_renders_channel_focused_at_120x30() {
     let buf = render_to_buffer(&app, 120, 30);
     insta::assert_snapshot!("mailbox_first_layout_120x30", buffer_to_string(&buf));
 }
+
+#[test]
+fn mailbox_pane_renders_channel_tab_with_rows() {
+    // T-079-E coverage extension: the existing
+    // `mailbox_pane_cycles_to_channel_tab_when_focused` pins the
+    // empty Channel tab; this fixture pins the populated shape so a
+    // future regression that fails to render channel rows shows up
+    // as a glyph diff rather than a behavioural surprise in the
+    // production TUI.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    app.cycle_focus();
+    app.cycle_focus();
+    app.cycle_mailbox_tab(); // Inbox → Channel
+    app.mailbox.extend(
+        teamctl_ui::mailbox::MailboxTab::Channel,
+        vec![
+            message(
+                21,
+                "writing:dev1",
+                "channel:writing:devs",
+                "stack rebased on main",
+            ),
+            message(22, "writing:critic", "channel:writing:devs", "looks tight"),
+        ],
+    );
+    let buf = render_to_buffer(&app, 120, 30);
+    insta::assert_snapshot!("mailbox_channel_with_rows_120x30", buffer_to_string(&buf));
+}
+
+#[test]
+fn mailbox_pane_renders_wire_tab_with_rows() {
+    // T-079-E coverage extension: the Wire tab carries
+    // project-broadcast traffic (recipient `channel:<project>:all`).
+    // Pinned here so regressions that confuse the Wire filter or
+    // its rendering surface show up immediately.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    app.cycle_focus();
+    app.cycle_focus();
+    app.cycle_mailbox_tab(); // Inbox → Channel
+    app.cycle_mailbox_tab(); // Channel → Wire
+    app.mailbox.extend(
+        teamctl_ui::mailbox::MailboxTab::Wire,
+        vec![
+            message(
+                31,
+                "user:cli",
+                "channel:writing:all",
+                "0.7.1 release cut · CHANGELOG updated",
+            ),
+            message(
+                32,
+                "writing:eng_lead",
+                "channel:writing:all",
+                "T-079 cluster Wave 3 dispatching",
+            ),
+        ],
+    );
+    let buf = render_to_buffer(&app, 120, 30);
+    insta::assert_snapshot!("mailbox_wire_with_rows_120x30", buffer_to_string(&buf));
+}
