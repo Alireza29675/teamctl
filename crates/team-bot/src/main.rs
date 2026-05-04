@@ -18,7 +18,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use rusqlite::{params, Connection};
 use teloxide::prelude::*;
-use teloxide::types::{BotCommand, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
+use teloxide::types::{
+    BotCommand, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, MessageId,
+    ReactionType,
+};
 use tokio::sync::Mutex;
 
 #[derive(Parser, Clone)]
@@ -615,6 +618,10 @@ enum DispatchKind {
     Text,
     Image,
     File,
+    /// T-086-E: outbound reaction. Payload carries `{telegram_msg_id, emoji}`;
+    /// the dispatcher routes through `setMessageReaction` rather than
+    /// sending a chat message.
+    Reaction,
     /// Structured row whose payload didn't parse — surface as a text
     /// fallback so the operator sees the raw payload rather than nothing.
     UnknownFallback,
@@ -625,8 +632,30 @@ fn classify_kind(kind: Option<&str>) -> DispatchKind {
         None | Some("text") | Some("") => DispatchKind::Text,
         Some("image") => DispatchKind::Image,
         Some("file") => DispatchKind::File,
+        Some("reaction") => DispatchKind::Reaction,
         _ => DispatchKind::UnknownFallback,
     }
+}
+
+/// Parsed reaction payload (T-086-E). The MCP layer writes
+/// `{"telegram_msg_id": <i64>, "emoji": "<str>"}`; this turns it back into a
+/// typed pair the dispatcher hands to `setMessageReaction`. Returns `None`
+/// when either field is missing or the wrong shape — the dispatcher's
+/// fallback then logs and skips rather than calling Telegram with bogus
+/// args.
+struct ReactionPayload {
+    telegram_msg_id: i64,
+    emoji: String,
+}
+
+fn parse_reaction_payload(payload: &str) -> Option<ReactionPayload> {
+    let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let telegram_msg_id = v.get("telegram_msg_id")?.as_i64()?;
+    let emoji = v.get("emoji")?.as_str()?.to_string();
+    Some(ReactionPayload {
+        telegram_msg_id,
+        emoji,
+    })
 }
 
 async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
@@ -692,6 +721,31 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
                     },
                     row.id
                 );
+            }
+        }
+        DispatchKind::Reaction => {
+            // T-086-E: reactions ride the existing kind discriminator; the
+            // dispatcher routes through `setMessageReaction` instead of a
+            // send-message call. Failure-mode (unparseable payload) logs +
+            // skips — no operator-visible chat noise, since a reaction is
+            // a soft signal anyway. Telegram-side rejection (not in chat,
+            // emoji disallowed, etc.) bubbles up via `tracing::warn!`.
+            let Some(reaction) = row.payload.as_deref().and_then(parse_reaction_payload) else {
+                tracing::warn!(
+                    "reaction payload unparseable for mailbox row {} (skipping)",
+                    row.id
+                );
+                return;
+            };
+            let result = bot
+                .set_message_reaction(chat, MessageId(reaction.telegram_msg_id as i32))
+                .reaction(vec![ReactionType::Emoji {
+                    emoji: reaction.emoji,
+                }])
+                .await
+                .err();
+            if let Some(e) = result {
+                tracing::warn!("set_message_reaction failed for row {}: {e}", row.id);
             }
         }
         DispatchKind::UnknownFallback => {
@@ -992,17 +1046,16 @@ mod tests {
 
     #[test]
     fn classify_kind_falls_back_for_unknown_kinds() {
-        // Forward-compat: a future kind ("reaction" once PR-E lands)
-        // surfaces as a text fallback rather than panicking on this
-        // crate's older binary.
-        assert_eq!(
-            classify_kind(Some("reaction")),
-            DispatchKind::UnknownFallback
-        );
+        // Forward-compat: kinds the binary doesn't recognise surface as
+        // a text fallback rather than panicking. T-086-A's prophetic
+        // example ("reaction") landed in T-086-E and now routes to its
+        // own arm (covered by `classify_kind_routes_reaction`); the
+        // fallback test stays useful by pinning truly-unknown strings.
         assert_eq!(
             classify_kind(Some("garbage")),
             DispatchKind::UnknownFallback
         );
+        assert_eq!(classify_kind(Some("custom")), DispatchKind::UnknownFallback);
     }
 
     #[test]
@@ -1587,5 +1640,64 @@ mod tests {
                 desc.len()
             );
         }
+    }
+
+    // ── T-086-E reaction dispatch ────────────────────────────────
+
+    #[test]
+    fn classify_kind_routes_reaction() {
+        // T-086-E adds a fourth kind alongside text/image/file. Future
+        // refactors that drop this arm should fail this test rather
+        // than silently degrading reactions to UnknownFallback (which
+        // would surface as text noise rather than an actual reaction).
+        assert_eq!(classify_kind(Some("reaction")), DispatchKind::Reaction);
+    }
+
+    #[test]
+    fn classify_kind_unknown_fallback_unchanged_for_other_strings() {
+        // Regression guard: T-086-E must not accidentally turn the
+        // `UnknownFallback` arm into a reaction match — only the
+        // exact string "reaction" routes to the new arm.
+        assert_eq!(
+            classify_kind(Some("reactions")),
+            DispatchKind::UnknownFallback
+        );
+        assert_eq!(classify_kind(Some("react")), DispatchKind::UnknownFallback);
+    }
+
+    #[test]
+    fn parse_reaction_payload_extracts_telegram_msg_id_and_emoji() {
+        let p = parse_reaction_payload(r#"{"telegram_msg_id":4242,"emoji":"👀"}"#)
+            .expect("payload parses");
+        assert_eq!(p.telegram_msg_id, 4242);
+        assert_eq!(p.emoji, "👀");
+    }
+
+    #[test]
+    fn parse_reaction_payload_returns_none_on_missing_fields() {
+        assert!(parse_reaction_payload("not json").is_none());
+        assert!(
+            parse_reaction_payload(r#"{"emoji":"👍"}"#).is_none(),
+            "missing telegram_msg_id"
+        );
+        assert!(
+            parse_reaction_payload(r#"{"telegram_msg_id":7}"#).is_none(),
+            "missing emoji"
+        );
+    }
+
+    #[test]
+    fn parse_reaction_payload_returns_none_on_wrong_types() {
+        // Defence-in-depth: a malformed payload (string in place of
+        // i64) shouldn't crash, just return None so the dispatcher
+        // falls back to the log-and-skip arm.
+        assert!(
+            parse_reaction_payload(r#"{"telegram_msg_id":"oops","emoji":"👍"}"#).is_none(),
+            "string telegram_msg_id"
+        );
+        assert!(
+            parse_reaction_payload(r#"{"telegram_msg_id":7,"emoji":42}"#).is_none(),
+            "non-string emoji"
+        );
     }
 }
