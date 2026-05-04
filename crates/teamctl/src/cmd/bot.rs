@@ -594,6 +594,11 @@ pub struct BotSpec {
     pub mailbox: PathBuf,
     pub token_env: String,
     pub chats_env: String,
+    /// Tmux prefix the running bot needs to compute the manager's tmux
+    /// session for slash-passthrough (T-086-G). Lifted from compose so a
+    /// project that overrides `supervisor.tmux_prefix` carries that override
+    /// through to the bot process.
+    pub tmux_prefix: String,
 }
 
 pub fn bot_specs(compose: &Compose) -> Vec<BotSpec> {
@@ -610,6 +615,7 @@ pub fn bot_specs(compose: &Compose) -> Vec<BotSpec> {
                     token_env: tg.bot_token_env.clone(),
                     chats_env: tg.chat_ids_env.clone(),
                     manager: mgr,
+                    tmux_prefix: prefix.clone(),
                 });
             }
         }
@@ -642,12 +648,14 @@ pub fn up_one(spec: &BotSpec, team_bot_bin: &Path, root: &Path) -> Result<bool> 
     }
 
     let cmd = format!(
-        "{bin} --mailbox {mb} --token {tok} --authorized-chat-ids {chats} --manager {mgr}",
+        "{bin} --mailbox {mb} --token {tok} --authorized-chat-ids {chats} \
+         --manager {mgr} --tmux-prefix {prefix}",
         bin = shlex_quote(&team_bot_bin.display().to_string()),
         mb = shlex_quote(&spec.mailbox.display().to_string()),
         tok = shlex_quote(&token),
         chats = shlex_quote(&chats),
         mgr = shlex_quote(&spec.manager),
+        prefix = shlex_quote(&spec.tmux_prefix),
     );
     let status = Command::new("tmux")
         .args([

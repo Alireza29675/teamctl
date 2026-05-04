@@ -85,6 +85,12 @@ Useful commands:
 - **`/dm <project>:<agent> <text>`** — escape hatch for talking to a
   different agent through the same bot. Useful in a pinch; not the
   daily-driver path.
+- **`/clear`, `/compact`, `/help`, …** — any slash command not
+  recognised by the bot above is **typed straight into the manager's
+  tmux session** (Claude Code only). So `/clear` from Telegram clears
+  the manager's conversation, `/compact` summarises it, and so on —
+  whatever the runtime exposes. Non-Claude-Code managers reply with a
+  feature-gate message naming the actual runtime.
 
 ## YAML it produces
 
@@ -113,3 +119,12 @@ TEAMCTL_TG_HEAD_EDITOR_CHATS=75473051
 - `.env` is in the shipped `.gitignore`. Never commit tokens.
 - One bot per manager keeps blast radius minimal: a leaked PM token
   doesn't expose eng_lead's approvals.
+- **Slash-passthrough trust posture**: the bot is per-manager and
+  chat-id-gated, so the operator owns the bot end-to-end. Slash
+  commands typed via Telegram run at the agent's privilege — the
+  same trust boundary the operator already extends via direct
+  `tmux attach` or `ssh` to the host. There is no allowlist on
+  slash content; if you wouldn't paste it into the agent's tmux
+  session yourself, don't paste it into Telegram either. Multi-user
+  shared bots are out of scope; if a future deployment needs them,
+  the slash-passthrough surface gains an allowlist.
