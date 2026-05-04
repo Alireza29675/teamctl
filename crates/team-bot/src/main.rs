@@ -10,6 +10,7 @@
 //! plus an adapter-specific transport.
 
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,6 +46,14 @@ struct Cli {
     /// Format: `<project>:<manager>`.
     #[arg(long, env = "TEAMCTL_MANAGER")]
     manager: Option<String>,
+
+    /// Tmux session prefix (matches `compose.global.supervisor.tmux_prefix`).
+    /// Used by slash-passthrough (T-086-G) to compute `<prefix><project>-<role>`
+    /// for the manager's tmux session. `teamctl bot up` populates this from
+    /// compose; the default matches `team-core`'s default prefix so a hand-
+    /// launched bot still works on a stock team.
+    #[arg(long, env = "TEAMCTL_TMUX_PREFIX", default_value = "t-")]
+    tmux_prefix: String,
 }
 
 struct State {
@@ -52,6 +61,10 @@ struct State {
     allow: Vec<i64>,
     /// `<project>:<manager>` if this instance is scoped; otherwise all managers.
     manager: Option<String>,
+    /// Tmux session prefix used by slash-passthrough to compute the manager's
+    /// session name. Stored on `State` so handle_message can reach it without
+    /// re-reading the CLI args.
+    tmux_prefix: String,
 }
 
 impl State {
@@ -93,6 +106,7 @@ async fn main() -> Result<()> {
         conn: Mutex::new(conn),
         allow,
         manager: cli.manager,
+        tmux_prefix: cli.tmux_prefix,
     });
 
     // Outbound: poll approvals + mailbox, surface to primary chat.
@@ -227,7 +241,8 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
                 "teamctl bot — connected to {mgr}\n\
                  Just type a message and it goes straight to {mgr}.\n\
                  /pending — show pending approvals\n\
-                 /dm <project>:<agent> <text> — send to a different agent (rare)"
+                 /dm <project>:<agent> <text> — send to a different agent (rare)\n\
+                 /<cmd> — slash-passthrough to {mgr}'s tmux session (Claude Code only)"
             ),
             None => "teamctl — Telegram interface\n\
                      /dm <project>:<agent> <message> — send a DM\n\
@@ -235,6 +250,42 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
                 .into(),
         };
         bot.send_message(msg.chat.id, body).await?;
+    } else if trimmed.starts_with('/') && state.manager.is_some() {
+        // T-086-G slash-passthrough: any unrecognised slash command on a
+        // manager-scoped bot gets typed straight into the manager's tmux
+        // session via `tmux send-keys`. Feature-gated on `runtime: claude-code`
+        // per Decision 6 (manager-only routing). Trust posture is "operator
+        // owns the bot" per Decision 7 — no allowlist on slash content; the
+        // bot is per-operator and chat-id-gated, the trust boundary is the
+        // same as the operator's existing `tmux attach` access.
+        let manager = state.manager.as_deref().unwrap();
+        let runtime_opt = {
+            let c = state.conn.lock().await;
+            agent_runtime(&c, manager)
+        };
+        let Some(runtime) = runtime_opt else {
+            bot.send_message(
+                msg.chat.id,
+                format!("unknown manager `{manager}` — slash-passthrough aborted"),
+            )
+            .await?;
+            return Ok(());
+        };
+        match slash_outcome(manager, &runtime, &state.tmux_prefix) {
+            SlashOutcome::Passthrough { session } => match tmux_send_keys(&session, trimmed) {
+                Ok(()) => {
+                    bot.send_message(msg.chat.id, format!("→ {manager}"))
+                        .await?;
+                }
+                Err(err) => {
+                    bot.send_message(msg.chat.id, format!("tmux error: {err}"))
+                        .await?;
+                }
+            },
+            SlashOutcome::Reject { reason } => {
+                bot.send_message(msg.chat.id, reason).await?;
+            }
+        }
     }
     Ok(())
 }
@@ -517,6 +568,80 @@ fn should_route(scoped: Option<&str>, agent_id: &str, conn: &Connection) -> bool
     };
     let routed = manager_of(conn, agent_id).unwrap_or_else(|| agent_id.to_string());
     routed == scoped
+}
+
+/// Look up the registered runtime for an agent. Used by slash-passthrough
+/// (T-086-G) to feature-gate the chord on `runtime: claude-code`. Returns
+/// `None` if the agent isn't in the mailbox's `agents` table.
+fn agent_runtime(conn: &Connection, agent_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT runtime FROM agents WHERE id = ?1",
+        params![agent_id],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Decision returned by `slash_outcome` — either we have a tmux session to
+/// type the slash command into, or a user-facing rejection message.
+#[derive(Debug, PartialEq, Eq)]
+enum SlashOutcome {
+    Passthrough { session: String },
+    Reject { reason: String },
+}
+
+/// Pure decision: given the manager id (`<project>:<role>`), the manager's
+/// runtime, and the configured tmux prefix, decide whether slash-passthrough
+/// fires and against which tmux session. Non-Claude-Code runtimes are
+/// rejected per Decision 6 (manager-only / CC-only routing); the rejection
+/// message names the actual runtime so the operator sees why.
+fn slash_outcome(manager: &str, runtime: &str, tmux_prefix: &str) -> SlashOutcome {
+    if runtime != "claude-code" {
+        return SlashOutcome::Reject {
+            reason: format!(
+                "slash-passthrough is only supported on Claude Code agents \
+                 (this manager runs `{runtime}`)."
+            ),
+        };
+    }
+    let (project, role) = match manager.split_once(':') {
+        Some((p, r)) => (p, r),
+        None => {
+            return SlashOutcome::Reject {
+                reason: format!("malformed manager id `{manager}` (expected `project:role`)."),
+            };
+        }
+    };
+    SlashOutcome::Passthrough {
+        session: format!("{tmux_prefix}{project}-{role}"),
+    }
+}
+
+/// Argv for the tmux send-keys invocation. Pulled out so unit tests pin the
+/// exact arg shape without spinning up tmux. The literal `Enter` keyword is
+/// what tells tmux to fire a Return after the body, which is what triggers
+/// the Claude Code prompt to actually process the slash command.
+fn tmux_send_keys_argv<'a>(session: &'a str, body: &'a str) -> [&'a str; 5] {
+    ["send-keys", "-t", session, body, "Enter"]
+}
+
+/// Real-world tmux send-keys wrapper. On failure, returns the verbatim error
+/// (R12 family — surface the cause to the operator rather than silent drop).
+fn tmux_send_keys(session: &str, body: &str) -> Result<(), String> {
+    let argv = tmux_send_keys_argv(session, body);
+    let output = Command::new("tmux")
+        .args(argv)
+        .output()
+        .map_err(|e| format!("invoke tmux: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let trimmed = stderr.trim();
+        if trimmed.is_empty() {
+            return Err(format!("tmux exit {}", output.status));
+        }
+        return Err(format!("tmux exit {}: {trimmed}", output.status));
+    }
+    Ok(())
 }
 
 /// Strip lightweight markdown so Telegram renders clean prose with emoji
@@ -861,5 +986,131 @@ mod tests {
             (delivered_at - 1234.5).abs() < 1e-6,
             "previously-set delivered_at must not be overwritten ({delivered_at})"
         );
+    }
+
+    // ── T-086-G slash-passthrough ─────────────────────────────────
+
+    #[test]
+    fn agent_runtime_returns_runtime_for_known_agent() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        // `seed` inserts p:eng_lead (manager, runtime "claude-code"),
+        // p:pm (manager), and p:dev1 (worker).
+        assert_eq!(
+            agent_runtime(&conn, "p:eng_lead"),
+            Some("claude-code".into())
+        );
+    }
+
+    #[test]
+    fn agent_runtime_returns_runtime_when_runtime_varies() {
+        // Hand-extend the seed with a non-CC manager so the lookup
+        // path is exercised against a runtime that the slash-passthrough
+        // gate would later reject.
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        conn.execute(
+            "INSERT OR IGNORE INTO agents (id, project_id, role, runtime, is_manager, reports_to)
+             VALUES ('p:codex_mgr','p','codex_mgr','codex',1,NULL)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(agent_runtime(&conn, "p:codex_mgr"), Some("codex".into()));
+    }
+
+    #[test]
+    fn agent_runtime_returns_none_for_unknown_agent() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        assert_eq!(agent_runtime(&conn, "p:ghost"), None);
+    }
+
+    #[test]
+    fn slash_outcome_passes_through_for_claude_code_runtime() {
+        let outcome = slash_outcome("writing:manager", "claude-code", "t-");
+        assert_eq!(
+            outcome,
+            SlashOutcome::Passthrough {
+                session: "t-writing-manager".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn slash_outcome_honours_custom_tmux_prefix() {
+        // `compose.global.supervisor.tmux_prefix` is operator-configurable.
+        // The session formatter must concatenate verbatim — no hidden
+        // dash-or-anything between prefix and project segment.
+        let outcome = slash_outcome("news:head_editor", "claude-code", "a-");
+        assert_eq!(
+            outcome,
+            SlashOutcome::Passthrough {
+                session: "a-news-head_editor".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn slash_outcome_rejects_codex_runtime_with_named_runtime() {
+        // Decision 6 ratify: non-CC managers reject slash-passthrough
+        // and the rejection message must name the actual runtime so the
+        // operator sees why nothing fired.
+        let outcome = slash_outcome("writing:manager", "codex", "t-");
+        let SlashOutcome::Reject { reason } = outcome else {
+            panic!("non-CC runtime must reject");
+        };
+        assert!(
+            reason.contains("Claude Code"),
+            "rejection should reference Claude Code: {reason}"
+        );
+        assert!(
+            reason.contains("codex"),
+            "rejection should name the actual runtime: {reason}"
+        );
+    }
+
+    #[test]
+    fn slash_outcome_rejects_gemini_runtime_with_named_runtime() {
+        let outcome = slash_outcome("writing:manager", "gemini", "t-");
+        let SlashOutcome::Reject { reason } = outcome else {
+            panic!("non-CC runtime must reject");
+        };
+        assert!(reason.contains("gemini"), "names the runtime: {reason}");
+    }
+
+    #[test]
+    fn slash_outcome_rejects_malformed_manager_id() {
+        // Defence in depth: if state.manager somehow lost the `:` (CLI
+        // misuse, hand-edited env), refuse to type into a session
+        // computed from a half-id rather than guess.
+        let outcome = slash_outcome("not-a-manager-id", "claude-code", "t-");
+        let SlashOutcome::Reject { reason } = outcome else {
+            panic!("malformed manager id must reject");
+        };
+        assert!(reason.contains("malformed"), "names the failure: {reason}");
+    }
+
+    #[test]
+    fn tmux_send_keys_argv_pins_send_keys_target_body_enter_shape() {
+        // Pinning the argv shape so a future refactor that drops the
+        // trailing literal `Enter` (which is what makes Claude Code
+        // actually process the slash command) shows up as a test fail
+        // rather than a silent passthrough that types but never submits.
+        let argv = tmux_send_keys_argv("t-writing-manager", "/clear");
+        assert_eq!(
+            argv,
+            ["send-keys", "-t", "t-writing-manager", "/clear", "Enter"]
+        );
+    }
+
+    #[test]
+    fn tmux_send_keys_argv_passes_body_verbatim_no_quote_munging() {
+        // `Command::args` doesn't shell-quote — argv positions are passed
+        // straight through. Tests pin that bodies with spaces / quotes
+        // travel as a single arg without our code adding quoting that
+        // tmux would then take literally.
+        let argv = tmux_send_keys_argv("sess", "/compact focus on the cascade");
+        assert_eq!(argv[3], "/compact focus on the cascade");
+        assert_eq!(argv[4], "Enter");
     }
 }
