@@ -9,7 +9,7 @@
 //! mirror this crate's shape: an async loop against the same SQLite mailbox
 //! plus an adapter-specific transport.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +17,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use rusqlite::{params, Connection};
+use teloxide::net::Download;
 use teloxide::prelude::*;
 use teloxide::types::{BotCommand, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
 use tokio::sync::Mutex;
@@ -65,6 +66,11 @@ struct State {
     /// session name. Stored on `State` so handle_message can reach it without
     /// re-reading the CLI args.
     tmux_prefix: String,
+    /// Directory to write inbound media downloads under (T-086-C). Resolved
+    /// from the mailbox path's parent (`<root>/.team/state/inbound-media/`)
+    /// at startup so the bot stays self-contained — no extra CLI flag, no
+    /// config sync.
+    media_root: PathBuf,
 }
 
 impl State {
@@ -102,11 +108,17 @@ async fn main() -> Result<()> {
         .filter(|s| !s.is_empty())
         .filter_map(|s| s.parse().ok())
         .collect();
+    let media_root = cli
+        .mailbox
+        .parent()
+        .map(|p| p.join("inbound-media"))
+        .unwrap_or_else(|| PathBuf::from("inbound-media"));
     let state = Arc::new(State {
         conn: Mutex::new(conn),
         allow,
         manager: cli.manager,
         tmux_prefix: cli.tmux_prefix,
+        media_root,
     });
 
     // T-086-H: register the manager's runtime-appropriate slash commands
@@ -201,6 +213,13 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
 
     if !state.is_authorized(chat_id) {
         return Ok(());
+    }
+    // T-086-C inbound media: photos and documents arrive with `msg.text()`
+    // empty (the caption sits on `msg.caption()` instead). Detect before the
+    // text-routing chain — without this, media messages would silently fall
+    // through every arm and the operator would see no acknowledgement.
+    if msg.photo().is_some() || msg.document().is_some() {
+        return handle_inbound_media(&bot, &msg, &state).await;
     }
     if let Some(rest) = trimmed.strip_prefix("/dm ") {
         if let Some((target, body)) = rest.split_once(' ') {
@@ -865,6 +884,254 @@ fn commands_for_runtime(runtime: Option<&str>) -> Vec<BotCommand> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+// ── T-086-C inbound media ───────────────────────────────────────
+
+/// Photo vs. document — used to label the mailbox row's `kind`. The disk
+/// path naming is the same either way (`<row_id>.<ext>`), so this just
+/// drives the discriminator the agent reads via `inbox_peek`.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum MediaKind {
+    Image,
+    File,
+}
+
+/// Resolved enough information to download and record an inbound media
+/// message. `file_id` feeds `bot.get_file`; `extension` + `mime` ride into
+/// the structured payload so the agent can pick a vision-content shape on
+/// its own runtime.
+struct MediaIntent {
+    file_id: String,
+    extension: String,
+    mime: String,
+    kind: MediaKind,
+}
+
+/// Pick the largest photo size or fall back to a document; returns `None`
+/// when the message carries neither (caller should defer to the text path).
+/// Pulled out of `handle_inbound_media` so the picking rule is unit-testable
+/// without standing up a fake `Bot`.
+fn classify_media_intent(msg: &Message) -> Option<MediaIntent> {
+    if let Some(photos) = msg.photo() {
+        // Telegram delivers photos as a list of `PhotoSize` thumbnails — pick
+        // the largest by pixel count so the agent gets the highest fidelity
+        // available. Telegram's photo storage is always JPEG regardless of
+        // upload format, so we hard-code the extension + mime.
+        let largest = photos
+            .iter()
+            .max_by_key(|p| (p.width as u64).saturating_mul(p.height as u64))?;
+        return Some(MediaIntent {
+            file_id: largest.file.id.clone(),
+            extension: "jpg".into(),
+            mime: "image/jpeg".into(),
+            kind: MediaKind::Image,
+        });
+    }
+    if let Some(doc) = msg.document() {
+        let mime = doc
+            .mime_type
+            .as_ref()
+            .map(|m| m.essence_str().to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let extension = extension_for_document(doc.file_name.as_deref(), &mime);
+        // Telegram users often upload PNG/GIF as document (which preserves
+        // the original bytes vs. the jpeg recompression of `photo`); route
+        // those as Image so the agent's vision plumbing still picks them up.
+        let kind = if mime.starts_with("image/") {
+            MediaKind::Image
+        } else {
+            MediaKind::File
+        };
+        return Some(MediaIntent {
+            file_id: doc.file.id.clone(),
+            extension,
+            mime,
+            kind,
+        });
+    }
+    None
+}
+
+/// Pick the file extension to use for a document upload. Prefer the
+/// uploaded filename's extension when it's a clean ASCII alphanumeric
+/// suffix; fall back to the mime-type lookup table otherwise. Defensive
+/// against names like `report.pdf.bak` (uses `bak`) or `evil/../traversal`
+/// (the rsplit_once on '.' won't match a path separator on its own, but the
+/// alphanumeric guard keeps the result tame).
+fn extension_for_document(filename: Option<&str>, mime: &str) -> String {
+    if let Some(name) = filename {
+        if let Some((_, ext)) = name.rsplit_once('.') {
+            if !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return ext.to_ascii_lowercase();
+            }
+        }
+    }
+    extension_from_mime(mime).into()
+}
+
+/// Mime → file-extension lookup. Covers the common Telegram-deliverable
+/// shapes; everything unknown falls to `bin` so the on-disk file still
+/// exists and an agent can re-mime it via libmagic if it cares.
+fn extension_from_mime(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "application/pdf" => "pdf",
+        "text/plain" => "txt",
+        "text/csv" => "csv",
+        "application/zip" => "zip",
+        "application/json" => "json",
+        _ => "bin",
+    }
+}
+
+/// Compose the on-disk path for an inbound media row. `media_root` is the
+/// directory configured at startup (defaults to `<mailbox-parent>/inbound-
+/// media/`); the per-project subdirectory keeps a multi-project mailbox
+/// from colliding row ids across projects.
+fn inbound_media_path(media_root: &Path, project: &str, row_id: i64, extension: &str) -> PathBuf {
+    media_root
+        .join(project)
+        .join(format!("{row_id}.{extension}"))
+}
+
+/// JSON shape for a successful media row. Empty captions are omitted so
+/// agents reading the payload don't have to special-case the empty string.
+fn media_success_payload(path: &Path, caption: &str, mime: &str, size_bytes: u64) -> String {
+    let mut payload = serde_json::json!({
+        "path": path.display().to_string(),
+        "mime": mime,
+        "size_bytes": size_bytes,
+    });
+    if !caption.is_empty() {
+        payload["caption"] = serde_json::Value::String(caption.to_string());
+    }
+    payload.to_string()
+}
+
+/// JSON shape for a failed media row (R12 — no silent drops). Captures the
+/// verbatim error so the agent can ack to the user with a real diagnostic.
+fn media_error_payload(caption: &str, error: &str) -> String {
+    let mut payload = serde_json::json!({ "error": error });
+    if !caption.is_empty() {
+        payload["caption"] = serde_json::Value::String(caption.to_string());
+    }
+    payload.to_string()
+}
+
+/// Stream a Telegram-hosted file to disk via `bot.get_file` + `bot.download_file`.
+/// On any error returns a verbatim `String` so the caller can fold it into
+/// the `media_error` mailbox row + the user-facing reply.
+async fn download_to(bot: &Bot, file_id: &str, path: &Path, dir: &Path) -> Result<u64, String> {
+    use tokio::io::AsyncWriteExt;
+    tokio::fs::create_dir_all(dir)
+        .await
+        .map_err(|e| format!("create_dir_all `{}`: {e}", dir.display()))?;
+    let file = bot
+        .get_file(file_id)
+        .await
+        .map_err(|e| format!("get_file: {e}"))?;
+    let mut handle = tokio::fs::File::create(path)
+        .await
+        .map_err(|e| format!("create file `{}`: {e}", path.display()))?;
+    bot.download_file(&file.path, &mut handle)
+        .await
+        .map_err(|e| format!("download_file: {e}"))?;
+    handle.flush().await.ok();
+    drop(handle);
+    let meta = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| format!("metadata: {e}"))?;
+    Ok(meta.len())
+}
+
+/// Branch from `handle_message` for inbound photo/document. The two-phase
+/// SQL pattern (insert placeholder → download → UPDATE on success or error)
+/// keeps the row visible to the agent's `inbox_peek` from the moment the
+/// message arrives — so an agent can see "media pending" while the download
+/// races a slow link, rather than nothing for an unbounded stretch.
+async fn handle_inbound_media(bot: &Bot, msg: &Message, state: &State) -> ResponseResult<()> {
+    let Some(manager) = state.manager.as_deref() else {
+        bot.send_message(
+            msg.chat.id,
+            "media uploads need a manager-scoped bot. \
+             Run `teamctl bot up` to attach this bot to a manager.",
+        )
+        .await?;
+        return Ok(());
+    };
+    let Some((project, _)) = manager.split_once(':') else {
+        // `bot setup` validates this — defensive only.
+        return Ok(());
+    };
+    let Some(intent) = classify_media_intent(msg) else {
+        return Ok(());
+    };
+    let caption = msg.caption().unwrap_or("").to_string();
+
+    // Insert a `media_pending` row first so we have a stable rowid to name
+    // the disk file with. Caller will UPDATE the row to `image`/`file` (or
+    // `media_error`) once the download resolves.
+    let placeholder_payload = serde_json::json!({ "caption": caption }).to_string();
+    let row_id_opt = {
+        let c = state.conn.lock().await;
+        match c.execute(
+            "INSERT INTO messages
+                (project_id, sender, recipient, text, sent_at, kind, structured_payload)
+             VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'),
+                     'media_pending', ?4)",
+            params![project, manager, &caption, placeholder_payload],
+        ) {
+            Ok(_) => Some(c.last_insert_rowid()),
+            Err(e) => {
+                tracing::error!("inbound media: failed to insert placeholder row: {e}");
+                None
+            }
+        }
+    };
+    let Some(row_id) = row_id_opt else {
+        bot.send_message(
+            msg.chat.id,
+            "internal error: could not record the message; please retry.",
+        )
+        .await?;
+        return Ok(());
+    };
+
+    let path = inbound_media_path(&state.media_root, project, row_id, &intent.extension);
+    let dir = path.parent().unwrap_or(&state.media_root).to_path_buf();
+    match download_to(bot, &intent.file_id, &path, &dir).await {
+        Ok(size_bytes) => {
+            let payload = media_success_payload(&path, &caption, &intent.mime, size_bytes);
+            let kind = match intent.kind {
+                MediaKind::Image => "image",
+                MediaKind::File => "file",
+            };
+            let c = state.conn.lock().await;
+            let _ = c.execute(
+                "UPDATE messages SET kind = ?1, structured_payload = ?2 WHERE id = ?3",
+                params![kind, payload, row_id],
+            );
+            drop(c);
+            bot.send_message(msg.chat.id, format!("→ {manager}"))
+                .await?;
+        }
+        Err(err) => {
+            let payload = media_error_payload(&caption, &err);
+            let c = state.conn.lock().await;
+            let _ = c.execute(
+                "UPDATE messages SET kind = 'media_error', structured_payload = ?1 WHERE id = ?2",
+                params![payload, row_id],
+            );
+            drop(c);
+            bot.send_message(msg.chat.id, format!("media download failed: {err}"))
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 /// Strip lightweight markdown so Telegram renders clean prose with emoji
@@ -1587,5 +1854,198 @@ mod tests {
                 desc.len()
             );
         }
+    }
+
+    // ── T-086-C inbound media helpers ─────────────────────────────
+
+    #[test]
+    fn extension_from_mime_covers_canonical_types() {
+        assert_eq!(extension_from_mime("image/png"), "png");
+        assert_eq!(extension_from_mime("image/jpeg"), "jpg");
+        assert_eq!(extension_from_mime("image/webp"), "webp");
+        assert_eq!(extension_from_mime("image/gif"), "gif");
+        assert_eq!(extension_from_mime("application/pdf"), "pdf");
+        assert_eq!(extension_from_mime("text/plain"), "txt");
+        assert_eq!(extension_from_mime("application/zip"), "zip");
+    }
+
+    #[test]
+    fn extension_from_mime_falls_back_to_bin_for_unknown() {
+        // Forward-compat: a mime we haven't mapped still produces a real
+        // file with a non-empty extension. The agent can re-mime via
+        // libmagic if it cares; we don't pretend we know.
+        assert_eq!(extension_from_mime("application/octet-stream"), "bin");
+        assert_eq!(extension_from_mime("video/mp4"), "bin");
+        assert_eq!(extension_from_mime(""), "bin");
+    }
+
+    #[test]
+    fn extension_for_document_prefers_filename_extension() {
+        // Filename's tail wins when it's a clean alphanumeric suffix —
+        // even when it disagrees with the upload's mime type. Telegram
+        // operators sometimes mislabel; trust the filename they typed.
+        assert_eq!(
+            extension_for_document(Some("report.pdf"), "application/octet-stream"),
+            "pdf"
+        );
+        assert_eq!(
+            extension_for_document(Some("snapshot.PNG"), "application/pdf"),
+            "png",
+            "case-folded to lowercase"
+        );
+    }
+
+    #[test]
+    fn extension_for_document_falls_back_to_mime_when_filename_missing() {
+        assert_eq!(extension_for_document(None, "image/png"), "png");
+        assert_eq!(
+            extension_for_document(None, "application/octet-stream"),
+            "bin"
+        );
+    }
+
+    #[test]
+    fn extension_for_document_rejects_funky_extensions() {
+        // No extension → mime fallback.
+        assert_eq!(extension_for_document(Some("README"), "text/plain"), "txt");
+        // Empty extension after dot → mime fallback.
+        assert_eq!(
+            extension_for_document(Some("trailing."), "text/plain"),
+            "txt"
+        );
+        // Non-alphanumeric chars → mime fallback (defends against weird
+        // shell/fs metacharacters that could foul a path).
+        assert_eq!(
+            extension_for_document(Some("name.weird/ext"), "image/png"),
+            "png"
+        );
+        // Over-long extension → mime fallback (sanity cap on what we'd
+        // accept verbatim from a user-controlled filename).
+        assert_eq!(
+            extension_for_document(Some("name.thisistoolongatail"), "image/png"),
+            "png"
+        );
+    }
+
+    #[test]
+    fn inbound_media_path_composes_root_project_rowid_extension() {
+        let root = std::path::Path::new("/srv/.team/state/inbound-media");
+        let path = inbound_media_path(root, "writing", 42, "jpg");
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/srv/.team/state/inbound-media/writing/42.jpg")
+        );
+    }
+
+    #[test]
+    fn media_success_payload_includes_path_mime_size_and_omits_empty_caption() {
+        let path = std::path::Path::new("/srv/.team/state/inbound-media/p/7.jpg");
+        let s = media_success_payload(path, "", "image/jpeg", 1024);
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["path"], "/srv/.team/state/inbound-media/p/7.jpg");
+        assert_eq!(v["mime"], "image/jpeg");
+        assert_eq!(v["size_bytes"], 1024);
+        assert!(
+            v.get("caption").is_none(),
+            "empty caption omitted from payload"
+        );
+    }
+
+    #[test]
+    fn media_success_payload_includes_caption_when_present() {
+        let path = std::path::Path::new("/x.png");
+        let s = media_success_payload(path, "look at this", "image/png", 32);
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["caption"], "look at this");
+    }
+
+    #[test]
+    fn media_error_payload_carries_verbose_error_and_optional_caption() {
+        // R12: media_error rows must surface the verbatim cause so the
+        // agent can ack to the user with a real diagnostic.
+        let s = media_error_payload("", "get_file: timed out");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["error"], "get_file: timed out");
+        assert!(v.get("caption").is_none());
+
+        let s = media_error_payload("a screenshot", "create file: permission denied");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["error"], "create file: permission denied");
+        assert_eq!(v["caption"], "a screenshot");
+    }
+
+    #[test]
+    fn placeholder_then_success_update_round_trip() {
+        // Pin the two-phase SQL pattern: insert a `media_pending` row,
+        // then UPDATE to `image` with the final payload. The kind +
+        // structured_payload must reflect the final state and the row
+        // id must remain stable so the on-disk filename matches.
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        conn.execute(
+            "INSERT INTO messages
+                (project_id, sender, recipient, text, sent_at, kind, structured_payload)
+             VALUES ('p', 'user:telegram', 'p:eng_lead', 'cap',
+                     strftime('%s','now'), 'media_pending', '{}')",
+            [],
+        )
+        .unwrap();
+        let id = conn.last_insert_rowid();
+
+        // Simulated post-download UPDATE.
+        let payload =
+            media_success_payload(std::path::Path::new("/x/p/3.jpg"), "cap", "image/jpeg", 128);
+        conn.execute(
+            "UPDATE messages SET kind = ?1, structured_payload = ?2 WHERE id = ?3",
+            params!["image", payload, id],
+        )
+        .unwrap();
+
+        let (kind, sp): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT kind, structured_payload FROM messages WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind.as_deref(), Some("image"));
+        let v: serde_json::Value = serde_json::from_str(sp.as_deref().unwrap()).unwrap();
+        assert_eq!(v["mime"], "image/jpeg");
+    }
+
+    #[test]
+    fn placeholder_then_error_update_writes_media_error_kind() {
+        // Mirror of the success path for the failure mode (R12). After
+        // the UPDATE the row's kind is `media_error` and the payload
+        // carries the verbatim cause — operator's reply prompt has the
+        // diagnostic in hand.
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        conn.execute(
+            "INSERT INTO messages
+                (project_id, sender, recipient, text, sent_at, kind, structured_payload)
+             VALUES ('p', 'user:telegram', 'p:eng_lead', '',
+                     strftime('%s','now'), 'media_pending', '{}')",
+            [],
+        )
+        .unwrap();
+        let id = conn.last_insert_rowid();
+
+        let payload = media_error_payload("", "download_file: 502 bad gateway");
+        conn.execute(
+            "UPDATE messages SET kind = 'media_error', structured_payload = ?1 WHERE id = ?2",
+            params![payload, id],
+        )
+        .unwrap();
+
+        let (kind, sp): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT kind, structured_payload FROM messages WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind.as_deref(), Some("media_error"));
+        assert!(sp.unwrap().contains("502 bad gateway"));
     }
 }
