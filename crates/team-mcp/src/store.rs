@@ -30,6 +30,13 @@ pub struct Message {
     pub text: String,
     pub thread_id: Option<String>,
     pub sent_at: f64,
+    /// Telegram message id this row pertains to (T-086-B). On inbound rows
+    /// (sender = `user:telegram`) it's the source message the operator
+    /// typed — agents read this to populate `reply_to_message_id` on a
+    /// threaded reply. On outbound rows (sender = `<project>:<agent>`) it's
+    /// the id `reply_parameters` should target. `None` on rows unrelated to
+    /// Telegram.
+    pub telegram_msg_id: Option<i64>,
 }
 
 impl Store {
@@ -71,7 +78,11 @@ impl Store {
             .unwrap_or(0.0)
     }
 
-    /// Insert a DM (recipient is `<project>:<agent>`).
+    /// Insert a DM (recipient is `<project>:<agent>`). `reply_to_message_id`
+    /// (T-086-B) is the Telegram message id this row replies to — populated
+    /// only on outbound `user:telegram` rows that the agent wants threaded
+    /// in the Telegram client; `None` everywhere else preserves back-compat.
+    #[allow(clippy::too_many_arguments)]
     pub fn send_dm(
         &self,
         project: &str,
@@ -79,12 +90,22 @@ impl Store {
         recipient: &str,
         text: &str,
         thread_id: Option<&str>,
+        reply_to_message_id: Option<i64>,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO messages (project_id, sender, recipient, text, thread_id, sent_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![project, sender, recipient, text, thread_id, Self::now()],
+            "INSERT INTO messages
+                (project_id, sender, recipient, text, thread_id, sent_at, telegram_msg_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                project,
+                sender,
+                recipient,
+                text,
+                thread_id,
+                Self::now(),
+                reply_to_message_id,
+            ],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -95,7 +116,9 @@ impl Store {
     /// "value":"/tmp/x.png","caption":"…"}`). The `text` column carries the
     /// caption (if any) so legacy text-only readers still see something
     /// meaningful; the structured payload is the source of truth for
-    /// dispatch.
+    /// dispatch. `reply_to_message_id` plumbs Telegram threading the same
+    /// way it does for `send_dm` — set on outbound media rows when the
+    /// agent wants the photo/file to nest under a specific user message.
     #[allow(clippy::too_many_arguments)]
     pub fn send_dm_kind(
         &self,
@@ -106,12 +129,14 @@ impl Store {
         thread_id: Option<&str>,
         kind: &str,
         payload: &str,
+        reply_to_message_id: Option<i64>,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO messages
-                (project_id, sender, recipient, text, thread_id, sent_at, kind, structured_payload)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (project_id, sender, recipient, text, thread_id, sent_at,
+                 kind, structured_payload, telegram_msg_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 project,
                 sender,
@@ -121,6 +146,7 @@ impl Store {
                 Self::now(),
                 kind,
                 payload,
+                reply_to_message_id,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -131,7 +157,8 @@ impl Store {
     pub fn inbox_peek(&self, agent_id: &str, limit: usize) -> Result<Vec<Message>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT m.id, m.project_id, m.sender, m.recipient, m.text, m.thread_id, m.sent_at
+            "SELECT m.id, m.project_id, m.sender, m.recipient, m.text,
+                    m.thread_id, m.sent_at, m.telegram_msg_id
              FROM messages m
              WHERE m.acked_at IS NULL
                AND m.sender != ?1
@@ -156,6 +183,7 @@ impl Store {
                     text: r.get(4)?,
                     thread_id: r.get(5)?,
                     sent_at: r.get(6)?,
+                    telegram_msg_id: r.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -487,7 +515,7 @@ mod tests {
         let f = NamedTempFile::new().unwrap();
         let s = Store::open(f.path()).unwrap();
         let id = s
-            .send_dm("hello", "hello:mgr", "hello:dev", "hi", None)
+            .send_dm("hello", "hello:mgr", "hello:dev", "hi", None, None)
             .unwrap();
         let msgs = s.inbox_peek("hello:dev", 10).unwrap();
         assert_eq!(msgs.len(), 1);
@@ -502,7 +530,16 @@ mod tests {
         let s = Store::open(f.path()).unwrap();
         let payload = r#"{"source":"path","value":"/tmp/x.png","caption":"hi"}"#;
         let id = s
-            .send_dm_kind("p", "p:mgr", "user:telegram", "hi", None, "image", payload)
+            .send_dm_kind(
+                "p",
+                "p:mgr",
+                "user:telegram",
+                "hi",
+                None,
+                "image",
+                payload,
+                None,
+            )
             .unwrap();
         let conn = s.conn.lock().unwrap();
         let (kind, structured): (Option<String>, Option<String>) = conn
@@ -525,7 +562,7 @@ mod tests {
         let f = NamedTempFile::new().unwrap();
         let s = Store::open(f.path()).unwrap();
         let id = s
-            .send_dm("p", "p:mgr", "user:telegram", "hello", None)
+            .send_dm("p", "p:mgr", "user:telegram", "hello", None, None)
             .unwrap();
         let conn = s.conn.lock().unwrap();
         let (kind, structured): (Option<String>, Option<String>) = conn
@@ -539,6 +576,120 @@ mod tests {
         assert!(
             structured.is_none(),
             "legacy send_dm must leave structured_payload NULL"
+        );
+    }
+
+    #[test]
+    fn send_dm_persists_reply_to_message_id_when_set() {
+        // T-086-B: outbound DMs that should thread under a specific
+        // Telegram user message carry the target id in the
+        // `telegram_msg_id` column. The bot's outbound dispatcher reads
+        // this and attaches `reply_parameters` on the send.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let id = s
+            .send_dm("p", "p:mgr", "user:telegram", "ack", None, Some(12345))
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        let stored: Option<i64> = conn
+            .query_row(
+                "SELECT telegram_msg_id FROM messages WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, Some(12345));
+    }
+
+    #[test]
+    fn send_dm_leaves_telegram_msg_id_null_when_omitted() {
+        // Back-compat pin: callers that don't pass a reply target leave
+        // the column NULL so the bot's dispatcher omits
+        // `reply_parameters` and the message lands as a fresh post.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let id = s
+            .send_dm("p", "p:mgr", "user:telegram", "ack", None, None)
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        let stored: Option<i64> = conn
+            .query_row(
+                "SELECT telegram_msg_id FROM messages WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(stored.is_none());
+    }
+
+    #[test]
+    fn send_dm_kind_persists_reply_to_message_id_alongside_payload() {
+        // Threading + media in one row: image attached as a reply.
+        // Both columns persist independently.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let id = s
+            .send_dm_kind(
+                "p",
+                "p:mgr",
+                "user:telegram",
+                "screenshot",
+                None,
+                "image",
+                r#"{"source":"url","value":"https://x.test/a.png"}"#,
+                Some(99),
+            )
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        let (kind, telegram_msg_id): (Option<String>, Option<i64>) = conn
+            .query_row(
+                "SELECT kind, telegram_msg_id FROM messages WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind.as_deref(), Some("image"));
+        assert_eq!(telegram_msg_id, Some(99));
+    }
+
+    #[test]
+    fn inbox_peek_surfaces_telegram_msg_id_field() {
+        // Agent-side: the field on the `Message` struct is what the MCP
+        // tool surfaces back to the caller, so the agent can read which
+        // Telegram id the operator's message had and thread its reply.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        // Hand-insert an inbound row with telegram_msg_id set, mimicking
+        // what team-bot's inbound capture would write.
+        {
+            let conn = s.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO projects (id, name) VALUES ('p','P')
+                 ON CONFLICT(id) DO NOTHING",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO agents (id, project_id, role, runtime, is_manager, reports_to)
+                 VALUES ('p:mgr','p','manager','claude-code',1,NULL)
+                 ON CONFLICT(id) DO NOTHING",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO messages
+                    (project_id, sender, recipient, text, sent_at, telegram_msg_id)
+                 VALUES ('p', 'user:telegram', 'p:mgr', 'hello', 0.0, 4242)",
+                [],
+            )
+            .unwrap();
+        }
+        let msgs = s.inbox_peek("p:mgr", 10).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(
+            msgs[0].telegram_msg_id,
+            Some(4242),
+            "inbox_peek must expose the captured Telegram id to the agent"
         );
     }
 
