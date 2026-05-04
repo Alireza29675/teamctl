@@ -141,6 +141,10 @@ pub fn schema() -> Value {
                     "thread_id": {
                         "type": "string",
                         "description": "Optional. Group this reply with an existing conversation thread. Pass the `thread_id` value you saw in the channel meta of the inbound message you are responding to; omit for a fresh thread."
+                    },
+                    "reply_to_message_id": {
+                        "type": "integer",
+                        "description": "Optional. Telegram message id to thread the reply under so it visually nests below the operator's message in the chat client. Pass the `telegram_msg_id` value from the inbound mailbox row you're answering. Omit when sending a fresh message. Applies to all of `text` / `image` / `file` in this call — they all reply to the same parent."
                     }
                 },
                 "additionalProperties": false
@@ -271,6 +275,7 @@ async fn dm(ctx: &Ctx, args: Value) -> Result<Value, String> {
             &recipient,
             &a.text,
             thread_id,
+            None,
         )
         .map_err(|e| e.to_string())?;
     Ok(content_json(&json!({ "id": id, "recipient": recipient })))
@@ -286,6 +291,12 @@ struct ReplyToUserArgs {
     file: Option<MediaArg>,
     #[serde(default)]
     thread_id: Option<String>,
+    /// Telegram message id to thread the reply under (T-086-B). Pass the
+    /// `telegram_msg_id` value from the inbound mailbox row you're
+    /// answering. Applies to all of `text` / `image` / `file` for this
+    /// call — they all visually nest under the same parent message.
+    #[serde(default)]
+    reply_to_message_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -387,6 +398,7 @@ async fn reply_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
     let project = ctx.project().to_string();
     let recipient = "user:telegram";
     let thread = a.thread_id.as_deref();
+    let reply_to = a.reply_to_message_id;
 
     let mut ids: Vec<i64> = Vec::with_capacity(3);
     if text_present {
@@ -398,6 +410,7 @@ async fn reply_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
                 recipient,
                 a.text.as_deref().unwrap_or(""),
                 thread,
+                reply_to,
             )
             .map_err(|e| e.to_string())?;
         ids.push(id);
@@ -413,6 +426,7 @@ async fn reply_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
                 thread,
                 "image",
                 &payload_json(m),
+                reply_to,
             )
             .map_err(|e| e.to_string())?;
         ids.push(id);
@@ -428,6 +442,7 @@ async fn reply_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
                 thread,
                 "file",
                 &payload_json(m),
+                reply_to,
             )
             .map_err(|e| e.to_string())?;
         ids.push(id);
@@ -862,6 +877,105 @@ mod tests {
         }
         for bad in ["/tmp/a.bmp", "/tmp/a.tiff", "/tmp/a.svg", "/tmp/no_ext"] {
             assert!(!image_extension_allowed(bad), "should reject: {bad}");
+        }
+    }
+
+    // ── T-086-B reply_to_message_id ────────────────────────────────
+
+    fn fetch_telegram_msg_id(store: &Store, id: i64) -> Option<i64> {
+        let conn = store.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT telegram_msg_id FROM messages WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_threads_text_when_reply_to_message_id_set() {
+        // T-086-B affirmative path: agent passes the inbound
+        // `telegram_msg_id` as `reply_to_message_id`; the outbound row
+        // carries it forward so the bot's dispatcher attaches
+        // `reply_parameters` on send.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = reply_to_user(
+            &ctx,
+            json!({ "text": "ack", "reply_to_message_id": 12345 }),
+        )
+        .await
+        .unwrap();
+        let id = resp["structuredContent"]["id"].as_i64().unwrap();
+        assert_eq!(fetch_telegram_msg_id(&ctx.store, id), Some(12345));
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_text_only_back_compat_leaves_telegram_msg_id_null() {
+        // R5 back-compat: existing callers that don't pass
+        // `reply_to_message_id` see the same NULL column they always
+        // did. Bot dispatcher reads NULL → omits `reply_parameters` →
+        // message lands as a fresh post.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = reply_to_user(&ctx, json!({ "text": "ack" }))
+            .await
+            .unwrap();
+        let id = resp["structuredContent"]["id"].as_i64().unwrap();
+        assert!(fetch_telegram_msg_id(&ctx.store, id).is_none());
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_threads_image_when_reply_to_message_id_set() {
+        // Threading + media: image attached as a reply nests under
+        // the parent message in Telegram. The outbound media row
+        // carries the same `telegram_msg_id` the text path does.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = reply_to_user(
+            &ctx,
+            json!({
+                "image": {
+                    "source": "url",
+                    "value": "https://example.com/a.png",
+                    "caption": "screenshot"
+                },
+                "reply_to_message_id": 7
+            }),
+        )
+        .await
+        .unwrap();
+        let id = resp["structuredContent"]["id"].as_i64().unwrap();
+        assert_eq!(fetch_telegram_msg_id(&ctx.store, id), Some(7));
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_text_plus_image_share_one_reply_to_message_id() {
+        // Multi-content shape: one tool call → two outbound rows
+        // (text + image) — both inherit the same `reply_to_message_id`
+        // so the operator sees both replies threaded under the same
+        // parent in Telegram, not split into two separate threads.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = reply_to_user(
+            &ctx,
+            json!({
+                "text": "fixing",
+                "image": { "source": "url", "value": "https://example.com/d.png" },
+                "reply_to_message_id": 99
+            }),
+        )
+        .await
+        .unwrap();
+        let ids: Vec<i64> = resp["structuredContent"]["ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_i64().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 2);
+        for id in ids {
+            assert_eq!(
+                fetch_telegram_msg_id(&ctx.store, id),
+                Some(99),
+                "every row in the call shares the same reply target"
+            );
         }
     }
 }
