@@ -4,6 +4,53 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-05-04
+
+### Added
+
+- **Outbound media via `reply_to_user`** (T-086-A). Manager agents can
+  now send images and files to operators through the Telegram bot, with
+  optional captions. The `reply_to_user` MCP tool gains optional `image:
+  {source: "path"|"url", value, caption?}` and `file: {...}` fields.
+  Text-only callers continue working unchanged. Multi-content per call
+  yields separate Telegram messages in order; the response carries both
+  legacy `id` and a new `ids` array. Path-source files validated for
+  existence + ≤50MB Telegram bot limit + image extension allowlist
+  (jpg/jpeg/png/webp/gif). Manager-gating preserved — worker agents
+  cannot send media.
+- **Slash-passthrough to tmux session** (T-086-G), Claude-Code-only.
+  Telegram messages starting with `/` (e.g., `/clear`, `/compact`,
+  `/cost`) bypass mailbox routing and get typed directly into the
+  manager's tmux session via `tmux send-keys`. Feature-gated on
+  `runtime: claude-code`; non-CC managers respond with a clear reject
+  message naming the actual runtime. Trust posture: operator owns the
+  bot (single-operator deployment shape); arbitrary text typed via
+  slash-passthrough runs at agent privilege — same trust boundary the
+  operator already extends to the agent's tmux via direct ssh / tmux
+  attach.
+- **Telegram bot autocomplete via `setMyCommands`** (T-086-H). Each
+  manager-scoped CC bot registers a curated set of 12 Claude Code slash
+  commands (`/clear`, `/compact`, `/cost`, `/help`, `/init`, `/mcp`,
+  `/model`, `/permissions`, `/resume`, `/review`, `/status`, `/vim`)
+  on startup so the operator gets an autocomplete menu when typing
+  `/`. Pairs with the slash-passthrough above for clean operator UX.
+  Hyphenated CC commands and login flows excluded (Telegram's bot-API
+  restricts command names to `[a-z0-9_]`; login flows are awkward over
+  chat). Best-effort registration: a Telegram API failure logs a
+  warning and bot startup continues; slash-passthrough still works
+  manually. Non-CC managers register no commands (clean degrade).
+
+### Fixed
+
+- **TUI chord-arm casing-fold across remaining Ctrl+letter chords**
+  (T-082). Following 0.7.1's Ctrl+W/M case-fold fix, sweeps the same
+  bug class for `Ctrl+H` / `Ctrl+J` / `Ctrl+K` / `Ctrl+L` (split
+  cycling) and `Ctrl+Q` (close-focused-split). All five chord arms
+  now accept both lowercase and uppercase Char so they survive
+  CapsLock + Shift+Ctrl variants. Plain-q quit-confirm guarded with
+  `is_empty()` modifier check so plain-q doesn't shadow `Ctrl+q` close-
+  focused-split.
+
 ## [0.7.1] — 2026-05-04
 
 ### Changed
