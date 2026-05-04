@@ -18,7 +18,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use rusqlite::{params, Connection};
 use teloxide::prelude::*;
-use teloxide::types::{BotCommand, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
+use teloxide::types::{
+    BotCommand, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, MessageId,
+    ReplyParameters,
+};
 use tokio::sync::Mutex;
 
 #[derive(Parser, Clone)]
@@ -202,14 +205,20 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
     if !state.is_authorized(chat_id) {
         return Ok(());
     }
+    // T-086-B: capture the inbound Telegram message id on every mailbox
+    // row we write so agents (via `inbox_peek`) can read it back as
+    // `telegram_msg_id` and pass it through `reply_to_message_id` to
+    // thread their reply.
+    let inbound_msg_id: i64 = msg.id.0 as i64;
     if let Some(rest) = trimmed.strip_prefix("/dm ") {
         if let Some((target, body)) = rest.split_once(' ') {
             if let Some((project, _)) = target.split_once(':') {
                 let c = state.conn.lock().await;
                 let _ = c.execute(
-                    "INSERT INTO messages (project_id, sender, recipient, text, sent_at)
-                     VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'))",
-                    params![project, target, body],
+                    "INSERT INTO messages
+                        (project_id, sender, recipient, text, sent_at, telegram_msg_id)
+                     VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4)",
+                    params![project, target, body, inbound_msg_id],
                 );
                 drop(c);
                 bot.send_message(msg.chat.id, format!("→ {target}")).await?;
@@ -224,9 +233,10 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
         if let Some((project, _)) = target.split_once(':') {
             let c = state.conn.lock().await;
             let _ = c.execute(
-                "INSERT INTO messages (project_id, sender, recipient, text, sent_at)
-                 VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'))",
-                params![project, target, trimmed],
+                "INSERT INTO messages
+                    (project_id, sender, recipient, text, sent_at, telegram_msg_id)
+                 VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4)",
+                params![project, target, trimmed, inbound_msg_id],
             );
             drop(c);
             bot.send_message(msg.chat.id, format!("→ {target}")).await?;
@@ -493,7 +503,9 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
                 Some(project) => {
                     let mut stmt = c
                         .prepare(
-                            "SELECT m.id, m.sender, m.text, m.kind, m.structured_payload FROM messages m
+                            "SELECT m.id, m.sender, m.text, m.kind, m.structured_payload,
+                                    m.telegram_msg_id
+                             FROM messages m
                              WHERE m.id > ?1
                                AND m.recipient = 'user:telegram'
                                AND m.acked_at IS NULL
@@ -509,7 +521,9 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
                 None => {
                     let mut stmt = c
                         .prepare(
-                            "SELECT m.id, m.sender, m.text, m.kind, m.structured_payload FROM messages m
+                            "SELECT m.id, m.sender, m.text, m.kind, m.structured_payload,
+                                    m.telegram_msg_id
+                             FROM messages m
                              WHERE m.id > ?1
                                AND m.recipient = 'user:telegram'
                                AND m.acked_at IS NULL
@@ -549,7 +563,10 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
 
 /// One mailbox row in the shape the outbound loop forwards. `kind` is `None`
 /// for legacy text rows; structured kinds (image, file) carry the JSON
-/// payload describing source + value + optional caption.
+/// payload describing source + value + optional caption. `telegram_msg_id`
+/// (T-086-B) is the Telegram message id this row should reply to — when
+/// `Some`, the dispatcher attaches `reply_parameters` so the outbound
+/// message visually nests under the operator's earlier message.
 #[derive(Debug, Clone)]
 struct MailboxRow {
     id: i64,
@@ -557,6 +574,7 @@ struct MailboxRow {
     text: String,
     kind: Option<String>,
     payload: Option<String>,
+    telegram_msg_id: Option<i64>,
 }
 
 impl MailboxRow {
@@ -567,8 +585,17 @@ impl MailboxRow {
             text: r.get(2)?,
             kind: r.get(3)?,
             payload: r.get(4)?,
+            telegram_msg_id: r.get(5)?,
         })
     }
+}
+
+/// Build a teloxide `ReplyParameters` from a stored Telegram message id, or
+/// `None` when no threading is requested. Pulled out so unit tests pin the
+/// presence/absence call without spinning up a real `Bot` — the `i32` cast
+/// is safe because Telegram message ids stay within `i32` range.
+fn reply_parameters_for(telegram_msg_id: Option<i64>) -> Option<ReplyParameters> {
+    telegram_msg_id.map(|id| ReplyParameters::new(MessageId(id as i32)))
 }
 
 /// Parsed structured payload — `source` ("path"|"url"), `value` (the path or
@@ -632,11 +659,15 @@ fn classify_kind(kind: Option<&str>) -> DispatchKind {
 async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
     let kind = classify_kind(row.kind.as_deref());
     let attribution = format!("\n\n— replied by {}", row.sender);
+    let reply = reply_parameters_for(row.telegram_msg_id);
     match kind {
         DispatchKind::Text => {
-            let _ = bot
-                .send_message(chat, format!("{}{attribution}", render_plain(&row.text)))
-                .await;
+            let mut req =
+                bot.send_message(chat, format!("{}{attribution}", render_plain(&row.text)));
+            if let Some(rp) = reply.clone() {
+                req = req.reply_parameters(rp);
+            }
+            let _ = req.await;
         }
         DispatchKind::Image | DispatchKind::File => {
             let Some(payload) = row.payload.as_deref().and_then(parse_payload) else {
@@ -670,16 +701,20 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
                 .map(|c| format!("{}{attribution}", render_plain(c)))
                 .unwrap_or_else(|| attribution.trim_start().to_string());
             let result = match kind {
-                DispatchKind::Image => bot
-                    .send_photo(chat, input)
-                    .caption(caption_text)
-                    .await
-                    .err(),
-                DispatchKind::File => bot
-                    .send_document(chat, input)
-                    .caption(caption_text)
-                    .await
-                    .err(),
+                DispatchKind::Image => {
+                    let mut req = bot.send_photo(chat, input).caption(caption_text);
+                    if let Some(rp) = reply.clone() {
+                        req = req.reply_parameters(rp);
+                    }
+                    req.await.err()
+                }
+                DispatchKind::File => {
+                    let mut req = bot.send_document(chat, input).caption(caption_text);
+                    if let Some(rp) = reply.clone() {
+                        req = req.reply_parameters(rp);
+                    }
+                    req.await.err()
+                }
                 _ => unreachable!(),
             };
             if let Some(e) = result {
@@ -1057,22 +1092,36 @@ mod tests {
         assert!(input_file_from(&p).is_none());
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn insert_row(
         conn: &Connection,
         sender: &str,
         text: &str,
         kind: Option<&str>,
         payload: Option<&str>,
+        telegram_msg_id: Option<i64>,
     ) -> i64 {
         let project = sender.split_once(':').map(|(p, _)| p).unwrap_or("p");
         conn.execute(
-            "INSERT INTO messages (project_id, sender, recipient, text, sent_at, kind, structured_payload)
-             VALUES (?1, ?2, 'user:telegram', ?3, strftime('%s','now'), ?4, ?5)",
-            params![project, sender, text, kind, payload],
+            "INSERT INTO messages
+                (project_id, sender, recipient, text, sent_at,
+                 kind, structured_payload, telegram_msg_id)
+             VALUES (?1, ?2, 'user:telegram', ?3, strftime('%s','now'), ?4, ?5, ?6)",
+            params![project, sender, text, kind, payload, telegram_msg_id],
         )
         .unwrap();
         conn.last_insert_rowid()
     }
+
+    /// SELECT shape `outbound_loop` runs — kept in sync with the production
+    /// query so MailboxRow's column ordering stays asserted.
+    const OUTBOUND_SELECT: &str =
+        "SELECT m.id, m.sender, m.text, m.kind, m.structured_payload, m.telegram_msg_id
+         FROM messages m
+         WHERE m.id > ?1
+           AND m.recipient = 'user:telegram'
+           AND m.acked_at IS NULL
+         ORDER BY m.id";
 
     #[test]
     fn outbound_select_returns_kind_and_payload_for_structured_rows() {
@@ -1088,16 +1137,9 @@ mod tests {
             "shot",
             Some("image"),
             Some(r#"{"source":"path","value":"/tmp/a.png"}"#),
+            None,
         );
-        let mut stmt = conn
-            .prepare(
-                "SELECT m.id, m.sender, m.text, m.kind, m.structured_payload FROM messages m
-                 WHERE m.id > ?1
-                   AND m.recipient = 'user:telegram'
-                   AND m.acked_at IS NULL
-                 ORDER BY m.id",
-            )
-            .unwrap();
+        let mut stmt = conn.prepare(OUTBOUND_SELECT).unwrap();
         let rows: Vec<MailboxRow> = stmt
             .query_map(params![0i64], MailboxRow::from_row)
             .unwrap()
@@ -1117,16 +1159,8 @@ mod tests {
         // round-trip.
         let conn = Connection::open_in_memory().unwrap();
         seed(&conn);
-        let id = insert_row(&conn, "p:eng_lead", "hello", None, None);
-        let mut stmt = conn
-            .prepare(
-                "SELECT m.id, m.sender, m.text, m.kind, m.structured_payload FROM messages m
-                 WHERE m.id > ?1
-                   AND m.recipient = 'user:telegram'
-                   AND m.acked_at IS NULL
-                 ORDER BY m.id",
-            )
-            .unwrap();
+        let id = insert_row(&conn, "p:eng_lead", "hello", None, None, None);
+        let mut stmt = conn.prepare(OUTBOUND_SELECT).unwrap();
         let rows: Vec<MailboxRow> = stmt
             .query_map(params![0i64], MailboxRow::from_row)
             .unwrap()
@@ -1136,7 +1170,29 @@ mod tests {
         assert_eq!(rows[0].id, id);
         assert!(rows[0].kind.is_none());
         assert!(rows[0].payload.is_none());
+        assert!(rows[0].telegram_msg_id.is_none());
         assert_eq!(classify_kind(rows[0].kind.as_deref()), DispatchKind::Text);
+    }
+
+    #[test]
+    fn outbound_select_returns_telegram_msg_id_when_set_for_threaded_rows() {
+        // T-086-B: outbound rows written with a `reply_to_message_id` carry
+        // it forward via `telegram_msg_id`. The dispatcher reads this and
+        // attaches `reply_parameters` on send. Pinning the round-trip
+        // guards against future SELECT shape regressions silently dropping
+        // the threading column.
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        let id = insert_row(&conn, "p:eng_lead", "ack", None, None, Some(7777));
+        let mut stmt = conn.prepare(OUTBOUND_SELECT).unwrap();
+        let rows: Vec<MailboxRow> = stmt
+            .query_map(params![0i64], MailboxRow::from_row)
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id);
+        assert_eq!(rows[0].telegram_msg_id, Some(7777));
     }
 
     #[test]
@@ -1587,5 +1643,36 @@ mod tests {
                 desc.len()
             );
         }
+    }
+
+    // ── T-086-B reply_parameters dispatch ────────────────────────
+
+    #[test]
+    fn reply_parameters_for_returns_none_when_telegram_msg_id_is_none() {
+        // Back-compat pin: rows without a threading target produce no
+        // ReplyParameters so the dispatcher doesn't attach them and the
+        // message lands as a fresh post.
+        assert!(reply_parameters_for(None).is_none());
+    }
+
+    #[test]
+    fn reply_parameters_for_returns_some_when_telegram_msg_id_is_set() {
+        // Affirmative pin: present id → constructed `ReplyParameters`
+        // ready for the teloxide builder. The actual MessageId carried
+        // is asserted via the by-value PartialEq.
+        let rp = reply_parameters_for(Some(12345)).expect("Some when set");
+        assert_eq!(rp.message_id, MessageId(12345));
+    }
+
+    #[test]
+    fn reply_parameters_for_safely_casts_within_i32_range() {
+        // Telegram message ids are i32; Rust API takes i64 for SQLite
+        // ergonomics. Pin that values comfortably within i32 range
+        // round-trip exactly — guards against a future refactor that
+        // drops the `as i32` cast and ends up with a wrap-around bug
+        // on large but valid ids.
+        let id: i64 = 2_000_000_000;
+        let rp = reply_parameters_for(Some(id)).expect("Some when set");
+        assert_eq!(rp.message_id, MessageId(id as i32));
     }
 }
