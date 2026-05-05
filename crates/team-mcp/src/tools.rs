@@ -162,6 +162,25 @@ pub fn schema() -> Value {
                 },
                 "additionalProperties": false
             }
+        },
+        {
+            "name": "react_to_user",
+            "description": "Apply an emoji reaction to a specific Telegram message from the operator. Available only to managers (`is_manager: true`). Use to acknowledge an inbound DM lightly without sending a full reply — 👀 to signal you're on it, ✍ to signal you're typing, 👍 to ack done. Each `react_to_user` call replaces any previous bot reaction on that message; pass an unsupported emoji and the call rejects with a clear error before reaching Telegram. The set of allowed emoji is the standard Telegram bot-reaction set (premium-tier-agnostic, ~75 emoji); use what you'd reach for in normal chat reactions. Pass the `telegram_msg_id` value from the inbound mailbox row you're reacting to.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["telegram_msg_id", "emoji"],
+                "properties": {
+                    "telegram_msg_id": {
+                        "type": "integer",
+                        "description": "Telegram message id to react to. Pass the `telegram_msg_id` value from the inbound mailbox row you're acknowledging."
+                    },
+                    "emoji": {
+                        "type": "string",
+                        "description": "Reaction emoji. Must be one of the allowed bot-reaction emojis (👍 👎 ❤️ 🔥 🥰 👏 😁 🤔 🤯 😱 🤬 😢 🎉 🤩 🤮 💩 🙏 👌 🕊 🤡 🥱 🥴 😍 🐳 💯 🤣 ⚡ 🍌 🏆 💔 🤨 😐 🍓 🍾 💋 🖕 😈 😴 😭 🤓 👻 👀 🎃 🙈 😇 😨 🤝 ✍ 🤗 🫡 🎅 🎄 ☃ 💅 🤪 🗿 🆒 💘 🙉 🦄 😘 💊 🙊 😎 👾 🤷 😡 plus a few combos like ❤️‍🔥 🌚 🌭 👨‍💻). Out-of-set emoji rejected at the MCP boundary."
+                    }
+                },
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -186,6 +205,7 @@ pub async fn call(ctx: &Ctx, params: Value) -> Result<Value, String> {
         "org_chart" => org_chart(ctx),
         "request_approval" => request_approval(ctx, p.arguments).await,
         "reply_to_user" => reply_to_user(ctx, p.arguments).await,
+        "react_to_user" => react_to_user(ctx, p.arguments).await,
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -437,6 +457,148 @@ async fn reply_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
     let first = ids.first().copied().unwrap_or(0);
     Ok(content_json(
         &json!({ "id": first, "ids": ids, "recipient": recipient }),
+    ))
+}
+
+/// Allowed bot-reaction emoji per Telegram's free-tier `setMessageReaction`
+/// allowlist (PHASE-1 §3.5). Premium-tier bots get a wider set; we don't
+/// assume premium so we mirror Telegram's free-tier allowlist verbatim.
+/// Out-of-set emoji are rejected at the MCP boundary so the agent sees a
+/// clean error rather than a Telegram API rejection three layers down. The
+/// allowlist constant is the single source of truth — if Telegram extends
+/// the set in a future bot-API release, refresh here.
+const BOT_REACTION_ALLOWLIST: &[&str] = &[
+    "👍",
+    "👎",
+    "❤️",
+    "🔥",
+    "🥰",
+    "👏",
+    "😁",
+    "🤔",
+    "🤯",
+    "😱",
+    "🤬",
+    "😢",
+    "🎉",
+    "🤩",
+    "🤮",
+    "💩",
+    "🙏",
+    "👌",
+    "🕊",
+    "🤡",
+    "🥱",
+    "🥴",
+    "😍",
+    "🐳",
+    "❤️‍🔥",
+    "🌚",
+    "🌭",
+    "💯",
+    "🤣",
+    "⚡",
+    "🍌",
+    "🏆",
+    "💔",
+    "🤨",
+    "😐",
+    "🍓",
+    "🍾",
+    "💋",
+    "🖕",
+    "😈",
+    "😴",
+    "😭",
+    "🤓",
+    "👻",
+    "👨‍💻",
+    "👀",
+    "🎃",
+    "🙈",
+    "😇",
+    "😨",
+    "🤝",
+    "✍️",
+    "🤗",
+    "🫡",
+    "🎅",
+    "🎄",
+    "☃️",
+    "💅",
+    "🤪",
+    "🗿",
+    "🆒",
+    "💘",
+    "🙉",
+    "🦄",
+    "😘",
+    "💊",
+    "🙊",
+    "😎",
+    "👾",
+    "🤷‍♂️",
+    "🤷",
+    "🤷‍♀️",
+    "😡",
+];
+
+fn is_allowed_reaction(emoji: &str) -> bool {
+    BOT_REACTION_ALLOWLIST.contains(&emoji)
+}
+
+#[derive(Deserialize)]
+struct ReactToUserArgs {
+    telegram_msg_id: i64,
+    emoji: String,
+}
+
+async fn react_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
+    let a: ReactToUserArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+    if !ctx
+        .store
+        .is_manager(&ctx.agent_id)
+        .map_err(|e| e.to_string())?
+    {
+        return Err(format!(
+            "react_to_user: only managers can react to the user (caller={})",
+            ctx.agent_id
+        ));
+    }
+    if !is_allowed_reaction(&a.emoji) {
+        return Err(format!(
+            "react_to_user: emoji `{}` is not in the bot-reaction allowlist; \
+             pick one of the supported reactions (see schema description).",
+            a.emoji
+        ));
+    }
+    let project = ctx.project().to_string();
+    let recipient = "user:telegram";
+    // Reaction rows ride the existing T-086-A `kind`+`structured_payload`
+    // discriminator. The bot's outbound dispatcher reads `kind = "reaction"`
+    // and routes to `setMessageReaction` instead of `sendMessage`. The
+    // `text` column carries the emoji as a fallback for legacy readers
+    // (e.g. if a non-Telegram interface adapter ever needs to render
+    // reactions as inline text).
+    let payload = json!({
+        "telegram_msg_id": a.telegram_msg_id,
+        "emoji": a.emoji,
+    })
+    .to_string();
+    let id = ctx
+        .store
+        .send_dm_kind(
+            &project,
+            &ctx.agent_id,
+            recipient,
+            &a.emoji,
+            None,
+            "reaction",
+            &payload,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(content_json(
+        &json!({ "id": id, "recipient": recipient, "telegram_msg_id": a.telegram_msg_id, "emoji": a.emoji }),
     ))
 }
 
@@ -862,6 +1024,113 @@ mod tests {
         }
         for bad in ["/tmp/a.bmp", "/tmp/a.tiff", "/tmp/a.svg", "/tmp/no_ext"] {
             assert!(!image_extension_allowed(bad), "should reject: {bad}");
+        }
+    }
+
+    // ── T-086-E react_to_user ──────────────────────────────────────
+
+    fn fetch_kind_and_payload(store: &Store, id: i64) -> (Option<String>, Option<String>) {
+        let conn = store.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT kind, structured_payload FROM messages WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn react_to_user_persists_kind_and_structured_payload() {
+        // Affirmative path: agent calls with a supported emoji + valid
+        // message id; row lands with `kind = "reaction"` and a payload
+        // carrying both fields the bot dispatcher needs.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = react_to_user(&ctx, json!({ "telegram_msg_id": 4242, "emoji": "👀" }))
+            .await
+            .unwrap();
+        let id = resp["structuredContent"]["id"].as_i64().unwrap();
+        let (kind, payload) = fetch_kind_and_payload(&ctx.store, id);
+        assert_eq!(kind.as_deref(), Some("reaction"));
+        let p: Value = serde_json::from_str(&payload.unwrap()).unwrap();
+        assert_eq!(p["telegram_msg_id"], 4242);
+        assert_eq!(p["emoji"], "👀");
+    }
+
+    #[tokio::test]
+    async fn react_to_user_returns_message_id_and_emoji_in_response() {
+        // The structured response surfaces both the new mailbox row id
+        // and the (telegram_msg_id, emoji) pair so callers can correlate
+        // their request with the eventual outbound API call.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = react_to_user(&ctx, json!({ "telegram_msg_id": 7, "emoji": "🎉" }))
+            .await
+            .unwrap();
+        assert_eq!(resp["structuredContent"]["telegram_msg_id"], 7);
+        assert_eq!(resp["structuredContent"]["emoji"], "🎉");
+        assert_eq!(resp["structuredContent"]["recipient"], "user:telegram");
+    }
+
+    #[tokio::test]
+    async fn react_to_user_rejects_out_of_allowlist_emoji() {
+        // Defence in depth: out-of-set emoji surfaces a clean MCP error
+        // rather than reaching Telegram and getting a server-side
+        // rejection that would land in the bot's tracing::warn! log
+        // instead of the agent's tool-call response.
+        let (ctx, _f) = ctx_with_manager();
+        let err = react_to_user(&ctx, json!({ "telegram_msg_id": 7, "emoji": "🍕" }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("allowlist"), "error names the gate: {err}");
+        assert!(
+            err.contains("🍕"),
+            "error includes the rejected emoji: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn react_to_user_non_manager_is_rejected_before_validation() {
+        // R8 manager-gating: a worker call hits the is_manager check
+        // first, so we never reach allowlist validation. Mirrors the
+        // PR #81 (T-086-A) reply_to_user gating shape.
+        let f = NamedTempFile::new().unwrap();
+        let store = Store::open(f.path()).unwrap();
+        store
+            .upsert_agent("p:dev", "p", "P", "dev", "claude-code", false)
+            .unwrap();
+        let ctx = Ctx::new("p:dev".to_string(), store);
+        let err = react_to_user(&ctx, json!({ "telegram_msg_id": 7, "emoji": "🍕" }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("only managers"),
+            "non-manager must be gated before allowlist check: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn react_to_user_rejects_missing_telegram_msg_id() {
+        // Schema's `required: ["telegram_msg_id", "emoji"]` is
+        // enforced at deserialization time; pinning the rejection so a
+        // future schema-shape regression surfaces here.
+        let (ctx, _f) = ctx_with_manager();
+        let err = react_to_user(&ctx, json!({ "emoji": "👍" }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("telegram_msg_id") || err.contains("missing"),
+            "missing required field error: {err}"
+        );
+    }
+
+    #[test]
+    fn bot_reaction_allowlist_accepts_canonical_set_and_rejects_pizza() {
+        // Spot-check both directions on the in-memory allowlist —
+        // canonical entries pass; an obvious non-entry fails.
+        for ok in ["👍", "👎", "❤️", "🎉", "👀", "🤝", "👨\u{200d}💻"] {
+            assert!(is_allowed_reaction(ok), "should accept: {ok}");
+        }
+        for bad in ["🍕", "🥑", "abc", ""] {
+            assert!(!is_allowed_reaction(bad), "should reject: {bad}");
         }
     }
 }
