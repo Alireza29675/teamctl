@@ -4,6 +4,99 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-05-08
+
+### Added
+
+- **`react_to_user` MCP tool** (T-086-E). Manager agents can now react
+  to operator Telegram messages with an emoji from a curated allowlist
+  (`👍 👎 ❤️ 🎉 👀 🤝 👨‍💻`). Reactions ride the `kind`+`structured_payload`
+  discriminator added in 0.7.2 — the bot dispatcher reads `kind =
+  "reaction"` and routes to Telegram's `setMessageReaction` API
+  instead of `sendMessage`. Off-allowlist emoji surface a clean MCP
+  error rather than reaching Telegram and getting silently rejected.
+  Manager-gating preserved — worker agents cannot react.
+- **`reply_to_user` reply-threading via `reply_to_message_id`**
+  (T-086-B). Agents can now thread replies under the operator's
+  prior message in Telegram by passing the inbound message's
+  `telegram_msg_id` as `reply_to_message_id`. Outbound rows carry
+  the field forward; `team-bot` attaches `reply_parameters` on
+  `sendMessage` / `sendPhoto` / `sendDocument` so the reply visually
+  nests under the parent in the chat client. Multi-content calls
+  (text + image in one tool invocation) share one threading target
+  so the operator sees both attachments under the same parent, not
+  split across threads. Back-compat preserved: callers omitting
+  the field land messages as fresh posts as before.
+- **Inbound media handling** (T-086-C). `team-bot` now detects
+  inbound photos and documents from the operator, downloads them to
+  a per-project disk cache (`<media_root>/<project>/<row_id>.<ext>`),
+  and writes a structured mailbox row (`kind = "image"` / `"file"`,
+  `structured_payload = {path, mime, size_bytes, caption?}`). Agents
+  read file bytes from the disk path via their runtime's vision
+  plumbing. Two-phase SQL pattern: insert `media_pending` placeholder
+  → download → UPDATE to final kind. Network/disk-full failures
+  surface as `media_error` rows with the verbatim cause (R12) so the
+  operator's reply prompt has a real diagnostic instead of silent
+  drop. Documents whose mime starts with `image/` are classified as
+  `kind = "image"` so vision plumbing picks them up — operators
+  often upload PNG/GIF as document to avoid Telegram's JPEG
+  recompression on `photo`.
+- **Version line in `teamctl --help`** (T-091). The help page's
+  first line now shows `teamctl <version>` so operators can
+  disambiguate "which version am I running" without a separate
+  `--version` round-trip. Pulls from `CARGO_PKG_VERSION` so it
+  auto-tracks the workspace version at release time.
+
+### Fixed
+
+- **`teamctl-ui` was never published to crates.io** (T-095). The
+  `teamctl ui` command resolves to `cargo install teamctl-ui` to
+  install the TUI on demand (intentionally opt-in to avoid pulling
+  the ratatui+crossterm dep tree into every install), but the
+  publish-crates workflow shipped only the four core crates and
+  skipped `teamctl-ui` — so `teamctl ui` failed with `could not find
+  teamctl-ui in registry crates-io`. The workflow now publishes
+  `teamctl-ui` alongside the others; v0.7.2 was manually backfilled
+  to crates.io to unblock the operator surface, and v0.7.3 onward
+  ships through the workflow.
+- **`tools/install.sh` tag-name parser broken on single-line GitHub
+  API responses** (T-085). The previous parser used a greedy
+  `sed -E 's/.*"([^"]+)".*/\1/'` after `grep '"tag_name":'`, which
+  works on pretty-printed JSON but captures the *last* quoted string
+  on a line — buried deep in the release `body` field's CHANGELOG
+  markdown when the API returns compact (single-line) JSON. The
+  installer then resolved `$VERSION` to garbage and failed at the
+  tarball fetch. Parser now anchors on the `tag_name:` field name
+  with `jq` when available and a tighter `sed -nE 's/.*"tag_name":
+  *"([^"]+)".*/\1/p'` fallback otherwise. Same behaviour on
+  pretty-printed input; correctly handles compact JSON.
+- **macOS-14 installer-smoke check rate-limited on shared runner
+  IPs** (T-088, folded into T-085). The smoke workflow ran
+  `install.sh` whose `curl https://api.github.com/repos/.../releases/latest`
+  hit the 60-req/hour unauthenticated-IP rate limit on shared CI
+  runner pools. Workflow now pre-resolves `TEAMCTL_VERSION` via
+  authenticated `gh release view` (5,000 req/hour for authenticated
+  requests) and exports it as an env var so install.sh skips its
+  own latest-resolver. Linux runners weren't affected in practice,
+  but the auth fix covers them too.
+
+### Changed
+
+- **`install.sh` served as a static asset on teamctl.run/install**
+  (PR #86, post-0.7.2 hot-fix). The previous `/install` endpoint
+  did a redirect to the raw GitHub URL, which Cloudflare Workers
+  occasionally responded to with cached redirect chains that
+  confused `curl -fsSL`. The Astro docs site now serves
+  `tools/install.sh` directly as `/install` — no redirect, no
+  caching surprises. `tools/install.sh` is now the source of truth
+  for the install path.
+- **`publish-crates.yml` workflow gains `workflow_dispatch`
+  trigger.** The release-tag-push trigger remains; the manual
+  trigger is for ad-hoc backfill scenarios (e.g. publishing a
+  newly-added crate against the current main branch without
+  cutting a fresh release). Version-match guard now scoped to
+  `push` events only.
+
 ## [0.7.2] — 2026-05-04
 
 ### Added
