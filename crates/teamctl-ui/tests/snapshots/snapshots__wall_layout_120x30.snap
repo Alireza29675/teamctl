@@ -1,6 +1,5 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-assertion_line: 433
 expression: buffer_to_string(&buf)
 ---
 ┌ * writing:manager ───────────────────────────────────────┐┌ * writing:worker-1 ──────────────────────────────────────┐

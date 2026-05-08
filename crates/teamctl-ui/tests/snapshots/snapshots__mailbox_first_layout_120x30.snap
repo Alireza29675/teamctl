@@ -1,6 +1,5 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-assertion_line: 453
 expression: buffer_to_string(&buf)
 ---
 ┌CHANNELS────────────────┐┌FEED────────────────────────────────────────────────────────────────┐┌PARTICIPANTS──────────┐

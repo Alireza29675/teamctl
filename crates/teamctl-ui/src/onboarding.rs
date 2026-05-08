@@ -22,11 +22,11 @@ pub struct Step {
 pub const STEPS: &[Step] = &[
     Step {
         heading: "Welcome to teamctl-ui",
-        body: "A live view of your team. Roster on the left, focused agent in the middle, mailbox on the right. Press any key to advance, Esc to leave.",
+        body: "A live view of your team. Agents sidebar on the left, with Detail above Mailbox on the right. Press any key to advance, Esc to leave.",
     },
     Step {
-        heading: "Roster + state glyphs",
-        body: "Each agent shows a single-cell glyph: ● running · ✉ unread · ! approval pending · ✕ stopped · ? unknown. Tab to focus the roster, j/k to walk it.",
+        heading: "Agents + state glyphs",
+        body: "Each agent shows a single-cell glyph: ● running · ✉ unread · ! approval pending · ✕ stopped · ? unknown. Tab to focus the Agents column, j/k to walk it.",
     },
     Step {
         heading: "Detail pane",

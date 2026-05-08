@@ -162,8 +162,8 @@ fn splash_dismisses_on_any_key() {
 
 #[test]
 fn tab_cycles_focus_through_panes() {
-    // Tab walks Roster → Detail → Mailbox → Roster uniformly. The
-    // wrap back to Roster is load-bearing — it's the bug T-074
+    // Tab walks Agents → Detail → Mailbox → Agents uniformly. The
+    // wrap back to Agents is load-bearing — it's the bug T-074
     // shipped a fix for, and the integration test layer needs to
     // catch any future regression.
     let mut h = Harness::new();
@@ -180,7 +180,7 @@ fn tab_cycles_focus_through_panes() {
     assert_eq!(
         h.app.focused_pane,
         Pane::Roster,
-        "Tab from Mailbox wraps back to Roster"
+        "Tab from Mailbox wraps back to Agents"
     );
 }
 
@@ -534,9 +534,9 @@ fn quit_confirm_overlay_blocks_layout_switch() {
 #[test]
 fn rendered_buffer_reflects_wall_after_ctrl_w() {
     // The named bug shape: state flips but the rendered view
-    // doesn't follow. Triptych shows ROSTER + MAILBOX pane titles;
+    // doesn't follow. Triptych shows AGENTS + MAILBOX pane titles;
     // Wall is a tile grid with no such pane chrome. If `app.layout`
-    // is Wall but `render_to_buffer` still emits ROSTER/MAILBOX,
+    // is Wall but `render_to_buffer` still emits AGENTS/MAILBOX,
     // the user sees "switching layouts doesn't work."
     let mut h = Harness::new();
     h.app.replace_team(fixture_team(
@@ -553,8 +553,8 @@ fn rendered_buffer_reflects_wall_after_ctrl_w() {
 
     let s = buffer_to_string(&render_to_buffer(&h.app, 120, 30));
     assert!(
-        !s.contains("ROSTER"),
-        "Wall buffer must not render the Triptych ROSTER pane title:\n{s}"
+        !s.contains("AGENTS"),
+        "Wall buffer must not render the Triptych AGENTS pane title:\n{s}"
     );
     assert!(
         !s.contains("MAILBOX"),
@@ -579,8 +579,8 @@ fn rendered_buffer_reflects_mailbox_first_after_ctrl_m() {
 
     let s = buffer_to_string(&render_to_buffer(&h.app, 120, 30));
     assert!(
-        !s.contains("ROSTER"),
-        "MailboxFirst buffer must not render the Triptych ROSTER pane title:\n{s}"
+        !s.contains("AGENTS"),
+        "MailboxFirst buffer must not render the Triptych AGENTS pane title:\n{s}"
     );
     assert!(
         !s.contains("DETAIL"),

@@ -1,21 +1,21 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-expression: s
+expression: buffer_to_string(&buf)
 ---
 ┌AGENTS────────────────────┐┌DETAIL · writing:manager──────────────────────────────────────────────────────────────────┐
-│ *  manager               ││┌ * writing:manager ─────────┐┌ * writing:dev1 ────────────┐┌ * writing:critic ──────────┐│
-│ *  dev1                  │││(focus this split to stream)││(focus this split to stream)││(focus this split to stream)││
-│ *  dev2                  │││                            ││                            ││                            ││
-│ *  critic                │││                            ││                            ││                            ││
-│                          │││                            ││                            ││                            ││
-│                          │││                            ││                            ││                            ││
-│                          │││                            │└────────────────────────────┘│                            ││
-│                          │││                            │┌ * writing:dev2 ────────────┐│                            ││
-│                          │││                            ││(focus this split to stream)││                            ││
-│                          │││                            ││                            ││                            ││
-│                          │││                            ││                            ││                            ││
-│                          │││                            ││                            ││                            ││
-│                          ││└────────────────────────────┘└────────────────────────────┘└────────────────────────────┘│
+│ *  manager               ││                      (no scrollback yet — agent may be starting up)                      │
+│ @  worker-1              ││                                                                                          │
+│ !  worker-2              ││                                                                                          │
+│ x  critic                ││                                                                                          │
+│ ?  scout                 ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
 │                          ││ Inbox    Channel    Wire                                                                 │
