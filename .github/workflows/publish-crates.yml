@@ -9,6 +9,7 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -20,6 +21,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Check workspace version matches tag
+        if: github.event_name == 'push'
         run: |
           tag="${GITHUB_REF_NAME#v}"
           ws_version="$(grep -E '^version = ' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
@@ -51,3 +53,11 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p team-bot --locked
+
+      # teamctl-ui depends only on team-core (already published above);
+      # `teamctl ui` resolves to `cargo install teamctl-ui` so this crate
+      # must reach crates.io for the install path to work.
+      - name: Publish teamctl-ui
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p teamctl-ui --locked
