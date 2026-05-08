@@ -86,4 +86,8 @@ jobs:
           teamctl --version
           team-mcp --version
           team-bot --version
-          teamctl-ui --version
+          # Use `command -v` because the published `teamctl-ui` binary
+          # predates the --version fix in this PR; the LOCAL build has
+          # the fix and is pinned by crates/teamctl-ui/tests/cli.rs.
+          # Once 0.7.4 ships, this can become `teamctl-ui --version`.
+          command -v teamctl-ui
