@@ -148,6 +148,13 @@ pub fn ensure(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // treat NULL kind as 'text' for back-compat.
         "ALTER TABLE messages ADD COLUMN kind TEXT",
         "ALTER TABLE messages ADD COLUMN structured_payload TEXT",
+        // T-086-B: Telegram message id this row pertains to. Direction-
+        // disambiguated by sender: inbound rows (sender = `user:telegram`)
+        // store the source Telegram message id so agents know what to
+        // reply to; outbound rows (sender = `<project>:<agent>`) store the
+        // id this reply threads under for `reply_parameters`. NULL on
+        // pre-T-086-B rows and on rows that aren't Telegram-bound.
+        "ALTER TABLE messages ADD COLUMN telegram_msg_id INTEGER",
     ];
     for stmt in migrations {
         if let Err(e) = conn.execute(stmt, []) {
