@@ -29,6 +29,14 @@ Install teamctl:
 curl -fsSL https://teamctl.run/install | sh
 ```
 
+> Already running Claude Code? Run the installer through `bash -c` to be prompted to install (or silently update) the teamctl plugin in the same step:
+>
+> ```bash
+> bash -c "$(curl -fsSL https://teamctl.run/install)"
+> ```
+>
+> The pipe form (`| sh`) stays silent so CI workflows are unaffected.
+
 Then bring up a team:
 
 ```bash

@@ -1,10 +1,13 @@
 #!/bin/sh
 # teamctl installer — downloads the latest release tarballs for the current
-# platform (one per binary: teamctl, team-mcp, team-bot), verifies sha256s,
-# and drops the binaries in ~/.local/bin.
+# platform (one per binary: teamctl, team-mcp, team-bot, teamctl-ui), verifies
+# sha256s, and drops the binaries in ~/.local/bin. When Claude Code is on
+# PATH and the script runs under a real TTY, it also offers to install the
+# teamctl Claude Code plugin (or silently updates it if already installed).
 #
 # Usage:
 #     curl -fsSL https://teamctl.run/install | sh
+#     bash -c "$(curl -fsSL https://teamctl.run/install)"   # interactive plugin prompt
 #     curl -fsSL https://teamctl.run/install | sh -s -- --version v0.2.9
 #
 # Environment overrides:
@@ -83,9 +86,9 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 echo "installing teamctl $VERSION ($TARGET) -> $INSTALL_DIR"
 
 # cargo-dist publishes one tarball per crate; each contains a single binary
-# plus README/LICENSE. Pull all three.
+# plus README/LICENSE. Pull all four.
 installed=0
-for bin in teamctl team-mcp team-bot; do
+for bin in teamctl team-mcp team-bot teamctl-ui; do
   tarball="$bin-$TARGET.tar.xz"
   url="https://github.com/$REPO/releases/download/$VERSION/$tarball"
   sums_url="$url.sha256"
@@ -124,6 +127,58 @@ if [ "$VERIFY" != "0" ]; then
   echo "all sha256s verified."
 fi
 echo "installed $installed binaries to $INSTALL_DIR."
+
+# T-099: Claude Code plugin install/update flow.
+# - claude not on PATH               → silent skip
+# - plugin already installed         → silent update (best-effort; warns on
+#                                      failure but does not fail the install
+#                                      since the binaries are already in place)
+# - plugin not installed + TTY       → one-time prompt; `y` runs marketplace
+#                                      add (skip-if-already-added) + install
+# - plugin not installed + non-TTY   → silent skip
+# Detection avoids a `jq` dependency by grepping the documented JSON schema
+# (`"id":"teamctl@..."` from `claude plugin list --json`).
+plugin_installed() {
+  claude plugin list --json 2>/dev/null \
+    | grep -q '"id"[[:space:]]*:[[:space:]]*"teamctl@'
+}
+
+marketplace_present() {
+  claude plugin marketplace list 2>/dev/null \
+    | grep -qE '(^|[[:space:]])teamctl([[:space:]]|$)'
+}
+
+if command -v claude >/dev/null 2>&1; then
+  if plugin_installed; then
+    # Best-effort update path. Suppress noise on success; warn on failure but
+    # don't kill the script — the binaries above are the install's main job.
+    if ! claude plugin marketplace update teamctl >/dev/null 2>&1; then
+      echo "note: 'claude plugin marketplace update teamctl' failed (non-fatal; binaries installed OK)" >&2
+    fi
+    if ! claude plugin update teamctl --scope user >/dev/null 2>&1; then
+      echo "note: 'claude plugin update teamctl' failed (non-fatal; binaries installed OK)" >&2
+    fi
+  elif [ -t 1 ] && [ -r /dev/tty ]; then
+    printf "install teamctl Claude Code plugin? [y/N] "
+    if read -r REPLY < /dev/tty; then
+      case "$REPLY" in
+        y|Y|yes|YES|Yes)
+          # Skip the marketplace-add when it's already registered — avoids the
+          # error path on a re-run.
+          if ! marketplace_present; then
+            claude plugin marketplace add Alireza29675/teamctl --scope user
+          fi
+          claude plugin install teamctl@teamctl --scope user
+          ;;
+        *)
+          echo "skipping plugin install. Re-run later with:"
+          echo "  claude plugin marketplace add Alireza29675/teamctl --scope user"
+          echo "  claude plugin install teamctl@teamctl --scope user"
+          ;;
+      esac
+    fi
+  fi
+fi
 
 # T-070: if INSTALL_DIR isn't on PATH, print an actionable shell-tailored
 # one-liner instead of a vague "make sure it's on your PATH." Friendly

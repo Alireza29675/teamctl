@@ -4,6 +4,26 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+- **`tools/install.sh` bundles `teamctl-ui`** (T-099). The installer's
+  binary loop now fetches the `teamctl-ui` tarball alongside `teamctl`,
+  `team-mcp`, and `team-bot`. The cargo-dist tarball matrix already
+  produces these on every release; only the installer needed to start
+  pulling them. `teamctl ui` is now available out of the box after a
+  fresh `curl … | sh` install.
+- **`tools/install.sh` offers Claude Code plugin install/update**
+  (T-099). When `claude` is on PATH and the script runs under a real
+  TTY, `install.sh` prompts once: *install teamctl Claude Code plugin?
+  [y/N]*. Accepting runs `claude plugin marketplace add` (skip-if-
+  already-registered) + `claude plugin install teamctl@teamctl
+  --scope user`. When the plugin is already installed it silently
+  refreshes via `claude plugin marketplace update` + `claude plugin
+  update`. Pipe-style invocations (`curl … | sh`) and CI workers stay
+  silent because there's no `/dev/tty`; the discoverable interactive
+  form is `bash -c "$(curl -fsSL https://teamctl.run/install)"`. No
+  behavior change for non-Claude-Code users.
+
 ### Changed
 
 - **`teamctl ui` Triptych default layout reshaped + Roster column
