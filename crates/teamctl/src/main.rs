@@ -11,6 +11,12 @@ mod cmd;
     version,
     about = "Declarative CLI for persistent AI agent teams",
     long_about = None,
+    help_template = "\
+{name} {version}
+{about-with-newline}
+{usage-heading} {usage}
+
+{all-args}{after-help}",
 )]
 struct Cli {
     /// Compose root (the directory holding `team-compose.yaml`). When unset,

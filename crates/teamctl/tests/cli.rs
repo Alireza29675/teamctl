@@ -134,6 +134,46 @@ fn send_injects_into_mailbox() {
     assert_eq!(text, "hi there");
 }
 
+// ── T-091: --help surfaces the version ──────────────────────────────────
+
+#[test]
+fn help_header_includes_version_from_cargo_pkg_version() {
+    // The clap `version` attribute on the top-level Cli derive plus a
+    // help_template that includes `{name} {version}` puts the version
+    // line at the top of `teamctl --help`. Pinning it here so a future
+    // template edit can't silently drop the line; the assertion uses
+    // CARGO_PKG_VERSION so it tracks the crate version automatically.
+    let out = Command::new(bin()).arg("--help").output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let expected = format!("teamctl {}", env!("CARGO_PKG_VERSION"));
+    assert!(
+        stdout.contains(&expected),
+        "expected `{expected}` in --help output; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn version_flag_still_prints_version() {
+    // Companion to the help-header test: `--version` keeps working and
+    // produces the same string the help header surfaces.
+    let out = Command::new(bin()).arg("--version").output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains(env!("CARGO_PKG_VERSION")),
+        "expected version in --version output; got: {stdout}"
+    );
+}
+
 // ── T-050: teamctl init template/force coverage ─────────────────────────
 
 #[test]
