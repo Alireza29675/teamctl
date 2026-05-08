@@ -42,6 +42,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pre-resolve the latest release tag via authenticated `gh` so the
+      # installer's own `curl ... releases/latest` doesn't hit the 60-req/hour
+      # IP-based rate limit on shared CI runner pools (macOS-14 routinely
+      # 403s here). install.sh honours TEAMCTL_VERSION as an env override
+      # and skips its own latest-resolver when the env var is set.
+      - name: Resolve latest release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          tag="$(gh release view --repo Alireza29675/teamctl --json tagName -q .tagName)"
+          echo "TEAMCTL_VERSION=$tag" >> "$GITHUB_ENV"
+          echo "resolved latest tag: $tag"
+
       - name: Run installer (network)
         run: |
           set -eu
