@@ -12,6 +12,12 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 fn main() -> Result<()> {
+    // Handle `--version` / `--help` before any terminal setup so the binary
+    // is callable from non-TTY contexts (CI smoke tests, scripts) without
+    // tripping `enable_raw_mode()`.
+    if handle_info_flags() {
+        return Ok(());
+    }
     install_panic_hook();
     enter_terminal()?;
     let backend = CrosstermBackend::new(stdout());
@@ -20,6 +26,32 @@ fn main() -> Result<()> {
     leave_terminal()?;
     terminal.show_cursor()?;
     result
+}
+
+fn handle_info_flags() -> bool {
+    match std::env::args().nth(1).as_deref() {
+        Some("--version" | "-V") => {
+            println!("teamctl-ui {}", env!("CARGO_PKG_VERSION"));
+            true
+        }
+        Some("--help" | "-h") => {
+            println!("teamctl-ui {}", env!("CARGO_PKG_VERSION"));
+            println!();
+            println!(
+                "Interactive TUI for teamctl — Triptych view, approvals modal, send-mail compose."
+            );
+            println!();
+            println!("Usage: teamctl-ui [OPTIONS]");
+            println!();
+            println!("Options:");
+            println!("  -h, --help     Print help");
+            println!("  -V, --version  Print version");
+            println!();
+            println!("Run with no arguments to launch the TUI.");
+            true
+        }
+        _ => false,
+    }
 }
 
 fn enter_terminal() -> Result<()> {

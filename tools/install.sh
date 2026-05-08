@@ -144,8 +144,8 @@ plugin_installed() {
 }
 
 marketplace_present() {
-  claude plugin marketplace list 2>/dev/null \
-    | grep -qE '(^|[[:space:]])teamctl([[:space:]]|$)'
+  claude plugin marketplace list --json 2>/dev/null \
+    | grep -q '"name"[[:space:]]*:[[:space:]]*"teamctl"'
 }
 
 if command -v claude >/dev/null 2>&1; then
