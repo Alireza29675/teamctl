@@ -52,7 +52,7 @@ fn triptych_empty_state_at_120x30() {
 fn triptych_focus_ring_follows_focused_pane() {
     let mut app = fresh_app();
     app.dismiss_splash();
-    app.cycle_focus(); // Roster → Detail
+    app.cycle_focus(); // Agents → Detail
     assert_eq!(app.focused_pane, Pane::Detail);
     let buf = render_to_buffer(&app, 120, 30);
     insta::assert_snapshot!("triptych_detail_focused_120x30", buffer_to_string(&buf));
@@ -107,9 +107,9 @@ fn fixture_team(team_name: &str, agents: Vec<AgentInfo>) -> TeamSnapshot {
 }
 
 #[test]
-fn roster_renders_agents_with_glyphs_at_120x30() {
-    // PR-UI-2: roster pulls from `app.team.agents` with state-glyph
-    // mapping. Pin one of each glyph: running, working/unread,
+fn agents_panel_renders_glyphs_at_120x30() {
+    // The Agents sidebar pulls from `app.team.agents` with state-
+    // glyph mapping. Pin one of each glyph: running, working/unread,
     // pending-approval, stopped, unknown.
     let mut app = fresh_app();
     app.dismiss_splash();
@@ -124,7 +124,7 @@ fn roster_renders_agents_with_glyphs_at_120x30() {
         ],
     ));
     let buf = render_to_buffer(&app, 120, 30);
-    insta::assert_snapshot!("roster_with_agents_120x30", buffer_to_string(&buf));
+    insta::assert_snapshot!("agents_panel_with_glyphs_120x30", buffer_to_string(&buf));
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn mailbox_pane_cycles_to_channel_tab_when_focused() {
         "writing-team",
         vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
     ));
-    // Cycle focus to Mailbox (Roster → Detail → Mailbox).
+    // Cycle focus to Mailbox (Agents → Detail → Mailbox).
     app.cycle_focus();
     app.cycle_focus();
     assert_eq!(app.focused_pane, Pane::Mailbox);
@@ -446,7 +446,7 @@ fn render_at_minimum_terminal_does_not_panic() {
 fn wall_layout_renders_tile_grid_at_120x30() {
     // T-079-C snapshot: Wall layout (Ctrl+W) reached after the
     // operator flips from Triptych. Tiles render as a 2×2 grid
-    // with the first four agents; the ROSTER/MAILBOX pane chrome
+    // with the first four agents; the AGENTS/MAILBOX pane chrome
     // from Triptych is gone, replaced by per-tile borders carrying
     // the agent id + state glyph.
     let mut app = fresh_app();

@@ -1,16 +1,18 @@
-//! Triptych — the default Layout A. Three resizable panes (roster,
-//! detail, mailbox) with an Approvals stripe reserved at the top
-//! (rendered only when there's something to surface — empty in
-//! PR-UI-2 still) and a focus ring on the active pane.
+//! Triptych — the default Layout A. Sidebar + right-stack: an
+//! Agents column on the left (current sidebar width), with Detail
+//! stacked above Mailbox at 50/50 on the right. An Approvals stripe
+//! is reserved at the top (rendered only when there's something to
+//! surface) and a focus ring on the active pane.
 //!
-//! PR-UI-2 wires the roster + detail panes to live data:
-//! - Roster lists `app.team.agents` with single-cell state glyphs
+//! The Agents + Detail panes wire to live data:
+//! - Agents lists `app.team.agents` with single-cell state glyphs
 //!   driven by `data::state_glyph`. Selection is highlighted with
 //!   the focus accent.
 //! - Detail shows the last-N lines of `app.detail_buffer` (the
 //!   tmux capture-pane scrollback for the focused agent), or an
 //!   empty-state hint when no agent is selected.
-//! - Mailbox stays empty-state — wiring lands in PR-UI-3.
+//! - Mailbox stacks below Detail and pulls from the focused
+//!   agent's mailbox tab buffer.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -63,7 +65,9 @@ pub enum Pane {
 }
 
 impl Pane {
-    /// `Tab` cycles in roster → detail → mailbox → roster order.
+    /// `Tab` cycles `Agents → Detail → Mailbox → Agents`. With the
+    /// sidebar + right-stack geometry that reads spatially as
+    /// left → top-right → bottom-right → wrap to left.
     pub fn next(self) -> Self {
         match self {
             Pane::Roster => Pane::Detail,
@@ -72,10 +76,10 @@ impl Pane {
         }
     }
 
-    /// `Shift+Tab` cycles backward — roster → mailbox → detail →
-    /// roster. Closes the no-easy-exit-from-mailbox UX gap PR-UI-3
-    /// surfaced: operator Tabs into mailbox, then with Shift+Tab
-    /// they back out cleanly without the `q`-confirm round-trip.
+    /// `Shift+Tab` cycles backward — `Agents → Mailbox → Detail →
+    /// Agents`. Closes the no-easy-exit-from-mailbox UX gap: the
+    /// operator Tabs into Mailbox, then Shift+Tab backs out cleanly
+    /// without the `q`-confirm round-trip.
     pub fn prev(self) -> Self {
         match self {
             Pane::Roster => Pane::Mailbox,
@@ -111,18 +115,28 @@ impl Widget for Triptych<'_> {
             area
         };
 
-        let columns = Layout::default()
+        // Outer split: Agents sidebar on the left at the same
+        // 28-cell width the previous Triptych Roster column used,
+        // then a right-hand stack that fills the rest of the row.
+        let outer = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(28), // roster
-                Constraint::Min(0),     // detail
-                Constraint::Length(32), // mailbox
+                Constraint::Length(28), // agents sidebar
+                Constraint::Min(0),     // right-stack
             ])
             .split(body);
 
-        render_roster(buf, columns[0], self.app);
-        render_detail(buf, columns[1], self.app);
-        render_mailbox(buf, columns[2], self.app);
+        // Inner split inside the right stack: Detail above, Mailbox
+        // below, at 50/50. The 50/50 ratio survives terminal-resize
+        // events — `Constraint::Ratio` re-applies on every render.
+        let right_stack = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+            .split(outer[1]);
+
+        render_agents(buf, outer[0], self.app);
+        render_detail(buf, right_stack[0], self.app);
+        render_mailbox(buf, right_stack[1], self.app);
     }
 }
 
@@ -142,9 +156,9 @@ fn render_approvals_stripe(buf: &mut Buffer, area: Rect, app: &App) {
         .render(area, buf);
 }
 
-fn render_roster(buf: &mut Buffer, area: Rect, app: &App) {
+fn render_agents(buf: &mut Buffer, area: Rect, app: &App) {
     let focused = app.focused_pane == Pane::Roster;
-    let block = pane_block("ROSTER", focused, app);
+    let block = pane_block("AGENTS", focused, app);
     let inner = block.inner(area);
     block.render(area, buf);
 
@@ -162,13 +176,13 @@ fn render_roster(buf: &mut Buffer, area: Rect, app: &App) {
         .agents
         .iter()
         .enumerate()
-        .map(|(i, info)| roster_line(info, Some(i) == app.selected_agent, ascii, app))
+        .map(|(i, info)| agent_line(info, Some(i) == app.selected_agent, ascii, app))
         .collect();
     let para = Paragraph::new(lines).alignment(Alignment::Left);
     para.render(inner, buf);
 }
 
-fn roster_line<'a>(info: &'a AgentInfo, selected: bool, ascii: bool, app: &App) -> Line<'a> {
+fn agent_line<'a>(info: &'a AgentInfo, selected: bool, ascii: bool, app: &App) -> Line<'a> {
     let glyph = state_glyph(info, ascii);
     let display = format!(" {glyph}  {}", info.agent);
     let style = if selected {

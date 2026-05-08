@@ -4,6 +4,19 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Changed
+
+- **`teamctl ui` Triptych default layout reshaped + Roster column
+  renamed to Agents** (T-098). The default Triptych view now renders
+  as a sidebar plus right-stack: the Agents column (previously
+  "Roster") sits on the left at its existing 28-cell width, and the
+  right side stacks Detail above Mailbox at 50/50. The pane focus
+  cycle (`Tab` / `Shift+Tab`) is unchanged — `Agents → Detail →
+  Mailbox → Agents` reads spatially as left → top-right →
+  bottom-right → wrap. The onboarding tutorial and snapshot fixtures
+  are updated for the new geometry. The internal `Pane::Roster`
+  enum variant is preserved (no API churn for downstream callers).
+
 ## [0.7.3] — 2026-05-08
 
 ### Added

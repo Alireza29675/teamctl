@@ -3,11 +3,11 @@ source: crates/teamctl-ui/tests/snapshots.rs
 expression: s
 ---
 ⚠  approvals: 1 pending — `a` to review                                                                                 
-┌ROSTER────────────────────┐┌DETAIL · writing:manager──────────────────────────────────┐┌MAILBOX───────────────────────┐
-│ *  manager               ││      (no scrollback yet — agent may be starting up)      ││ Inbox    Channel    Wire     │
-│                          ││                                                          ││           (no DMs)           │
-│                          ││                                                          ││                              │
-│                          ││                                                          ││                              │
+┌AGENTS────────────────────┐┌DETAIL · writing:manager──────────────────────────────────────────────────────────────────┐
+│ *  manager               ││                      (no scrollback yet — agent may be starting up)                      │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
 │                   ┌approvals · 1/1───────────────────────────────────────────────────────────────┐                   │
 │                   │#7  publish                                                                   │                   │
 │                   │from: writing:manager                                                         │                   │
@@ -16,8 +16,8 @@ expression: s
 │                   │                                                                              │                   │
 │                   │[y] approve  ·  [Shift-N] deny  ·  [j/k] cycle  ·  [Esc] close                │                   │
 │                   │                                                                              │                   │
-│                   │                                                                              │                   │
-│                   │                                                                              │                   │
+│                   │                                                                              │───────────────────┘
+│                   │                                                                              │───────────────────┐
 │                   │                                                                              │                   │
 │                   │                                                                              │                   │
 │                   │                                                                              │                   │
@@ -26,9 +26,9 @@ expression: s
 │                   │                                                                              │                   │
 │                   │                                                                              │                   │
 │                   └──────────────────────────────────────────────────────────────────────────────┘                   │
-│                          ││                                                          ││                              │
-│                          ││                                                          ││                              │
-│                          ││                                                          ││                              │
-│                          ││                                                          ││                              │
-└──────────────────────────┘└──────────────────────────────────────────────────────────┘└──────────────────────────────┘
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+└──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
 Tab cycle panes  ·  / search · ⏎ open · @ send · q quit                                              ? help · t tutorial
