@@ -1,3 +1,8 @@
 .astro/
 dist/
 node_modules/
+
+# Regenerated from tools/install.sh on every docs build (see
+# .github/workflows/docs.yml "Sync install.sh into docs/public").
+# tools/install.sh is the single source of truth.
+public/install
