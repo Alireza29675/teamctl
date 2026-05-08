@@ -32,3 +32,13 @@ dev:
 # Build docs locally (Phase 8 will fill this in).
 docs:
     @echo "Docs site is introduced in Phase 8."
+
+# Sync docs/public/install with tools/install.sh. The Astro docs site
+# serves docs/public/install verbatim as https://teamctl.run/install
+# (no redirect chain — see docs/public/_redirects). tools/install.sh
+# is the source of truth; run this before pushing release PRs that
+# touch the installer so the live endpoint actually picks up the
+# change after Cloudflare Pages re-deploys.
+sync-install:
+    cp tools/install.sh docs/public/install
+    @echo "synced docs/public/install <- tools/install.sh"
