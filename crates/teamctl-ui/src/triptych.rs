@@ -126,12 +126,12 @@ impl Widget for Triptych<'_> {
             ])
             .split(body);
 
-        // Inner split inside the right stack: Detail above, Mailbox
-        // below, at 50/50. The 50/50 ratio survives terminal-resize
+        // Inner split inside the right stack: Detail above at 60%,
+        // Mailbox below at 40%. The ratio survives terminal-resize
         // events — `Constraint::Ratio` re-applies on every render.
         let right_stack = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+            .constraints([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)])
             .split(outer[1]);
 
         render_agents(buf, outer[0], self.app);
