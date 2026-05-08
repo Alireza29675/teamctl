@@ -22,6 +22,12 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: docs/package-lock.json
+      # docs/public/install is regenerated from tools/install.sh on every
+      # build so https://teamctl.run/install always matches the in-repo
+      # installer with no human sync step. tools/install.sh is the single
+      # source of truth; docs/public/install is .gitignored.
+      - name: Sync install.sh into docs/public
+        run: install -m 0755 tools/install.sh docs/public/install
       - name: Install
         working-directory: docs
         run: npm ci
