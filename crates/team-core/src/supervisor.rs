@@ -124,10 +124,20 @@ impl Supervisor for TmuxSupervisor {
             project = spec.project,
             agent = spec.agent,
         );
+        // -x/-y set the size of the detached pane. Without these, tmux
+        // falls back to 80x24 for off-screen windows, which is what the
+        // child's PTY inherits via TIOCGWINSZ on stdin. We pick a size
+        // larger than any common terminal so the inner TUI starts roomy;
+        // once a client attaches, SIGWINCH propagates the real size
+        // through `rl-watch`.
         let status = Command::new("tmux")
             .args([
                 "new-session",
                 "-d",
+                "-x",
+                "200",
+                "-y",
+                "50",
                 "-s",
                 &spec.tmux_session,
                 "-c",

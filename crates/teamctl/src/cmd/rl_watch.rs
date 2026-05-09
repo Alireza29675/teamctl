@@ -62,7 +62,9 @@ pub fn run(root: &Path, target: &str, runtime_args: &[String]) -> Result<()> {
         patterns.len()
     );
 
-    // Open a pty pair sized to our controlling terminal (or 80x24 fallback).
+    // Open a pty pair sized to our controlling terminal. Inside a tmux
+    // pane this is the pane's current size; the SIGWINCH handler below
+    // keeps it in sync as the operator attaches/resizes.
     let pty_size = current_winsize();
     let pair = native_pty_system()
         .openpty(pty_size)
@@ -100,6 +102,31 @@ pub fn run(root: &Path, target: &str, runtime_args: &[String]) -> Result<()> {
     };
 
     let child_alive = Arc::new(AtomicBool::new(true));
+
+    // Forward SIGWINCH to the inner pty so the runtime reflows when the
+    // tmux pane resizes (operator attach, terminal resize, split, etc.).
+    // The slave fd was dropped above, but the master fd is still live
+    // here; move it into a dedicated thread and call `resize` whenever
+    // the signal handler flags a change. Without this, the TUI inside
+    // would stay stuck at whatever size it had at spawn time.
+    #[cfg(unix)]
+    {
+        install_winch_handler();
+        let master = pair.master;
+        let winch_alive = child_alive.clone();
+        thread::spawn(move || {
+            // Coalesce the initial state in case the pane size changed
+            // between openpty and now (e.g. a client attached during
+            // the brief window before we installed the handler).
+            let _ = master.resize(current_winsize());
+            while winch_alive.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(150));
+                if WINCH_PENDING.swap(false, Ordering::SeqCst) {
+                    let _ = master.resize(current_winsize());
+                }
+            }
+        });
+    }
 
     // Stdin -> pty writer thread. Exits when stdin hits EOF or child dies.
     let stdin_alive = child_alive.clone();
@@ -256,11 +283,39 @@ fn current_winsize() -> PtySize {
             };
         }
     }
+    // Last-resort fallback when stdin has no winsize info at all (e.g.
+    // running outside any terminal). Not a replay invariant — confirmed
+    // there is no recording/replay path that reads back the PTY size.
     PtySize {
         rows: 24,
         cols: 80,
         pixel_width: 0,
         pixel_height: 0,
+    }
+}
+
+#[cfg(unix)]
+static WINCH_PENDING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn winch_handler(_: libc::c_int) {
+    // async-signal-safe: only touches an AtomicBool.
+    WINCH_PENDING.store(true, Ordering::SeqCst);
+}
+
+#[cfg(unix)]
+fn install_winch_handler() {
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        // Use sa_sigaction as the function pointer slot; it's a union with
+        // sa_handler on both Linux and macOS in the libc crate, and we
+        // don't need SA_SIGINFO since the handler ignores siginfo_t.
+        sa.sa_sigaction = winch_handler as *const () as libc::sighandler_t;
+        libc::sigemptyset(&mut sa.sa_mask);
+        // SA_RESTART so blocking reads in the stdin/pty threads aren't
+        // killed by EINTR every time the operator resizes.
+        sa.sa_flags = libc::SA_RESTART;
+        libc::sigaction(libc::SIGWINCH, &sa, std::ptr::null_mut());
     }
 }
 
@@ -695,6 +750,24 @@ mod tests {
     fn strip_ansi_osc() {
         let input = b"\x1b]0;title\x07after";
         assert_eq!(strip_ansi(input), b"after");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn winch_handler_flips_pending_flag() {
+        // Installing the handler is idempotent — we can call it from a
+        // test without disturbing the rest of the process. Raising
+        // SIGWINCH on ourselves is synchronous: by the time `raise`
+        // returns, the handler has run.
+        install_winch_handler();
+        WINCH_PENDING.store(false, Ordering::SeqCst);
+        unsafe {
+            libc::raise(libc::SIGWINCH);
+        }
+        assert!(
+            WINCH_PENDING.swap(false, Ordering::SeqCst),
+            "SIGWINCH should have flipped WINCH_PENDING via the handler"
+        );
     }
 
     #[test]
