@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
+mod claude_trust;
 mod cmd;
 
 #[derive(Parser)]

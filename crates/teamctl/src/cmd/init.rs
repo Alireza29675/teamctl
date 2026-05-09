@@ -167,6 +167,14 @@ pub fn run(
         fs::write(&dest, rendered)?;
     }
 
+    // T-090: pre-accept Claude Code's "trust this folder?" prompt for the
+    // folder we just scaffolded into so the operator's subsequent
+    // `claude` (or `claude /teamctl:init` via the plugin) doesn't block
+    // on the dialog. `teamctl init` itself is the explicit consent
+    // signal; we record it once here instead of asking the user to
+    // click through it on every fresh team.
+    crate::claude_trust::pre_trust_cwd(&parent)?;
+
     println!();
     println!("✓ {} scaffolded.", target.display());
     println!();
