@@ -65,7 +65,8 @@ jobs:
       - name: Verify binaries on PATH
         # Network step pulls the *published* main-branch installer, which today
         # only installs teamctl. The PR's script (verified below) brings all
-        # three. Don't expect team-mcp/team-bot here until this PR ships.
+        # four. Don't expect team-mcp / team-bot / teamctl-ui here until this
+        # PR ships.
         run: |
           set -eu
           export PATH="$TEAMCTL_INSTALL_DIR:$PATH"
@@ -85,3 +86,8 @@ jobs:
           teamctl --version
           team-mcp --version
           team-bot --version
+          # Use `command -v` because the published `teamctl-ui` binary
+          # predates the --version fix in this PR; the LOCAL build has
+          # the fix and is pinned by crates/teamctl-ui/tests/cli.rs.
+          # Once 0.7.4 ships, this can become `teamctl-ui --version`.
+          command -v teamctl-ui

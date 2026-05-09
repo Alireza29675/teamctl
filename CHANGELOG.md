@@ -4,13 +4,34 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+- **`tools/install.sh` bundles `teamctl-ui`** (T-099). The installer's
+  binary loop now fetches the `teamctl-ui` tarball alongside `teamctl`,
+  `team-mcp`, and `team-bot`. The cargo-dist tarball matrix already
+  produces these on every release; only the installer needed to start
+  pulling them. `teamctl ui` is now available out of the box after a
+  fresh `curl … | sh` install.
+- **`tools/install.sh` offers Claude Code plugin install/update**
+  (T-099). When `claude` is on PATH and the script runs under a real
+  TTY, `install.sh` prompts once: *install teamctl Claude Code plugin?
+  [y/N]*. Accepting runs `claude plugin marketplace add` (skip-if-
+  already-registered) + `claude plugin install teamctl@teamctl
+  --scope user`. When the plugin is already installed it silently
+  refreshes via `claude plugin marketplace update` + `claude plugin
+  update`. Pipe-style invocations (`curl … | sh`) and CI workers stay
+  silent because there's no `/dev/tty`; the discoverable interactive
+  form is `bash -c "$(curl -fsSL https://teamctl.run/install)"`. No
+  behavior change for non-Claude-Code users.
+
 ### Changed
 
 - **`teamctl ui` Triptych default layout reshaped + Roster column
   renamed to Agents** (T-098). The default Triptych view now renders
   as a sidebar plus right-stack: the Agents column (previously
   "Roster") sits on the left at its existing 28-cell width, and the
-  right side stacks Detail above Mailbox at 50/50. The pane focus
+  right side stacks Detail (60% of the right-stack height) above
+  Mailbox (40%). The pane focus
   cycle (`Tab` / `Shift+Tab`) is unchanged — `Agents → Detail →
   Mailbox → Agents` reads spatially as left → top-right →
   bottom-right → wrap. The onboarding tutorial and snapshot fixtures
