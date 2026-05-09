@@ -657,10 +657,19 @@ pub fn up_one(spec: &BotSpec, team_bot_bin: &Path, root: &Path) -> Result<bool> 
         mgr = shlex_quote(&spec.manager),
         prefix = shlex_quote(&spec.tmux_prefix),
     );
+    // -x/-y match the agent supervisor: keep the detached pane large enough
+    // that inner TUIs (if anything ever runs interactively here) don't get
+    // wedged into the tmux 80x24 default. Bot is non-interactive today, but
+    // symmetry with `team-core::supervisor` matters when an operator does
+    // attach for debugging.
     let status = Command::new("tmux")
         .args([
             "new-session",
             "-d",
+            "-x",
+            "200",
+            "-y",
+            "50",
             "-s",
             &spec.session,
             "-c",
