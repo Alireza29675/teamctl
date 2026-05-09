@@ -45,6 +45,10 @@ team-core = { path = "crates/team-core", version = "0.7.3" }
 blake3 = "1"
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = "0.28"
+# rustls only — same posture as teloxide (see crates/team-bot/Cargo.toml).
+# native-tls would drag in openssl-sys and break the cargo-dist cross-build
+# for aarch64-unknown-linux-gnu.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart"] }
 
 [profile.release]
 lto = "thin"

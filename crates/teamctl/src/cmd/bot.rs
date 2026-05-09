@@ -599,6 +599,20 @@ pub struct BotSpec {
     /// project that overrides `supervisor.tmux_prefix` carries that override
     /// through to the bot process.
     pub tmux_prefix: String,
+    /// Speech-to-text settings for inbound Telegram voice notes (T-101).
+    /// `None` means the bot will not handle voice messages — the default
+    /// preserves prior behavior for setups that don't opt in.
+    pub stt: Option<BotSttSpec>,
+}
+
+/// Resolved STT plumbing for one bot. Mirrors the env-var-name pattern
+/// used by `bot_token_env` / `chat_ids_env` — the secret never lands in
+/// `BotSpec`; only the var name does, and `up_one` looks it up at spawn.
+pub struct BotSttSpec {
+    pub provider: String,
+    pub api_key_env: String,
+    pub model: String,
+    pub language: Option<String>,
 }
 
 pub fn bot_specs(compose: &Compose) -> Vec<BotSpec> {
@@ -609,6 +623,12 @@ pub fn bot_specs(compose: &Compose) -> Vec<BotSpec> {
         for (role, agent) in &proj.managers {
             if let Some(tg) = agent.telegram() {
                 let mgr = format!("{}:{}", proj.project.id, role);
+                let stt = tg.speech_to_text.as_ref().map(|s| BotSttSpec {
+                    provider: s.provider.clone(),
+                    api_key_env: s.api_key_env.clone(),
+                    model: s.model.clone(),
+                    language: s.language.clone(),
+                });
                 out.push(BotSpec {
                     session: bot_session_name(prefix, &mgr),
                     mailbox: mailbox.clone(),
@@ -616,6 +636,7 @@ pub fn bot_specs(compose: &Compose) -> Vec<BotSpec> {
                     chats_env: tg.chat_ids_env.clone(),
                     manager: mgr,
                     tmux_prefix: prefix.clone(),
+                    stt,
                 });
             }
         }
@@ -647,15 +668,46 @@ pub fn up_one(spec: &BotSpec, team_bot_bin: &Path, root: &Path) -> Result<bool> 
         return Ok(true);
     }
 
+    // T-101 voice STT: when `speech_to_text` is configured for this manager,
+    // resolve the API key env var here (mirrors the bot-token pattern) and
+    // append the STT flags to the spawn command. An unset key downgrades the
+    // bot to "no voice" rather than aborting the spawn — text and media keep
+    // working.
+    let stt_flags = match &spec.stt {
+        Some(stt) => match std::env::var(&stt.api_key_env) {
+            Ok(v) if !v.is_empty() => {
+                let mut s = format!(
+                    " --stt-provider {p} --stt-api-key {k} --stt-model {m}",
+                    p = shlex_quote(&stt.provider),
+                    k = shlex_quote(&v),
+                    m = shlex_quote(&stt.model),
+                );
+                if let Some(lang) = &stt.language {
+                    s.push_str(&format!(" --stt-language {l}", l = shlex_quote(lang)));
+                }
+                s
+            }
+            _ => {
+                eprintln!(
+                    "skip voice · bot {} ({} unset — voice messages will be ignored)",
+                    spec.session, stt.api_key_env
+                );
+                String::new()
+            }
+        },
+        None => String::new(),
+    };
+
     let cmd = format!(
         "{bin} --mailbox {mb} --token {tok} --authorized-chat-ids {chats} \
-         --manager {mgr} --tmux-prefix {prefix}",
+         --manager {mgr} --tmux-prefix {prefix}{stt}",
         bin = shlex_quote(&team_bot_bin.display().to_string()),
         mb = shlex_quote(&spec.mailbox.display().to_string()),
         tok = shlex_quote(&token),
         chats = shlex_quote(&chats),
         mgr = shlex_quote(&spec.manager),
         prefix = shlex_quote(&spec.tmux_prefix),
+        stt = stt_flags,
     );
     // -x/-y match the agent supervisor: keep the detached pane large enough
     // that inner TUIs (if anything ever runs interactively here) don't get

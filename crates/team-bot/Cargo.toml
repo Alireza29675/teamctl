@@ -28,3 +28,4 @@ rusqlite.workspace = true
 # aarch64-unknown-linux-gnu. rustls has zero C deps so it cross-compiles
 # cleanly to every target dist supports.
 teloxide = { version = "0.13", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
+reqwest.workspace = true

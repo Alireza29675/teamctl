@@ -122,6 +122,39 @@ TEAMCTL_TG_HEAD_EDITOR_TOKEN=123456:AAH-...
 TEAMCTL_TG_HEAD_EDITOR_CHATS=75473051
 ```
 
+## Voice messages (optional)
+
+Add a `speech_to_text:` block under a manager's `telegram:` config and
+voice notes sent to that bot get transcribed and forwarded to the
+agent. The bot replies with `🎙 "<transcript>"` so you can verify what
+was heard, and the agent receives the transcript prefixed with
+`🎙 (transcribed voice, may have misspellings):`. Silence and
+unrecognizable audio yield a friendly "couldn't capture anything"
+reply with no inbox disturbance.
+
+```yaml
+managers:
+  head_editor:
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_HEAD_EDITOR_TOKEN
+        chat_ids_env: TEAMCTL_TG_HEAD_EDITOR_CHATS
+        speech_to_text:
+          provider: groq
+          api_key_env: GROQ_API_KEY
+          model: whisper-large-v3
+          # language: en   # optional ISO-639 hint
+```
+
+```bash
+# .team/.env  (gitignored)
+GROQ_API_KEY=gsk_...
+```
+
+Drop the `speech_to_text:` block (or unset the API key env var) to
+disable. v1 supports Groq Whisper; other providers (OpenAI Whisper,
+whisper.cpp) are intended as one-line additions when needed.
+
 ## Security
 
 - Messages from chat ids not in `chat_ids_env` are silently dropped.
