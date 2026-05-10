@@ -1,0 +1,60 @@
+version: 2
+
+project:
+  id: markets
+  name: Market analysis desk
+  cwd: ./workspace
+
+channels:
+  # Two channels with different purposes:
+  # - desk: where collector posts feeds and interpreter+risk discuss the read
+  # - alerts: where the chief surfaces high-signal moments to the operator
+  - name: desk
+    members: [chief, collector, interpreter, risk]
+  - name: alerts
+    members: [chief, interpreter, risk]
+  - name: all
+    members: "*"
+
+managers:
+  chief:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/chief.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    can_dm: [collector, interpreter, risk]
+    can_broadcast: [desk, alerts, all]
+    # Run `teamctl bot setup` to populate.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_CHIEF_TOKEN
+        chat_ids_env: TEAMCTL_TG_CHIEF_CHATS
+
+workers:
+  collector:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/collector.md
+    permission_mode: auto
+    reports_to: chief
+    can_dm: [chief, interpreter]
+    can_broadcast: [desk]
+
+  interpreter:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/interpreter.md
+    permission_mode: auto
+    reports_to: chief
+    can_dm: [chief, collector, risk]
+    can_broadcast: [desk, alerts]
+
+  risk:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/risk.md
+    permission_mode: plan  # read-only by design; risk dissents, never trades
+    reports_to: chief
+    can_dm: [chief, interpreter]
+    can_broadcast: [desk, alerts]

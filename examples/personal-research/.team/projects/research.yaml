@@ -1,0 +1,26 @@
+version: 2
+
+project:
+  id: research
+  name: Personal research
+  cwd: ./workspace
+
+channels:
+  - name: all
+    members: "*"
+
+managers:
+  buddy:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/buddy.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    # Run `teamctl bot setup` to populate.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_BUDDY_TOKEN
+        chat_ids_env: TEAMCTL_TG_BUDDY_CHATS
+
+# No workers. This is a single-agent team — the buddy owns the
+# research domain end-to-end. See README for why this earns persistence.

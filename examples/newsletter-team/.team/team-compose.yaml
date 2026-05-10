@@ -1,0 +1,24 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: nl-
+
+budget:
+  daily_usd_limit: 8.0
+  message_ttl_hours: 168 # 7 days — voice and curation context compound
+
+hitl:
+  globally_sensitive_actions:
+    - publish
+    - external_email
+
+# Telegram is configured on the editor in projects/newsletter.yaml.
+# Run `teamctl bot setup` to wire it up.
+
+projects:
+  - file: projects/newsletter.yaml
