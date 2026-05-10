@@ -12,13 +12,18 @@ use crate::store::Store;
 pub struct Ctx {
     pub agent_id: String,
     pub store: Arc<Store>,
+    /// Tmux session prefix (matches `compose.global.supervisor.tmux_prefix`).
+    /// Used by `compact_self` to compute the caller's tmux session name
+    /// when sending the `/compact` slash command into its pane.
+    pub tmux_prefix: String,
 }
 
 impl Ctx {
-    pub fn new(agent_id: String, store: Store) -> Self {
+    pub fn new(agent_id: String, store: Store, tmux_prefix: String) -> Self {
         Self {
             agent_id,
             store: Arc::new(store),
+            tmux_prefix,
         }
     }
 
@@ -185,6 +190,11 @@ pub fn schema() -> Value {
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
+            "name": "compact_self",
+            "description": "Compact your own context window via Claude Code's `/compact` command. Available on `claude-code` runtimes only (other runtimes don't recognize the slash command). \n\n**This is destructive: prior conversation detail is summarized and irretrievably trimmed.** Use only when explicitly instructed by your role (e.g. \"compact after every completed task\") or when you have clearly finished a major chunk of work and want to free space for the next one. Do not call this casually — every call permanently loses turns from your working window. \n\nFire-and-forget: the call returns immediately, and the `/compact` slash command lands in your tmux pane within a few milliseconds. Compaction itself runs asynchronously inside your session. The tool only routes; it does not block on the compaction completing.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
             "name": "react_to_user",
             "description": "Apply an emoji reaction to a specific Telegram message from the operator. Available only to managers (`is_manager: true`). Use to acknowledge an inbound DM lightly without sending a full reply — 👀 to signal you're on it, ✍ to signal you're typing, 👍 to ack done. Each `react_to_user` call replaces any previous bot reaction on that message; pass an unsupported emoji and the call rejects with a clear error before reaching Telegram. The set of allowed emoji is the standard Telegram bot-reaction set (premium-tier-agnostic, ~75 emoji); use what you'd reach for in normal chat reactions. Pass the `telegram_msg_id` value from the inbound mailbox row you're reacting to.",
             "inputSchema": {
@@ -229,6 +239,7 @@ pub async fn call(ctx: &Ctx, params: Value) -> Result<Value, String> {
         "reply_to_user" => reply_to_user(ctx, p.arguments).await,
         "react_to_user" => react_to_user(ctx, p.arguments).await,
         "show_typing" => show_typing(ctx).await,
+        "compact_self" => compact_self(ctx).await,
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -673,6 +684,80 @@ async fn show_typing(ctx: &Ctx) -> Result<Value, String> {
     Ok(content_json(&json!({ "id": id, "recipient": recipient })))
 }
 
+/// T-109: deliver `/compact` to the calling agent's own tmux pane via
+/// `tmux send-keys`. Open to any agent (workers and managers) on
+/// `claude-code` runtimes — the destructive warning lives in the schema
+/// description, role instructions decide when to call it. Fire-and-forget:
+/// the MCP call returns immediately; the slash command lands in the
+/// agent's pane on the blocking pool. Detachable — when Anthropic ships
+/// native agent-driven compaction, this whole handler + its registry
+/// entries delete in one PR.
+async fn compact_self(ctx: &Ctx) -> Result<Value, String> {
+    let runtime = ctx
+        .store
+        .runtime_for(&ctx.agent_id)
+        .map_err(|e| e.to_string())?;
+    if runtime.as_deref() != Some("claude-code") {
+        return Err(format!(
+            "compact_self: /compact is only supported on Claude Code agents \
+             (caller={} runs `{}`)",
+            ctx.agent_id,
+            runtime.as_deref().unwrap_or("unknown"),
+        ));
+    }
+    let session = pane_session(&ctx.tmux_prefix, &ctx.agent_id)?;
+    // Fire-and-forget. Run the blocking tmux invoke on the blocking pool
+    // and drop the join handle so the MCP response goes back without
+    // waiting for tmux. On failure we log and drop — the caller deliberately
+    // doesn't observe send-keys errors (that's the point of fire-and-forget).
+    let session_for_spawn = session.clone();
+    tokio::task::spawn_blocking(move || {
+        let argv = compact_self_argv(&session_for_spawn);
+        match std::process::Command::new("tmux").args(argv).output() {
+            Ok(o) if !o.status.success() => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                let trimmed = stderr.trim();
+                tracing::warn!(
+                    session = %session_for_spawn,
+                    error = %trimmed,
+                    "compact_self: tmux send-keys failed",
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    session = %session_for_spawn,
+                    error = %e,
+                    "compact_self: tmux invoke failed",
+                );
+            }
+            _ => {}
+        }
+    });
+    Ok(content_json(&json!({
+        "status": "dispatched",
+        "session": session,
+    })))
+}
+
+/// Argv for the tmux send-keys invocation that delivers `/compact` to
+/// the caller's pane. Pulled out so unit tests pin the exact arg shape
+/// without spinning up tmux. The trailing `Enter` keyword is what tells
+/// tmux to fire a Return after the body — that's what triggers Claude
+/// Code to actually process the slash command.
+fn compact_self_argv(session: &str) -> [&str; 5] {
+    ["send-keys", "-t", session, "/compact", "Enter"]
+}
+
+/// Compose the tmux session name for `agent_id` under `tmux_prefix`,
+/// matching the supervisor's canonical formula
+/// (`{tmux_prefix}{project}-{role}`).
+fn pane_session(tmux_prefix: &str, agent_id: &str) -> Result<String, String> {
+    let (project, role) = agent_id.split_once(':').ok_or_else(|| {
+        format!("compact_self: malformed agent id `{agent_id}` (expected `project:role`)")
+    })?;
+    Ok(format!("{tmux_prefix}{project}-{role}"))
+}
+
 #[derive(Deserialize)]
 struct BroadcastArgs {
     channel: String,
@@ -894,7 +979,7 @@ mod tests {
         store
             .upsert_agent("p:mgr", "p", "P", "manager", "claude-code", true)
             .unwrap();
-        (Ctx::new("p:mgr".to_string(), store), f)
+        (Ctx::new("p:mgr".to_string(), store, "t-".to_string()), f)
     }
 
     fn fetch_message(store: &Store, id: i64) -> (String, Option<String>, Option<String>) {
@@ -1081,7 +1166,7 @@ mod tests {
         store
             .upsert_agent("p:dev", "p", "P", "dev", "claude-code", false)
             .unwrap();
-        let ctx = Ctx::new("p:dev".to_string(), store);
+        let ctx = Ctx::new("p:dev".to_string(), store, "t-".to_string());
         let err = reply_to_user(
             &ctx,
             json!({
@@ -1182,7 +1267,7 @@ mod tests {
         store
             .upsert_agent("p:dev", "p", "P", "dev", "claude-code", false)
             .unwrap();
-        let ctx = Ctx::new("p:dev".to_string(), store);
+        let ctx = Ctx::new("p:dev".to_string(), store, "t-".to_string());
         let err = react_to_user(&ctx, json!({ "telegram_msg_id": 7, "emoji": "🍕" }))
             .await
             .unwrap_err();
@@ -1247,11 +1332,100 @@ mod tests {
         store
             .upsert_agent("p:dev", "p", "P", "dev", "claude-code", false)
             .unwrap();
-        let ctx = Ctx::new("p:dev".to_string(), store);
+        let ctx = Ctx::new("p:dev".to_string(), store, "t-".to_string());
         let err = show_typing(&ctx).await.unwrap_err();
         assert!(
             err.contains("only managers"),
             "non-manager must be gated: {err}"
+        );
+    }
+
+    // ── T-109 compact_self ─────────────────────────────────────────
+
+    #[test]
+    fn compact_self_argv_uses_enter_keyword_after_compact_body() {
+        // Pin the wire shape: tmux receives `Enter` as a separate argv
+        // element, NOT `\n` embedded in the body. That's what makes tmux
+        // fire a Return after `/compact`, which is what makes Claude Code
+        // actually process the slash command.
+        let argv = compact_self_argv("t-p-mgr");
+        assert_eq!(argv, ["send-keys", "-t", "t-p-mgr", "/compact", "Enter"]);
+    }
+
+    #[test]
+    fn pane_session_matches_supervisor_canonical_formula() {
+        // Same shape as `team-core::supervisor::AgentSpec::from_handle`
+        // and `team-bot::slash_outcome` — keep the three call sites in
+        // sync. If this assert ever has to change, all three move
+        // together.
+        assert_eq!(pane_session("t-", "p:mgr").unwrap(), "t-p-mgr");
+        assert_eq!(pane_session("", "p:mgr").unwrap(), "p-mgr");
+        assert_eq!(
+            pane_session("teamctl-", "alpha:hugo").unwrap(),
+            "teamctl-alpha-hugo"
+        );
+    }
+
+    #[test]
+    fn pane_session_rejects_malformed_agent_id() {
+        // The `<project>:<agent>` invariant is upheld at the MCP boundary
+        // so the handler doesn't fire tmux against a garbage session
+        // name. Surface the malformed id in the error so an operator
+        // can trace which client misconfigured itself.
+        let err = pane_session("t-", "no-colon-here").unwrap_err();
+        assert!(err.contains("malformed"), "error names the gate: {err}");
+        assert!(err.contains("no-colon-here"), "error names the id: {err}");
+    }
+
+    #[tokio::test]
+    async fn compact_self_dispatches_for_claude_code_manager() {
+        // Happy path: a claude-code manager call returns the dispatch
+        // record with the resolved session name. The actual tmux side
+        // effect runs on the blocking pool and is not observed here —
+        // fire-and-forget is the contract.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = compact_self(&ctx).await.unwrap();
+        assert_eq!(resp["structuredContent"]["status"], "dispatched");
+        assert_eq!(resp["structuredContent"]["session"], "t-p-mgr");
+    }
+
+    #[tokio::test]
+    async fn compact_self_dispatches_for_worker_too() {
+        // No manager gate: workers can self-compact when their role
+        // instruction says so. The destructive warning in the schema
+        // description carries the safety; the tool itself is open to
+        // any claude-code agent.
+        let f = NamedTempFile::new().unwrap();
+        let store = Store::open(f.path()).unwrap();
+        store
+            .upsert_agent("p:dev", "p", "P", "dev", "claude-code", false)
+            .unwrap();
+        let ctx = Ctx::new("p:dev".to_string(), store, "t-".to_string());
+        let resp = compact_self(&ctx).await.unwrap();
+        assert_eq!(resp["structuredContent"]["status"], "dispatched");
+        assert_eq!(resp["structuredContent"]["session"], "t-p-dev");
+    }
+
+    #[tokio::test]
+    async fn compact_self_non_claude_code_runtime_is_rejected() {
+        // /compact is a Claude Code slash command. Other runtimes don't
+        // recognize it; sending it would just land as input. Reject so
+        // the failure mode is crisp and the tool's description stays
+        // honest.
+        let f = NamedTempFile::new().unwrap();
+        let store = Store::open(f.path()).unwrap();
+        store
+            .upsert_agent("p:mgr", "p", "P", "manager", "codex", true)
+            .unwrap();
+        let ctx = Ctx::new("p:mgr".to_string(), store, "t-".to_string());
+        let err = compact_self(&ctx).await.unwrap_err();
+        assert!(
+            err.contains("Claude Code"),
+            "error names the runtime gate: {err}"
+        );
+        assert!(
+            err.contains("codex"),
+            "error names the actual runtime: {err}"
         );
     }
 
