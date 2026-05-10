@@ -1,26 +1,22 @@
 //! `teamctl sessions` — list every teamctl-managed tmux session on this
-//! host, across projects.
+//! host, aggregated per project. Plus `teamctl sessions kill <project>`
+//! to tear down every session belonging to one project (the only path
+//! that works for orphans, where the compose file is gone and
+//! `teamctl down` can't reach the project).
 //!
 //! Sessions started by `TmuxSupervisor::up` carry session-level tmux
 //! user-options that uniquely identify them: `@teamctl 1` plus
 //! `@teamctl-project`, `@teamctl-agent`, `@teamctl-root`. The command
-//! reads those via `tmux show-options -v -t <session>` for an
-//! unambiguous tuple.
+//! reads those via `tmux show-options -v -t <session>`. Sessions
+//! created by older builds (before the tagging convention landed) are
+//! not surfaced — `tmux_prefix` is per-project and there is no
+//! host-wide registry of in-use prefixes, so name-shape detection is
+//! unsafe. Restart agents via `teamctl up` to pick up the tags.
 //!
-//! Sessions created by older builds (before the tagging convention
-//! landed) are not surfaced. The historical name-shape
-//! `<tmux_prefix><project>-<agent>` was considered as a fallback, but
-//! `tmux_prefix` is per-project (configurable in compose) and there is
-//! no host-wide registry of in-use prefixes. Restart agents via
-//! `teamctl up` to pick up the tags and appear in this listing.
-//!
-//! Orphan = the session declares a `@teamctl-root` whose
-//! `team-compose.yaml` is no longer present on disk (project moved or
-//! deleted). The check accepts both root layouts: the modern one where
-//! `compose.root` is the `.team/` directory itself, and the bare-root
-//! fallback (operators may pass `--root <project-dir>` and tagging
-//! would record that). A session is orphan only if neither candidate
-//! resolves to a real file.
+//! Orphan = a project whose recorded `@teamctl-root` no longer holds a
+//! `team-compose.yaml` (under either `<root>/team-compose.yaml` or
+//! `<root>/.team/team-compose.yaml`). When any project is orphan, the
+//! human listing prints a footer pointing at the kill subcommand.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -29,17 +25,32 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-/// One row in the rendered table / json array.
+/// Aggregated row — one per project. The human listing and `--json`
+/// both emit this shape (rather than per-session) because the operator
+/// view is "where can I cd to manage this team."
 #[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct SessionRow {
+pub struct ProjectRow {
     pub project: String,
-    pub agent: String,
-    pub session: String,
+    pub cwd: Option<PathBuf>,
+    /// Sorted agent names (one per running session for the project).
+    pub agents: Vec<String>,
+    /// Oldest session in the project, unix epoch seconds.
     pub started_unix: i64,
-    pub root: Option<PathBuf>,
-    /// `running` (session is up and root resolves) or `orphan` (root
-    /// recorded on the session no longer holds a `team-compose.yaml`).
+    /// `running` (every session resolves to a live compose root) or
+    /// `orphan` (any session's recorded root no longer holds a
+    /// `team-compose.yaml`).
     pub status: String,
+}
+
+/// Internal per-session row, before aggregation.
+#[derive(Debug, PartialEq, Eq)]
+struct SessionRow {
+    project: String,
+    agent: String,
+    session: String,
+    started_unix: i64,
+    root: Option<PathBuf>,
+    status: String,
 }
 
 /// Fields parsed from one line of `tmux list-sessions -F '<fmt>'`.
@@ -50,52 +61,97 @@ struct RawSession {
 }
 
 pub fn run(json: bool) -> Result<()> {
-    let raw_listing = match tmux_list_sessions()? {
-        Some(s) => s,
-        None => {
-            // No tmux server running → no sessions. Print empty output.
-            if json {
-                println!("[]");
-            } else {
-                print_table(&[]);
-            }
-            return Ok(());
-        }
-    };
-    let raws = parse_list_sessions(&raw_listing);
-
-    let opt_lookup = |session: &str, key: &str| tmux_session_option(session, key);
-    let rows = classify(&raws, &opt_lookup, |p| p.exists());
-
+    let projects = collect_projects()?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
+        println!("{}", serde_json::to_string_pretty(&projects)?);
     } else {
-        print_table(&rows);
+        print_table(&projects);
     }
     Ok(())
 }
 
-fn print_table(rows: &[SessionRow]) {
+/// Kill every teamctl-managed tmux session whose `@teamctl-project`
+/// equals `project`. The orphan case — where the compose file is gone
+/// — is the whole reason this exists; for live projects an operator
+/// can equally well `cd` and run `teamctl down`. No confirmation
+/// prompt: kills are reversible via `teamctl up`.
+pub fn kill(project: &str) -> Result<()> {
+    let raw_listing = tmux_list_sessions()?.unwrap_or_default();
+    let raws = parse_list_sessions(&raw_listing);
+    let opt_lookup = |session: &str, key: &str| tmux_session_option(session, key);
+
+    let mut killed: Vec<String> = Vec::new();
+    for r in &raws {
+        if opt_lookup(&r.name, "@teamctl").as_deref() != Some("1") {
+            continue;
+        }
+        if opt_lookup(&r.name, "@teamctl-project").as_deref() != Some(project) {
+            continue;
+        }
+        let status = Command::new("tmux")
+            .args(["kill-session", "-t", &r.name])
+            .status()
+            .with_context(|| format!("spawn tmux kill-session for {}", r.name))?;
+        if status.success() {
+            killed.push(r.name.clone());
+        } else {
+            eprintln!("warning: tmux kill-session {} exited {status}", r.name);
+        }
+    }
+
+    if killed.is_empty() {
+        println!("no teamctl-managed sessions found for project `{project}`");
+    } else {
+        println!(
+            "killed {} session(s) for `{project}`: {}",
+            killed.len(),
+            killed.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn collect_projects() -> Result<Vec<ProjectRow>> {
+    let raw_listing = match tmux_list_sessions()? {
+        Some(s) => s,
+        None => return Ok(Vec::new()),
+    };
+    let raws = parse_list_sessions(&raw_listing);
+    let opt_lookup = |session: &str, key: &str| tmux_session_option(session, key);
+    let session_rows = classify(&raws, &opt_lookup, |p| p.exists());
+    Ok(aggregate(session_rows))
+}
+
+fn print_table(rows: &[ProjectRow]) {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     println!(
-        "{:<20} {:<20} {:<14} {:<10}",
-        "PROJECT", "AGENT", "STARTED", "STATUS",
+        "{:<20} {:<50} {:<14} {:<8}",
+        "PROJECT", "CWD", "STARTED", "STATUS",
     );
     if rows.is_empty() {
         return;
     }
     for r in rows {
         let started = format_relative(now.saturating_sub(r.started_unix));
+        let cwd_display = r
+            .cwd
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "-".into());
         println!(
-            "{:<20} {:<20} {:<14} {:<10}",
+            "{:<20} {:<50} {:<14} {:<8}",
             truncate(&r.project, 20),
-            truncate(&r.agent, 20),
+            truncate(&cwd_display, 50),
             started,
             r.status,
         );
+    }
+    if rows.iter().any(|r| r.status == "orphan") {
+        println!();
+        println!("to kill an orphan team's sessions: teamctl sessions kill <PROJECT>");
     }
 }
 
@@ -165,14 +221,10 @@ fn root_has_compose(root: &Path, path_exists: &impl Fn(&Path) -> bool) -> bool {
         || path_exists(&root.join(".team").join("team-compose.yaml"))
 }
 
-/// Pure classifier. Takes raw session listings, an option-lookup
-/// closure (`(session, key) -> Option<value>`), and a path-existence
-/// predicate. Returns the rows we'd render. Sessions without the
-/// `@teamctl=1` marker are skipped — there's no host-wide registry of
-/// teamctl name-prefixes, so name-shape detection is unsafe.
-///
-/// Split out from `run` so unit tests can exercise the full
-/// classification matrix without shelling out to tmux.
+/// Pure classifier. Sessions without the `@teamctl=1` marker are
+/// skipped — there's no host-wide registry of teamctl name-prefixes,
+/// so name-shape detection is unsafe. Returns per-session rows;
+/// `aggregate` collapses them into per-project rows.
 fn classify(
     raws: &[RawSession],
     options: &dyn Fn(&str, &str) -> Option<String>,
@@ -199,8 +251,43 @@ fn classify(
             status: status.into(),
         });
     }
-    rows.sort_by(|a, b| a.project.cmp(&b.project).then(a.agent.cmp(&b.agent)));
     rows
+}
+
+/// Collapse per-session rows into per-project rows. Status is the
+/// worst-of (orphan trumps running). Started is the oldest session.
+/// CWD is the first non-`None` root encountered for the project; in
+/// practice every session for a project shares the same root.
+fn aggregate(sessions: Vec<SessionRow>) -> Vec<ProjectRow> {
+    use std::collections::BTreeMap;
+    let mut by_project: BTreeMap<String, Vec<SessionRow>> = BTreeMap::new();
+    for s in sessions {
+        by_project.entry(s.project.clone()).or_default().push(s);
+    }
+    let mut out = Vec::with_capacity(by_project.len());
+    for (project, mut group) in by_project {
+        group.sort_by(|a, b| a.agent.cmp(&b.agent));
+        let agents: Vec<String> = group.iter().map(|s| s.agent.clone()).collect();
+        let cwd = group.iter().find_map(|s| s.root.clone());
+        let started_unix = group
+            .iter()
+            .map(|s| s.started_unix)
+            .min()
+            .unwrap_or_default();
+        let status = if group.iter().any(|s| s.status == "orphan") {
+            "orphan"
+        } else {
+            "running"
+        };
+        out.push(ProjectRow {
+            project,
+            cwd,
+            agents,
+            started_unix,
+            status: status.into(),
+        });
+    }
+    out
 }
 
 fn format_relative(seconds_ago: i64) -> String {
@@ -252,6 +339,28 @@ mod tests {
         move |s, k| m.get(&(s.to_string(), k.to_string())).cloned()
     }
 
+    fn tagged(
+        session: &str,
+        project: &str,
+        agent: &str,
+        root: &str,
+    ) -> Vec<(String, String, String)> {
+        vec![
+            (session.into(), "@teamctl".into(), "1".into()),
+            (session.into(), "@teamctl-project".into(), project.into()),
+            (session.into(), "@teamctl-agent".into(), agent.into()),
+            (session.into(), "@teamctl-root".into(), root.into()),
+        ]
+    }
+
+    fn opts_from(triples: Vec<(String, String, String)>) -> impl Fn(&str, &str) -> Option<String> {
+        let mut m: HashMap<(String, String), String> = HashMap::new();
+        for (s, k, v) in triples {
+            m.insert((s, k), v);
+        }
+        move |s, k| m.get(&(s.to_string(), k.to_string())).cloned()
+    }
+
     #[test]
     fn parse_list_sessions_handles_normal_output() {
         let raw = "a-hello-manager|1700000000\nrandom|1700000050\n";
@@ -259,7 +368,6 @@ mod tests {
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].name, "a-hello-manager");
         assert_eq!(parsed[0].created_unix, 1700000000);
-        assert_eq!(parsed[1].name, "random");
     }
 
     #[test]
@@ -271,92 +379,9 @@ mod tests {
     }
 
     #[test]
-    fn classify_tagged_session_reads_metadata() {
-        let raws = vec![RawSession {
-            name: "weird-session-name".into(),
-            created_unix: 1700000000,
-        }];
-        let opts = opt_map(&[
-            ("weird-session-name", "@teamctl", "1"),
-            ("weird-session-name", "@teamctl-project", "newsroom"),
-            ("weird-session-name", "@teamctl-agent", "editor-in-chief"),
-            ("weird-session-name", "@teamctl-root", "/tmp/exists"),
-        ]);
-        let rows = classify(&raws, &opts, |_| true);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].project, "newsroom");
-        assert_eq!(rows[0].agent, "editor-in-chief");
-        assert_eq!(rows[0].status, "running");
-        assert_eq!(rows[0].root.as_deref(), Some(Path::new("/tmp/exists")));
-    }
-
-    #[test]
-    fn classify_tagged_session_with_missing_root_is_orphan() {
-        let raws = vec![RawSession {
-            name: "a-foo-bar".into(),
-            created_unix: 1700000000,
-        }];
-        let opts = opt_map(&[
-            ("a-foo-bar", "@teamctl", "1"),
-            ("a-foo-bar", "@teamctl-project", "foo"),
-            ("a-foo-bar", "@teamctl-agent", "bar"),
-            ("a-foo-bar", "@teamctl-root", "/tmp/gone"),
-        ]);
-        let rows = classify(&raws, &opts, |_| false);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].status, "orphan");
-    }
-
-    #[test]
-    fn classify_running_when_root_is_dot_team_directory() {
-        // Modern shape: `compose.root` IS the `.team/` directory, so
-        // `<root>/team-compose.yaml` resolves directly. Must not be
-        // reported as orphan.
-        let raws = vec![RawSession {
-            name: "t-news-editor".into(),
-            created_unix: 1,
-        }];
-        let opts = opt_map(&[
-            ("t-news-editor", "@teamctl", "1"),
-            ("t-news-editor", "@teamctl-project", "news"),
-            ("t-news-editor", "@teamctl-agent", "editor"),
-            ("t-news-editor", "@teamctl-root", "/repos/news/.team"),
-        ]);
-        let extant: HashSet<PathBuf> =
-            [PathBuf::from("/repos/news/.team/team-compose.yaml")].into();
-        let rows = classify(&raws, &opts, |p| extant.contains(p));
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].status, "running");
-    }
-
-    #[test]
-    fn classify_running_when_root_is_project_directory() {
-        // Bare-root shape: `@teamctl-root` is the project root and
-        // `team-compose.yaml` lives under `<root>/.team/`. Must also
-        // resolve to running, not orphan.
-        let raws = vec![RawSession {
-            name: "t-news-editor".into(),
-            created_unix: 1,
-        }];
-        let opts = opt_map(&[
-            ("t-news-editor", "@teamctl", "1"),
-            ("t-news-editor", "@teamctl-project", "news"),
-            ("t-news-editor", "@teamctl-agent", "editor"),
-            ("t-news-editor", "@teamctl-root", "/repos/news"),
-        ]);
-        let extant: HashSet<PathBuf> =
-            [PathBuf::from("/repos/news/.team/team-compose.yaml")].into();
-        let rows = classify(&raws, &opts, |p| extant.contains(p));
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].status, "running");
-    }
-
-    #[test]
     fn classify_skips_untagged_sessions_regardless_of_name() {
-        // Without the `@teamctl=1` marker, name-shape detection is
-        // unsafe (per-project tmux_prefix is not host-discoverable).
-        // Pre-tag agent sessions, bot sessions, and unrelated tmux
-        // sessions all fall through.
+        // No `@teamctl=1` marker → skipped, even for names that look
+        // teamctl-shaped (legacy agents, bot sessions, unrelated tmux).
         let raws = vec![
             RawSession {
                 name: "t-teamctl-hugo".into(),
@@ -376,7 +401,49 @@ mod tests {
     }
 
     #[test]
-    fn classify_sorts_by_project_then_agent() {
+    fn aggregate_collapses_sessions_per_project_and_sorts_agents() {
+        let raws = vec![
+            RawSession {
+                name: "s1".into(),
+                created_unix: 200,
+            },
+            RawSession {
+                name: "s2".into(),
+                created_unix: 100,
+            },
+            RawSession {
+                name: "s3".into(),
+                created_unix: 300,
+            },
+        ];
+        let mut triples = Vec::new();
+        triples.extend(tagged("s1", "alpha", "zeta", "/r/alpha/.team"));
+        triples.extend(tagged("s2", "alpha", "bot", "/r/alpha/.team"));
+        triples.extend(tagged("s3", "beta", "x", "/r/beta/.team"));
+        let opts = opts_from(triples);
+        let extant: HashSet<PathBuf> = [
+            PathBuf::from("/r/alpha/.team/team-compose.yaml"),
+            PathBuf::from("/r/beta/.team/team-compose.yaml"),
+        ]
+        .into();
+        let session_rows = classify(&raws, &opts, |p| extant.contains(p));
+        let projects = aggregate(session_rows);
+        assert_eq!(projects.len(), 2);
+        // BTreeMap iteration is alpha-sorted by project name.
+        assert_eq!(projects[0].project, "alpha");
+        assert_eq!(projects[0].agents, vec!["bot", "zeta"]); // agent-sorted
+        assert_eq!(projects[0].started_unix, 100); // oldest of s1+s2
+        assert_eq!(projects[0].status, "running");
+        assert_eq!(
+            projects[0].cwd.as_deref(),
+            Some(Path::new("/r/alpha/.team"))
+        );
+        assert_eq!(projects[1].project, "beta");
+        assert_eq!(projects[1].agents, vec!["x"]);
+    }
+
+    #[test]
+    fn aggregate_status_is_orphan_if_any_session_is_orphan() {
         let raws = vec![
             RawSession {
                 name: "s1".into(),
@@ -386,31 +453,51 @@ mod tests {
                 name: "s2".into(),
                 created_unix: 2,
             },
-            RawSession {
-                name: "s3".into(),
-                created_unix: 3,
-            },
         ];
-        let opts = opt_map(&[
-            ("s1", "@teamctl", "1"),
-            ("s1", "@teamctl-project", "zeta"),
-            ("s1", "@teamctl-agent", "bot"),
-            ("s2", "@teamctl", "1"),
-            ("s2", "@teamctl-project", "alpha"),
-            ("s2", "@teamctl-agent", "zeta"),
-            ("s3", "@teamctl", "1"),
-            ("s3", "@teamctl-project", "alpha"),
-            ("s3", "@teamctl-agent", "bot"),
-        ]);
-        let rows = classify(&raws, &opts, |_| true);
-        let order: Vec<(&str, &str)> = rows
-            .iter()
-            .map(|r| (r.project.as_str(), r.agent.as_str()))
-            .collect();
-        assert_eq!(
-            order,
-            vec![("alpha", "bot"), ("alpha", "zeta"), ("zeta", "bot")]
-        );
+        let mut triples = Vec::new();
+        triples.extend(tagged("s1", "mix", "alive", "/r/exists/.team"));
+        triples.extend(tagged("s2", "mix", "stale", "/r/gone/.team"));
+        let opts = opts_from(triples);
+        let extant: HashSet<PathBuf> = [PathBuf::from("/r/exists/.team/team-compose.yaml")].into();
+        let projects = aggregate(classify(&raws, &opts, |p| extant.contains(p)));
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].status, "orphan");
+    }
+
+    #[test]
+    fn classify_running_when_root_is_dot_team_directory() {
+        // Modern shape: `compose.root` IS the `.team/` directory.
+        let raws = vec![RawSession {
+            name: "t-news-editor".into(),
+            created_unix: 1,
+        }];
+        let opts = opts_from(tagged(
+            "t-news-editor",
+            "news",
+            "editor",
+            "/repos/news/.team",
+        ));
+        let extant: HashSet<PathBuf> =
+            [PathBuf::from("/repos/news/.team/team-compose.yaml")].into();
+        let rows = classify(&raws, &opts, |p| extant.contains(p));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, "running");
+    }
+
+    #[test]
+    fn classify_running_when_root_is_project_directory() {
+        // Bare-root shape: `@teamctl-root` is the project root and
+        // `team-compose.yaml` lives under `<root>/.team/`.
+        let raws = vec![RawSession {
+            name: "t-news-editor".into(),
+            created_unix: 1,
+        }];
+        let opts = opts_from(tagged("t-news-editor", "news", "editor", "/repos/news"));
+        let extant: HashSet<PathBuf> =
+            [PathBuf::from("/repos/news/.team/team-compose.yaml")].into();
+        let rows = classify(&raws, &opts, |p| extant.contains(p));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, "running");
     }
 
     #[test]

@@ -79,9 +79,16 @@ enum Command {
     #[command(alias = "status")]
     Ps,
     /// Host-wide list of every teamctl-managed tmux session, across
-    /// projects. No compose root required.
+    /// projects (one row per project). With no subcommand, lists.
+    /// Use `teamctl sessions kill <project>` to tear down every
+    /// session belonging to one project — the only path that works
+    /// for orphans, where the compose file is gone and `teamctl down`
+    /// can't reach the project. No compose root required.
     Sessions {
-        /// Emit machine-readable JSON instead of the human table.
+        #[command(subcommand)]
+        action: Option<SessionsAction>,
+        /// (No subcommand) emit machine-readable JSON instead of the
+        /// human table.
         #[arg(long)]
         json: bool,
     },
@@ -218,6 +225,15 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum SessionsAction {
+    /// Kill every teamctl-managed tmux session for the named project.
+    /// The orphan case (compose gone) is the only one `teamctl down`
+    /// can't handle, which is the entire reason this exists. Kills
+    /// are reversible via `teamctl up`; no confirmation prompt.
+    Kill { project: String },
+}
+
+#[derive(Subcommand)]
 enum ContextAction {
     /// List registered contexts.
     Ls,
@@ -305,8 +321,11 @@ fn main() -> Result<()> {
     if let Command::Update { method, check, yes } = cli.command {
         return cmd::update::run(method, check, yes);
     }
-    if let Command::Sessions { json } = cli.command {
-        return cmd::sessions::run(json);
+    if let Command::Sessions { action, json } = cli.command {
+        return match action {
+            None => cmd::sessions::run(json),
+            Some(SessionsAction::Kill { project }) => cmd::sessions::kill(&project),
+        };
     }
     if let Command::Context { action } = &cli.command {
         return match action {
