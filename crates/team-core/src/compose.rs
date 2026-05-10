@@ -60,6 +60,15 @@ pub struct Attachments {
     /// resolve against the compose root.
     #[serde(default)]
     pub audit_log_path: Option<PathBuf>,
+    /// T-32b: TTL in seconds for staged tempfiles in
+    /// `state/attachments-staging/`. The agent's `read_attachment`
+    /// MCP tool returns a staging path; the file lives until the TTL
+    /// expires (sweep on team-mcp startup) or the operator explicitly
+    /// persists it via a future tool. Default 6h gives an LLM
+    /// session enough room to round-trip without the staging dir
+    /// bloating indefinitely.
+    #[serde(default = "default_attachments_tempfile_ttl_seconds")]
+    pub tempfile_ttl_seconds: u64,
 }
 
 impl Default for Attachments {
@@ -70,6 +79,7 @@ impl Default for Attachments {
             allowed_roots: default_attachments_allowed_roots(),
             scanner: None,
             audit_log_path: None,
+            tempfile_ttl_seconds: default_attachments_tempfile_ttl_seconds(),
         }
     }
 }
@@ -97,6 +107,10 @@ fn default_attachments_allowed_roots() -> Vec<String> {
 
 fn default_scanner_timeout_seconds() -> u64 {
     30
+}
+
+fn default_attachments_tempfile_ttl_seconds() -> u64 {
+    6 * 60 * 60
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

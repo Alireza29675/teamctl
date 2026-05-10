@@ -8,6 +8,9 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::store::Store;
+use std::path::PathBuf;
+use team_core::attachments::Scanner;
+use team_core::compose::Attachments;
 
 pub struct Ctx {
     pub agent_id: String,
@@ -16,6 +19,21 @@ pub struct Ctx {
     /// Used by `compact_self` to compute the caller's tmux session name
     /// when sending the `/compact` slash command into its pane.
     pub tmux_prefix: String,
+    /// T-32b: attachment policy + compose root. `None` when team-mcp
+    /// was launched without `--compose-root` (hand-launched servers,
+    /// older renderer); `read_attachment` returns "disabled" in that
+    /// case so an unconfigured server doesn't silently expose the
+    /// filesystem.
+    pub attachments: Option<AttachmentsCtx>,
+}
+
+/// Bundles the attachment-related state on `Ctx` so the tool body
+/// stays parameter-light. The scanner is constructed once at boot
+/// and re-used across calls.
+pub struct AttachmentsCtx {
+    pub cfg: Attachments,
+    pub compose_root: PathBuf,
+    pub scanner: Option<Box<dyn Scanner>>,
 }
 
 impl Ctx {
@@ -24,11 +42,36 @@ impl Ctx {
             agent_id,
             store: Arc::new(store),
             tmux_prefix,
+            attachments: None,
         }
+    }
+
+    pub fn with_attachments(mut self, attachments: AttachmentsCtx) -> Self {
+        self.attachments = Some(attachments);
+        self
     }
 
     pub fn project(&self) -> &str {
         self.agent_id.split(':').next().unwrap_or("")
+    }
+}
+
+/// Convenience for tests: build a `Ctx` with an explicit compose
+/// root + attachments cfg. Production wiring goes through `main.rs`.
+#[cfg(test)]
+impl Ctx {
+    pub fn for_test_with_attachments(
+        agent_id: String,
+        store: Store,
+        compose_root: &std::path::Path,
+        cfg: Attachments,
+        scanner: Option<Box<dyn Scanner>>,
+    ) -> Self {
+        Self::new(agent_id, store, "t-".into()).with_attachments(AttachmentsCtx {
+            cfg,
+            compose_root: compose_root.to_path_buf(),
+            scanner,
+        })
     }
 }
 
@@ -190,6 +233,21 @@ pub fn schema() -> Value {
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
+            "name": "read_attachment",
+            "description": "Read a file the operator attached to a message. The bot/CLI surfaces attachments as a body line `📎 attachment: <absolute-path>`; pass that path here to receive a staging tempfile path the agent can `read_file()` directly. The broker enforces three guards: the path must canonicalize beneath one of `attachments.allowed_roots` (default `[$HOME]`), the file must be ≤ `max_size_bytes` (default 5 MB), and a configured `attachments.scanner` must return clean. Rejected reads return `{rejected: true, reason: \"…\"}` and never expose bytes. Operator gets a notification on telegram (when configured) and in the project's TUI Wire tab when the broker rejects. Staged tempfiles live in `<compose-root>/state/attachments-staging/` and are cleaned on team-mcp startup beyond the configured `tempfile_ttl_seconds` (default 6 h).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["path"],
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path the operator passed in `📎 attachment: <path>`. Symlinks and relative paths are accepted but the broker canonicalizes before policy checks."
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "compact_self",
             "description": "Compact your own context window via Claude Code's `/compact` command. Available on `claude-code` runtimes only (other runtimes don't recognize the slash command). \n\n**This is destructive: prior conversation detail is summarized and irretrievably trimmed.** Use only when explicitly instructed by your role (e.g. \"compact after every completed task\") or when you have clearly finished a major chunk of work and want to free space for the next one. Do not call this casually — every call permanently loses turns from your working window. \n\nFire-and-forget: the call returns immediately, and the `/compact` slash command lands in your tmux pane within a few milliseconds. Compaction itself runs asynchronously inside your session. The tool only routes; it does not block on the compaction completing.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
@@ -239,6 +297,7 @@ pub async fn call(ctx: &Ctx, params: Value) -> Result<Value, String> {
         "reply_to_user" => reply_to_user(ctx, p.arguments).await,
         "react_to_user" => react_to_user(ctx, p.arguments).await,
         "show_typing" => show_typing(ctx).await,
+        "read_attachment" => read_attachment(ctx, p.arguments).await,
         "compact_self" => compact_self(ctx).await,
         other => Err(format!("unknown tool: {other}")),
     }
@@ -682,6 +741,133 @@ async fn show_typing(ctx: &Ctx) -> Result<Value, String> {
         )
         .map_err(|e| e.to_string())?;
     Ok(content_json(&json!({ "id": id, "recipient": recipient })))
+}
+
+/// T-32b: read an operator-attached file via the broker policy.
+/// The agent passes the path it found in a message body's
+/// `📎 attachment: <path>` marker; the broker canonicalizes,
+/// path-traversal-checks against `allowed_roots`, size-checks
+/// against `max_size_bytes`, runs the configured scanner if any,
+/// stages the bytes to a content-addressed tempfile, audit-logs the
+/// attempt, and returns the staging path. Rejects fan out a
+/// notification both to telegram (`recipient = 'user:telegram'`)
+/// and to the project's `all` channel (TUI Wire tab) so the
+/// operator sees the reason regardless of which surface they're on.
+#[derive(Deserialize)]
+struct ReadAttachmentArgs {
+    path: String,
+}
+
+async fn read_attachment(ctx: &Ctx, args: Value) -> Result<Value, String> {
+    use std::path::PathBuf;
+    use team_core::attachments::{
+        append_audit, check_and_read_with_metadata, now_rfc3339, stage_to_tempfile, staging_dir,
+        AuditEntry, RejectReason,
+    };
+
+    let a: ReadAttachmentArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+    let raw_path = PathBuf::from(&a.path);
+
+    // Without compose context we can't enforce policy or stage.
+    // Hand-launched team-mcp instances see this — surface as a
+    // disabled-style reject so the agent doesn't think they're
+    // getting bytes.
+    let Some(att) = ctx.attachments.as_ref() else {
+        return Ok(content_json(&json!({
+            "rejected": true,
+            "reason": "attachments unavailable: team-mcp launched without --compose-root",
+        })));
+    };
+
+    let cfg = &att.cfg;
+    let scanner_ref: Option<&dyn team_core::attachments::Scanner> = att.scanner.as_deref();
+
+    let outcome = check_and_read_with_metadata(cfg, &raw_path, scanner_ref);
+    let audit_path = cfg
+        .audit_log_path
+        .as_ref()
+        .map(|p| resolve_audit_path(&att.compose_root, p));
+
+    match outcome {
+        Ok(accepted) => {
+            let staged = stage_to_tempfile(&staging_dir(&att.compose_root), &accepted)
+                .map_err(|e| format!("stage_to_tempfile: {e}"))?;
+            // Audit on accept.
+            let entry = AuditEntry {
+                ts: now_rfc3339(),
+                path: &a.path,
+                resolved: accepted.resolved.to_str(),
+                outcome: "accept",
+                size: Some(accepted.size),
+                blake3: Some(&accepted.blake3_hex),
+                reason: None,
+            };
+            if let Err(e) = append_audit(audit_path.as_deref(), &entry) {
+                tracing::warn!(error = %e, "audit log append failed (accept)");
+            }
+            Ok(content_json(&json!({
+                "rejected": false,
+                "temp_path": staged.display().to_string(),
+                "blake3": accepted.blake3_hex,
+                "size": accepted.size,
+            })))
+        }
+        Err(reason) => {
+            // Audit on reject. Resolved path may be unknown
+            // (path-unresolvable / outside-roots variants both
+            // shape it differently); pull what we have.
+            let resolved_owned = match &reason {
+                RejectReason::OutsideAllowedRoots { resolved } => {
+                    resolved.to_str().map(|s| s.to_string())
+                }
+                _ => None,
+            };
+            let human = reason.human();
+            let entry = AuditEntry {
+                ts: now_rfc3339(),
+                path: &a.path,
+                resolved: resolved_owned.as_deref(),
+                outcome: "reject",
+                size: None,
+                blake3: None,
+                reason: Some(human.clone()),
+            };
+            if let Err(e) = append_audit(audit_path.as_deref(), &entry) {
+                tracing::warn!(error = %e, "audit log append failed (reject)");
+            }
+
+            // Reject notification: telegram + project-wide Wire
+            // (channel:<project>:all). Both rows go through the
+            // existing send_dm path so team-bot's outbound loop and
+            // the TUI's Wire-tab query both see them without new
+            // wiring.
+            let notice = format!("📎 broker rejected attachment {}: {human}", a.path);
+            let project = ctx.project();
+            let broker_id = format!("{project}:broker");
+            let _ = ctx
+                .store
+                .send_dm(project, &broker_id, "user:telegram", &notice, None, None);
+            let wire_recipient = format!("channel:{project}:all");
+            let _ = ctx
+                .store
+                .send_dm(project, &broker_id, &wire_recipient, &notice, None, None);
+
+            Ok(content_json(&json!({
+                "rejected": true,
+                "reason": human,
+            })))
+        }
+    }
+}
+
+/// Resolve an `audit_log_path` from compose against the compose
+/// root: relative paths join, absolute paths pass through.
+fn resolve_audit_path(compose_root: &std::path::Path, p: &std::path::Path) -> std::path::PathBuf {
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        compose_root.join(p)
+    }
 }
 
 /// T-109: deliver `/compact` to the calling agent's own tmux pane via
@@ -1533,5 +1719,200 @@ mod tests {
                 "every row in the call shares the same reply target"
             );
         }
+    }
+
+    // ── T-32b read_attachment ──────────────────────────────────────
+
+    fn ctx_with_attachments(
+        cfg: team_core::compose::Attachments,
+    ) -> (Ctx, NamedTempFile, tempfile::TempDir) {
+        let f = NamedTempFile::new().unwrap();
+        let store = Store::open(f.path()).unwrap();
+        store
+            .upsert_agent("p:dev", "p", "P", "dev", "claude-code", false)
+            .unwrap();
+        let compose_root = tempfile::tempdir().unwrap();
+        let ctx = Ctx::for_test_with_attachments(
+            "p:dev".to_string(),
+            store,
+            compose_root.path(),
+            cfg,
+            None,
+        );
+        (ctx, f, compose_root)
+    }
+
+    fn cfg_with_root_only(root: &std::path::Path) -> team_core::compose::Attachments {
+        team_core::compose::Attachments {
+            enabled: true,
+            max_size_bytes: 1024 * 1024,
+            allowed_roots: vec![root.to_string_lossy().into_owned()],
+            scanner: None,
+            audit_log_path: None,
+            tempfile_ttl_seconds: 6 * 60 * 60,
+        }
+    }
+
+    #[tokio::test]
+    async fn read_attachment_no_compose_returns_disabled() {
+        // Hand-launched / no-compose-root case: tool returns the
+        // disabled-style envelope rather than touching the
+        // filesystem. Pinning so a refactor that removes the early
+        // exit doesn't silently start serving raw bytes.
+        let f = NamedTempFile::new().unwrap();
+        let store = Store::open(f.path()).unwrap();
+        store
+            .upsert_agent("p:dev", "p", "P", "dev", "claude-code", false)
+            .unwrap();
+        let ctx = Ctx::new("p:dev".to_string(), store, "t-".into());
+        let resp = read_attachment(&ctx, json!({ "path": "/etc/passwd" }))
+            .await
+            .unwrap();
+        assert_eq!(resp["structuredContent"]["rejected"], true);
+        let reason = resp["structuredContent"]["reason"].as_str().unwrap();
+        assert!(
+            reason.contains("attachments unavailable"),
+            "reason: {reason}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_attachment_happy_path_stages_and_returns_path() {
+        let work = tempfile::tempdir().unwrap();
+        let payload = work.path().join("note.md");
+        std::fs::write(&payload, b"the build is green").unwrap();
+        let cfg = cfg_with_root_only(work.path());
+        let (ctx, _f, compose_root) = ctx_with_attachments(cfg);
+        let resp = read_attachment(&ctx, json!({ "path": payload.display().to_string() }))
+            .await
+            .unwrap();
+        assert_eq!(resp["structuredContent"]["rejected"], false);
+        let temp_path = resp["structuredContent"]["temp_path"].as_str().unwrap();
+        let staged_bytes = std::fs::read(temp_path).unwrap();
+        assert_eq!(staged_bytes, b"the build is green");
+        // Staged under the compose root's staging dir.
+        assert!(
+            temp_path.starts_with(
+                compose_root
+                    .path()
+                    .join("state/attachments-staging")
+                    .to_str()
+                    .unwrap()
+            ),
+            "staged path under compose root: {temp_path}"
+        );
+        // Response carries the blake3 + size for the agent's audit
+        // hooks (and to detect mid-stream tampering).
+        assert!(resp["structuredContent"]["blake3"].is_string());
+        assert_eq!(resp["structuredContent"]["size"].as_u64(), Some(18));
+    }
+
+    #[tokio::test]
+    async fn read_attachment_reject_writes_telegram_and_wire_rows() {
+        // Outside-allowed-roots reject: agent gets the rejection
+        // envelope, AND two notification rows land in the mailbox —
+        // one to user:telegram for the team-bot to forward, one to
+        // channel:p:all so the operator's TUI Wire tab surfaces the
+        // reason. Owner-ratify variant 3 (option c) requires both.
+        let inside = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let leak = outside.path().join("leak.txt");
+        std::fs::write(&leak, b"x").unwrap();
+        let cfg = cfg_with_root_only(inside.path());
+        let (ctx, _f, _compose_root) = ctx_with_attachments(cfg);
+        let resp = read_attachment(&ctx, json!({ "path": leak.display().to_string() }))
+            .await
+            .unwrap();
+        assert_eq!(resp["structuredContent"]["rejected"], true);
+
+        // Inspect mailbox rows: expect exactly two reject rows from
+        // the broker (telegram + wire), text containing the path.
+        let conn = ctx.store.conn.lock().unwrap();
+        let rows: Vec<(String, String)> = conn
+            .prepare("SELECT recipient, text FROM messages ORDER BY id ASC")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .flatten()
+            .collect();
+        let recipients: Vec<&str> = rows.iter().map(|(r, _)| r.as_str()).collect();
+        assert!(
+            recipients.contains(&"user:telegram"),
+            "telegram reject row: {recipients:?}"
+        );
+        assert!(
+            recipients.contains(&"channel:p:all"),
+            "wire reject row: {recipients:?}"
+        );
+        // Both notifications mention the operator-supplied path.
+        for (_, text) in &rows {
+            assert!(
+                text.contains(&leak.display().to_string()),
+                "reject text mentions path: {text}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn read_attachment_disabled_returns_reject_without_filesystem_touch() {
+        let work = tempfile::tempdir().unwrap();
+        let payload = work.path().join("note.md");
+        std::fs::write(&payload, b"x").unwrap();
+        let mut cfg = cfg_with_root_only(work.path());
+        cfg.enabled = false;
+        let (ctx, _f, _root) = ctx_with_attachments(cfg);
+        let resp = read_attachment(&ctx, json!({ "path": payload.display().to_string() }))
+            .await
+            .unwrap();
+        assert_eq!(resp["structuredContent"]["rejected"], true);
+        let reason = resp["structuredContent"]["reason"].as_str().unwrap();
+        assert!(reason.contains("disabled"), "reason: {reason}");
+    }
+
+    #[tokio::test]
+    async fn read_attachment_audit_log_records_accept_and_reject() {
+        // Two attempts, one accept + one reject, both lines land
+        // in the audit file. Each line is parseable JSON.
+        let work = tempfile::tempdir().unwrap();
+        let ok_path = work.path().join("ok.md");
+        std::fs::write(&ok_path, b"hi").unwrap();
+        let bogus = work.path().join("missing.md");
+        let mut cfg = cfg_with_root_only(work.path());
+        let audit_path = work.path().join("audit/attempts.log");
+        cfg.audit_log_path = Some(audit_path.clone());
+        let (ctx, _f, _root) = ctx_with_attachments(cfg);
+        let _ = read_attachment(&ctx, json!({ "path": ok_path.display().to_string() }))
+            .await
+            .unwrap();
+        let _ = read_attachment(&ctx, json!({ "path": bogus.display().to_string() }))
+            .await
+            .unwrap();
+        let body = std::fs::read_to_string(&audit_path).unwrap();
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 2, "two attempts, two lines: {body}");
+        let outcomes: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                serde_json::from_str::<Value>(l).unwrap()["outcome"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(outcomes, vec!["accept", "reject"]);
+    }
+
+    #[tokio::test]
+    async fn read_attachment_missing_path_arg_is_rejected_at_schema() {
+        // `required: ["path"]` enforced at deserialization; a
+        // schema-shape regression would surface as a deserialize
+        // error here, not as an MCP-level success.
+        let (ctx, _f, _root) =
+            ctx_with_attachments(cfg_with_root_only(tempfile::tempdir().unwrap().path()));
+        let err = read_attachment(&ctx, json!({})).await.unwrap_err();
+        assert!(
+            err.contains("path") || err.contains("missing"),
+            "missing required field error: {err}"
+        );
     }
 }

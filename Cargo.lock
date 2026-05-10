@@ -2563,6 +2563,8 @@ name = "team-core"
 version = "0.7.3"
 dependencies = [
  "anyhow",
+ "blake3",
+ "chrono",
  "rusqlite",
  "schemars",
  "serde",
