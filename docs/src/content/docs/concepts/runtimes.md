@@ -6,9 +6,11 @@ A **runtime** is the CLI binary behind an agent. teamctl ships adapters for the 
 
 | Runtime | Binary | MCP | Session resume | Notes |
 |---|---|---|---|---|
-| Claude Code | `claude` | yes | `--continue` | The default. Strongest for planning + tool use. |
+| Claude Code | `claude` | yes | always-on (deterministic `--session-id`) | The default. Strongest for planning + tool use. |
 | Codex CLI | `codex` | yes (0.14+) | profile | OpenAI's CLI. Good for deep reasoning on patches. |
 | Gemini CLI | `gemini` | yes (0.3+) | n/a (loop-restart) | 1M-token context makes it great for research. |
+
+For Claude Code, every spawn passes `--session-id <uuid>` where `<uuid>` is a UUIDv5 derived deterministically from `teamctl:<project>:<agent>`. claude creates the session at that UUID on first spawn and resumes it on every subsequent spawn — so an agent's context survives `teamctl down`/`up`, crash recovery, and host reboots without operator action. If the session-file at that UUID is ever removed (manual cleanup, claude session-dir reset), claude creates a fresh session at the same UUID on the next spawn — self-healing by construction.
 
 Adapters live under `runtimes/<name>.yaml`:
 
@@ -16,7 +18,6 @@ Adapters live under `runtimes/<name>.yaml`:
 # runtimes/claude-code.yaml
 binary: claude
 supports_mcp: true
-session_resume: "--continue"
 default_model: claude-opus-4-7
 env:
   CLAUDE_PROJECT_DIR_MODE: compose

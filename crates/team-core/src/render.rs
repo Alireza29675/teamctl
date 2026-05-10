@@ -99,6 +99,17 @@ fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
         "TMUX_SESSION={}{}-{}\n",
         compose.global.supervisor.tmux_prefix, h.project, h.agent
     ));
+    // T-118: claude-code agents resume their conversation across
+    // teamctl down/up + crash recovery via a deterministic UUIDv5
+    // session id. Other runtimes don't recognize `--session-id`, so
+    // emit these env vars only for `claude-code` — the wrapper's
+    // claude-code arm picks them up; other arms ignore them.
+    if h.spec.runtime == "claude-code" {
+        let session_id = crate::session::derive_session_id(h.project, h.agent);
+        let session_name = crate::session::session_name(h.project, h.agent);
+        s.push_str(&format!("CLAUDE_SESSION_ID={session_id}\n"));
+        s.push_str(&format!("CLAUDE_SESSION_NAME={session_name}\n"));
+    }
     s
 }
 
@@ -255,6 +266,45 @@ mod tests {
         assert!(env.contains("AGENT_ID=hello:mgr"));
         assert!(env.contains("TEAMCTL_MAILBOX=/teamctl/state/mailbox.db"));
         assert!(env.contains("TMUX_SESSION=a-hello-mgr"));
+    }
+
+    #[test]
+    fn env_emits_claude_session_id_and_name_for_claude_code_runtime() {
+        // T-118: claude-code agents get deterministic UUIDv5 session
+        // ids in their env so the wrapper can pass `--session-id` +
+        // `-n` and resume the conversation across restarts.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        let expected_id = crate::session::derive_session_id(h.project, h.agent);
+        assert!(
+            env.contains(&format!("CLAUDE_SESSION_ID={expected_id}\n")),
+            "env was: {env}"
+        );
+        assert!(
+            env.contains("CLAUDE_SESSION_NAME=teamctl:hello:mgr\n"),
+            "env was: {env}"
+        );
+    }
+
+    #[test]
+    fn env_omits_claude_session_vars_for_non_claude_runtimes() {
+        // Other runtimes (codex, gemini) don't recognize claude's
+        // `--session-id` flag — their wrapper arms must not see these
+        // vars. Pin the gate so a future render refactor can't leak
+        // them into every runtime.
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "codex".into();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(
+            !env.contains("CLAUDE_SESSION_ID="),
+            "non-claude runtime must not get session id: {env}"
+        );
+        assert!(
+            !env.contains("CLAUDE_SESSION_NAME="),
+            "non-claude runtime must not get session name: {env}"
+        );
     }
 
     #[test]

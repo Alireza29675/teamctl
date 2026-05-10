@@ -19,6 +19,7 @@ tracing.workspace = true
 rusqlite.workspace = true
 blake3.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

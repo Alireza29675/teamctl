@@ -43,6 +43,7 @@ notify = "6"
 schemars = "0.8"
 team-core = { path = "crates/team-core", version = "0.7.3" }
 blake3 = "1"
+uuid = { version = "1", features = ["v5"] }
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = "0.28"
 # rustls only — same posture as teloxide (see crates/team-bot/Cargo.toml).
