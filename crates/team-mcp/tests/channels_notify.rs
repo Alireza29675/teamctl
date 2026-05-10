@@ -17,16 +17,24 @@ fn team_mcp_bin() -> std::path::PathBuf {
 
 /// Budget for an expected JSON-RPC frame from the child — both direct
 /// responses (`recv_json`) and unsolicited channel notifications
-/// (`wait_for_method`). Hot-path wall clock is well under 100ms, but
-/// `cargo test` runs these tests in parallel and each spawns 1–2
-/// team-mcp child processes, so a loaded CI runner can occasionally
-/// push frame latency past the 2s/5s budgets we used before. 10s gives
-/// ~6× headroom over the typical green-run wall clock while still
-/// failing fast when something is genuinely broken. The negative-path
-/// test (`watcher_skips_pre_existing_unacked_messages_at_startup`)
-/// keeps its own deliberately-short budget — we want it to fail fast
-/// when no notification is expected.
-const RPC_BUDGET: Duration = Duration::from_secs(10);
+/// (`wait_for_method`). Hot-path wall clock is well under 100ms, and
+/// these tests don't rely on tight timing for any signal — they're
+/// positive-path correctness checks. The budget exists only so a hung
+/// child doesn't pin CI forever.
+///
+/// Sized for the worst CI runner we observe, not the typical one:
+/// `cargo test` runs this file's tests in parallel, each spawning 1–2
+/// team-mcp child processes, and the GitHub-hosted ubuntu-24.04
+/// stable runner has been measured paying >10s for the first frame
+/// under load (qa bounce on PR #119 hit 10.18s on the prior 10s
+/// budget). 30s gives generous headroom against that worst case
+/// while still surfacing genuine hangs in well under a minute.
+///
+/// The negative-path test
+/// (`watcher_skips_pre_existing_unacked_messages_at_startup`) keeps
+/// its own deliberately-short 1500ms budget — we want it to fail
+/// fast when no notification is expected.
+const RPC_BUDGET: Duration = Duration::from_secs(30);
 
 /// Reads stdout on a worker thread and surfaces lines via mpsc, so callers
 /// can `recv_timeout` instead of relying on a `read()` that blocks past
@@ -230,7 +238,7 @@ fn new_inbox_row_pushes_channel_notification_to_subscribed_agent() {
     let notif = dev
         .lines
         .wait_for_method("notifications/claude/channel", RPC_BUDGET)
-        .expect("expected notifications/claude/channel within 5s");
+        .expect("expected notifications/claude/channel");
 
     // T-104: lazy inbox is the default — the wire `content` is a short
     // stub and `meta.lazy` is set so the agent knows to drill in via
@@ -340,7 +348,7 @@ fn immediate_message_delivers_full_body_inline() {
     let notif = dev
         .lines
         .wait_for_method("notifications/claude/channel", RPC_BUDGET)
-        .expect("expected notifications/claude/channel within 5s");
+        .expect("expected notifications/claude/channel");
     assert_eq!(
         notif["params"]["content"], "the build just broke, can you investigate",
         "immediate rows must deliver the full body inline"
@@ -385,7 +393,7 @@ fn lazy_inbox_disabled_by_env_delivers_full_body() {
     let notif = dev
         .lines
         .wait_for_method("notifications/claude/channel", RPC_BUDGET)
-        .expect("expected notifications/claude/channel within 5s");
+        .expect("expected notifications/claude/channel");
     assert_eq!(
         notif["params"]["content"], "full inline because env opted out",
         "TEAM_LAZY_INBOX=0 must restore full-body inline delivery"
@@ -451,7 +459,7 @@ fn channel_stub_includes_channel_name_in_preview() {
     let notif = dev
         .lines
         .wait_for_method("notifications/claude/channel", RPC_BUDGET)
-        .expect("expected notifications/claude/channel within 5s");
+        .expect("expected notifications/claude/channel");
     assert_eq!(
         notif["params"]["content"],
         "📬 1 new message in dev from hello:mgr: \"standup in 5\"",
@@ -495,7 +503,7 @@ fn long_body_preview_truncates_at_80_with_ellipsis() {
     let notif = dev
         .lines
         .wait_for_method("notifications/claude/channel", RPC_BUDGET)
-        .expect("expected notifications/claude/channel within 5s");
+        .expect("expected notifications/claude/channel");
     let content = notif["params"]["content"].as_str().unwrap().to_string();
     assert!(
         content.contains(&"x".repeat(80)),
