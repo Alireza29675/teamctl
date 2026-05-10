@@ -21,9 +21,9 @@ expression: buffer_to_string(&buf)
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
 │                          ││ Inbox    Sent    Channel    Wire                                                         │
-│                          ││                                   (no channel traffic)                                   │
-│                          ││                                                                                          │
-│                          ││                                                                                          │
+│                          ││[writing:manager] T-079 needs the wave-3 split first                                      │
+│                          ││[writing:manager] blocking on review for #88                                              │
+│                          ││[writing:manager] all 5 PRs merged · 0.7.1 ready                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │

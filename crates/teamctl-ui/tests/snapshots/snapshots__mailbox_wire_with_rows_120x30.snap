@@ -20,7 +20,7 @@ expression: buffer_to_string(&buf)
 │                          ││                                                                                          │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
-│                          ││ Inbox    Channel    Wire                                                                 │
+│                          ││ Inbox    Sent    Channel    Wire                                                         │
 │                          ││[user:cli] 0.7.1 release cut · CHANGELOG updated                                          │
 │                          ││[writing:eng_lead] T-079 cluster Wave 3 dispatching                                       │
 │                          ││                                                                                          │

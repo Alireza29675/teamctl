@@ -1,8 +1,11 @@
 //! Mailbox-pane data source and tab definitions.
 //!
-//! Three filter shapes, one per tab in SPEC §2's Triptych mailbox:
+//! Four filter shapes, one per tab in SPEC §2's Triptych mailbox:
 //!
 //! - `Inbox` — DMs whose `recipient = '<project>:<agent>'`.
+//! - `Sent` — every row whose `sender = '<project>:<agent>'`,
+//!   irrespective of recipient class. Closes the "did this agent
+//!   actually emit X" debug loop without pivoting to the recipient.
 //! - `Channel` — channel traffic for channels the focused agent is
 //!   a member of (recipient is `'channel:<channel_id>'`, filtered
 //!   through `channel_members`).
@@ -16,7 +19,9 @@
 //! relies on the same contract when it filters out channel/user rows
 //! for the per-agent unread-mail counter; if a fourth prefix class
 //! ever lands, the comment there and the queries here both need to
-//! learn it.
+//! learn it. Sent is the one tab whose filter is sender-side and
+//! recipient-class-agnostic — it returns rows from all three
+//! recipient prefix classes.
 
 use std::path::PathBuf;
 
@@ -26,16 +31,23 @@ use rusqlite::{params, Connection};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MailboxTab {
     Inbox,
+    Sent,
     Channel,
     Wire,
 }
 
 impl MailboxTab {
-    pub const ALL: [MailboxTab; 3] = [MailboxTab::Inbox, MailboxTab::Channel, MailboxTab::Wire];
+    pub const ALL: [MailboxTab; 4] = [
+        MailboxTab::Inbox,
+        MailboxTab::Sent,
+        MailboxTab::Channel,
+        MailboxTab::Wire,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             MailboxTab::Inbox => "Inbox",
+            MailboxTab::Sent => "Sent",
             MailboxTab::Channel => "Channel",
             MailboxTab::Wire => "Wire",
         }
@@ -44,6 +56,7 @@ impl MailboxTab {
     pub fn empty_hint(self) -> &'static str {
         match self {
             MailboxTab::Inbox => "(no DMs)",
+            MailboxTab::Sent => "(no sent messages)",
             MailboxTab::Channel => "(no channel traffic)",
             MailboxTab::Wire => "(quiet)",
         }
@@ -51,7 +64,8 @@ impl MailboxTab {
 
     pub fn next(self) -> Self {
         match self {
-            MailboxTab::Inbox => MailboxTab::Channel,
+            MailboxTab::Inbox => MailboxTab::Sent,
+            MailboxTab::Sent => MailboxTab::Channel,
             MailboxTab::Channel => MailboxTab::Wire,
             MailboxTab::Wire => MailboxTab::Inbox,
         }
@@ -60,7 +74,8 @@ impl MailboxTab {
     pub fn prev(self) -> Self {
         match self {
             MailboxTab::Inbox => MailboxTab::Wire,
-            MailboxTab::Channel => MailboxTab::Inbox,
+            MailboxTab::Sent => MailboxTab::Inbox,
+            MailboxTab::Channel => MailboxTab::Sent,
             MailboxTab::Wire => MailboxTab::Channel,
         }
     }
@@ -96,6 +111,7 @@ pub fn render_row(row: &MessageRow) -> String {
 /// last returned id.
 pub trait MailboxSource: Send + Sync {
     fn inbox(&self, agent_id: &str, after_id: i64) -> Result<Vec<MessageRow>>;
+    fn sent(&self, agent_id: &str, after_id: i64) -> Result<Vec<MessageRow>>;
     fn channel_feed(&self, agent_id: &str, after_id: i64) -> Result<Vec<MessageRow>>;
     fn wire(&self, project_id: &str, after_id: i64) -> Result<Vec<MessageRow>>;
 }
@@ -130,6 +146,34 @@ impl MailboxSource for BrokerMailboxSource {
         let mut stmt = conn.prepare(
             "SELECT id, sender, recipient, text, sent_at FROM messages
              WHERE id > ?1 AND recipient = ?2
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![after_id, agent_id], |r| {
+                Ok(MessageRow {
+                    id: r.get(0)?,
+                    sender: r.get(1)?,
+                    recipient: r.get(2)?,
+                    text: r.get(3)?,
+                    sent_at: r.get(4)?,
+                })
+            })?
+            .flatten()
+            .collect();
+        Ok(rows)
+    }
+
+    fn sent(&self, agent_id: &str, after_id: i64) -> Result<Vec<MessageRow>> {
+        let Some(conn) = self.open()? else {
+            return Ok(Vec::new());
+        };
+        // Sender-side filter — every row the focused agent emitted,
+        // irrespective of recipient class. Returns DMs, telegram
+        // replies, channel posts, and wire broadcasts in a single
+        // stream.
+        let mut stmt = conn.prepare(
+            "SELECT id, sender, recipient, text, sent_at FROM messages
+             WHERE id > ?1 AND sender = ?2
              ORDER BY id ASC",
         )?;
         let rows = stmt
@@ -208,16 +252,18 @@ impl MailboxSource for BrokerMailboxSource {
     }
 }
 
-/// Per-agent buffer state — three tabs, three `after_id` cursors.
+/// Per-agent buffer state — four tabs, four `after_id` cursors.
 /// Lives on `App` so swapping the focused agent resets the cursors
 /// without trying to back-fill: the operator sees only forward
 /// motion in the tab they're watching.
 #[derive(Debug, Default, Clone)]
 pub struct MailboxBuffers {
     pub inbox: Vec<MessageRow>,
+    pub sent: Vec<MessageRow>,
     pub channel: Vec<MessageRow>,
     pub wire: Vec<MessageRow>,
     pub inbox_after: i64,
+    pub sent_after: i64,
     pub channel_after: i64,
     pub wire_after: i64,
 }
@@ -228,6 +274,7 @@ impl MailboxBuffers {
     pub fn rows(&self, tab: MailboxTab) -> &[MessageRow] {
         match tab {
             MailboxTab::Inbox => &self.inbox,
+            MailboxTab::Sent => &self.sent,
             MailboxTab::Channel => &self.channel,
             MailboxTab::Wire => &self.wire,
         }
@@ -240,6 +287,7 @@ impl MailboxBuffers {
         let last_id = batch.last().map(|r| r.id);
         let (buf, after) = match tab {
             MailboxTab::Inbox => (&mut self.inbox, &mut self.inbox_after),
+            MailboxTab::Sent => (&mut self.sent, &mut self.sent_after),
             MailboxTab::Channel => (&mut self.channel, &mut self.channel_after),
             MailboxTab::Wire => (&mut self.wire, &mut self.wire_after),
         };
@@ -278,9 +326,11 @@ pub mod test_support {
     #[derive(Default)]
     pub struct MockMailboxSource {
         pub inbox_rows: Vec<MessageRow>,
+        pub sent_rows: Vec<MessageRow>,
         pub channel_rows: Vec<MessageRow>,
         pub wire_rows: Vec<MessageRow>,
         pub inbox_calls: Mutex<Vec<(String, i64)>>,
+        pub sent_calls: Mutex<Vec<(String, i64)>>,
         pub channel_calls: Mutex<Vec<(String, i64)>>,
         pub wire_calls: Mutex<Vec<(String, i64)>>,
     }
@@ -292,6 +342,14 @@ pub mod test_support {
                 .unwrap()
                 .push((agent_id.into(), after_id));
             Ok(self.inbox_rows.clone())
+        }
+
+        fn sent(&self, agent_id: &str, after_id: i64) -> Result<Vec<MessageRow>> {
+            self.sent_calls
+                .lock()
+                .unwrap()
+                .push((agent_id.into(), after_id));
+            Ok(self.sent_rows.clone())
         }
 
         fn channel_feed(&self, agent_id: &str, after_id: i64) -> Result<Vec<MessageRow>> {
@@ -328,13 +386,28 @@ mod tests {
     }
 
     #[test]
-    fn next_cycles_inbox_channel_wire_inbox() {
+    fn next_cycles_inbox_sent_channel_wire_inbox() {
         let mut t = MailboxTab::Inbox;
+        t = t.next();
+        assert_eq!(t, MailboxTab::Sent);
         t = t.next();
         assert_eq!(t, MailboxTab::Channel);
         t = t.next();
         assert_eq!(t, MailboxTab::Wire);
         t = t.next();
+        assert_eq!(t, MailboxTab::Inbox);
+    }
+
+    #[test]
+    fn prev_cycles_inbox_wire_channel_sent_inbox() {
+        let mut t = MailboxTab::Inbox;
+        t = t.prev();
+        assert_eq!(t, MailboxTab::Wire);
+        t = t.prev();
+        assert_eq!(t, MailboxTab::Channel);
+        t = t.prev();
+        assert_eq!(t, MailboxTab::Sent);
+        t = t.prev();
         assert_eq!(t, MailboxTab::Inbox);
     }
 
@@ -396,9 +469,11 @@ mod tests {
             ..Default::default()
         };
         let _ = mock.inbox("p:a", 0).unwrap();
+        let _ = mock.sent("p:a", 2).unwrap();
         let _ = mock.channel_feed("p:a", 5).unwrap();
         let _ = mock.wire("p", 9).unwrap();
         assert_eq!(*mock.inbox_calls.lock().unwrap(), vec![("p:a".into(), 0)]);
+        assert_eq!(*mock.sent_calls.lock().unwrap(), vec![("p:a".into(), 2)]);
         assert_eq!(*mock.channel_calls.lock().unwrap(), vec![("p:a".into(), 5)]);
         assert_eq!(*mock.wire_calls.lock().unwrap(), vec![("p".into(), 9)]);
     }

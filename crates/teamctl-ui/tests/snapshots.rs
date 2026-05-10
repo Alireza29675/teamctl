@@ -202,7 +202,9 @@ fn mailbox_pane_cycles_to_channel_tab_when_focused() {
     app.cycle_focus();
     app.cycle_focus();
     assert_eq!(app.focused_pane, Pane::Mailbox);
-    // Tab on Mailbox cycles tabs.
+    // Tab on Mailbox cycles tabs. Two cycles to reach Channel
+    // (Inbox → Sent → Channel).
+    app.cycle_mailbox_tab();
     app.cycle_mailbox_tab();
     assert_eq!(app.mailbox_tab, teamctl_ui::mailbox::MailboxTab::Channel);
     let buf = render_to_buffer(&app, 120, 30);
@@ -501,7 +503,8 @@ fn mailbox_pane_renders_channel_tab_with_rows() {
     ));
     app.cycle_focus();
     app.cycle_focus();
-    app.cycle_mailbox_tab(); // Inbox → Channel
+    app.cycle_mailbox_tab(); // Inbox → Sent
+    app.cycle_mailbox_tab(); // Sent → Channel
     app.mailbox.extend(
         teamctl_ui::mailbox::MailboxTab::Channel,
         vec![
@@ -532,7 +535,8 @@ fn mailbox_pane_renders_wire_tab_with_rows() {
     ));
     app.cycle_focus();
     app.cycle_focus();
-    app.cycle_mailbox_tab(); // Inbox → Channel
+    app.cycle_mailbox_tab(); // Inbox → Sent
+    app.cycle_mailbox_tab(); // Sent → Channel
     app.cycle_mailbox_tab(); // Channel → Wire
     app.mailbox.extend(
         teamctl_ui::mailbox::MailboxTab::Wire,
@@ -553,6 +557,49 @@ fn mailbox_pane_renders_wire_tab_with_rows() {
     );
     let buf = render_to_buffer(&app, 120, 30);
     insta::assert_snapshot!("mailbox_wire_with_rows_120x30", buffer_to_string(&buf));
+}
+
+#[test]
+fn mailbox_pane_renders_sent_tab_with_rows() {
+    // T-122: the Sent tab carries every row whose sender is the
+    // focused agent — DMs they sent, telegram replies, channel
+    // posts, wire broadcasts. Pinned here so a future regression that
+    // confuses the sender filter (or fails to render mixed-recipient
+    // rows on one tab) shows up immediately.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    app.cycle_focus();
+    app.cycle_focus();
+    app.cycle_mailbox_tab(); // Inbox → Sent
+    app.mailbox.extend(
+        teamctl_ui::mailbox::MailboxTab::Sent,
+        vec![
+            message(
+                41,
+                "writing:manager",
+                "writing:dev1",
+                "T-079 needs the wave-3 split first",
+            ),
+            message(
+                42,
+                "writing:manager",
+                "channel:writing:devs",
+                "blocking on review for #88",
+            ),
+            message(
+                43,
+                "writing:manager",
+                "user:telegram",
+                "all 5 PRs merged · 0.7.1 ready",
+            ),
+        ],
+    );
+    let buf = render_to_buffer(&app, 120, 30);
+    insta::assert_snapshot!("mailbox_sent_with_rows_120x30", buffer_to_string(&buf));
 }
 
 #[test]
