@@ -1346,3 +1346,170 @@ fn ctrl_q_lowercase_closes_focused_split() {
 
     assert_eq!(h.app.detail_splits.len(), 1);
 }
+
+// ── T-32: compose-modal Tab attach overlay ──────────────────────
+
+#[test]
+fn tab_in_compose_modal_opens_attach_input_overlay() {
+    // Tab is unused by the editor today; intercepting it inside the
+    // modal opens the path-input overlay without bleeding a literal
+    // Tab character into the body.
+    let mut h = dm_compose_setup();
+    h.dispatch_key(KeyCode::Char('@')); // open compose
+    type_body(&mut h, "before-tab");
+
+    h.dispatch_key(KeyCode::Tab);
+
+    assert!(
+        h.app.compose_attach_input_open,
+        "Tab opens the attach-input overlay"
+    );
+    assert!(
+        h.app.compose_attach_buffer.is_empty(),
+        "buffer starts empty"
+    );
+    assert_eq!(
+        h.app.compose_editor.body(),
+        "before-tab",
+        "Tab does not reach the editor"
+    );
+}
+
+#[test]
+fn typing_in_attach_overlay_fills_buffer_not_editor() {
+    // While the overlay is open keypresses go to the buffer; the
+    // underlying editor body stays exactly as the operator left it
+    // before pressing Tab. This is the property that lets Esc
+    // restore the editor with no edits.
+    let mut h = dm_compose_setup();
+    h.dispatch_key(KeyCode::Char('@'));
+    type_body(&mut h, "draft body");
+    h.dispatch_key(KeyCode::Tab);
+
+    for c in "/tmp/file.md".chars() {
+        h.dispatch_key(KeyCode::Char(c));
+    }
+
+    assert_eq!(h.app.compose_attach_buffer, "/tmp/file.md");
+    assert_eq!(h.app.compose_editor.body(), "draft body");
+}
+
+#[test]
+fn enter_in_attach_overlay_appends_marker_and_closes_overlay() {
+    // Affirmative path: operator confirms a path; the editor body
+    // gains a `📎 attachment: <path>` line on its own row, the
+    // overlay closes, the buffer is cleared.
+    let mut h = dm_compose_setup();
+    h.dispatch_key(KeyCode::Char('@'));
+    type_body(&mut h, "see attached");
+    h.dispatch_key(KeyCode::Tab);
+    for c in "/home/alice/notes.md".chars() {
+        h.dispatch_key(KeyCode::Char(c));
+    }
+    h.dispatch_key(KeyCode::Enter);
+
+    assert!(!h.app.compose_attach_input_open, "overlay closes on Enter");
+    assert_eq!(h.app.compose_attach_buffer, "");
+    let body = h.app.compose_editor.body();
+    assert!(
+        body.contains("see attached"),
+        "original body preserved: {body}"
+    );
+    assert!(
+        body.contains("📎 attachment: /home/alice/notes.md"),
+        "marker appended: {body}"
+    );
+    // Marker is on its own line, not concatenated with body text.
+    assert!(
+        body.lines().any(|l| l.trim() == "📎 attachment: /home/alice/notes.md"),
+        "marker on its own line: {body:?}"
+    );
+}
+
+#[test]
+fn esc_in_attach_overlay_cancels_back_to_editor() {
+    // Modal-vs-overlay symmetry: Esc here dismisses the overlay,
+    // not the whole compose modal. Mirrors the picker-overlay
+    // behaviour PR-UI-6 established.
+    let mut h = dm_compose_setup();
+    h.dispatch_key(KeyCode::Char('@'));
+    type_body(&mut h, "draft");
+    h.dispatch_key(KeyCode::Tab);
+    for c in "/tmp/x".chars() {
+        h.dispatch_key(KeyCode::Char(c));
+    }
+
+    h.dispatch_key(KeyCode::Esc);
+
+    assert!(!h.app.compose_attach_input_open, "overlay dismissed");
+    assert_eq!(h.app.compose_attach_buffer, "", "buffer cleared on cancel");
+    assert_eq!(
+        h.app.stage,
+        Stage::ComposeModal,
+        "compose modal still open"
+    );
+    assert!(
+        !h.app.compose_editor.body().contains("📎"),
+        "no marker appended on cancel"
+    );
+}
+
+#[test]
+fn enter_with_empty_buffer_closes_overlay_without_appending() {
+    // Tab → Enter (no path typed) is harmless: overlay closes and
+    // the editor body is untouched. Avoids a stray empty-marker
+    // line if the operator changes their mind.
+    let mut h = dm_compose_setup();
+    h.dispatch_key(KeyCode::Char('@'));
+    type_body(&mut h, "body");
+    h.dispatch_key(KeyCode::Tab);
+
+    h.dispatch_key(KeyCode::Enter);
+
+    assert!(!h.app.compose_attach_input_open);
+    assert_eq!(h.app.compose_editor.body(), "body");
+    assert!(
+        !h.app.compose_editor.body().contains("📎"),
+        "no marker on empty confirm"
+    );
+}
+
+#[test]
+fn backspace_in_attach_overlay_pops_buffer() {
+    let mut h = dm_compose_setup();
+    h.dispatch_key(KeyCode::Char('@'));
+    h.dispatch_key(KeyCode::Tab);
+    for c in "/tmp/abc".chars() {
+        h.dispatch_key(KeyCode::Char(c));
+    }
+
+    h.dispatch_key(KeyCode::Backspace);
+    h.dispatch_key(KeyCode::Backspace);
+
+    assert_eq!(h.app.compose_attach_buffer, "/tmp/a");
+}
+
+#[test]
+fn closing_compose_modal_clears_attach_overlay_state() {
+    // A cancelled draft must not survive a close-and-reopen of the
+    // modal — leftover state would surprise the operator on the
+    // next Tab.
+    let mut h = dm_compose_setup();
+    h.dispatch_key(KeyCode::Char('@'));
+    h.dispatch_key(KeyCode::Tab);
+    for c in "/tmp/leak".chars() {
+        h.dispatch_key(KeyCode::Char(c));
+    }
+
+    // Esc the overlay first, then double-Esc the modal to close.
+    h.dispatch_key(KeyCode::Esc);
+    h.dispatch_key(KeyCode::Esc);
+    h.dispatch_key(KeyCode::Esc);
+
+    assert_ne!(h.app.stage, Stage::ComposeModal, "compose modal closed");
+    // Reopen and confirm clean state.
+    h.app.select_next();
+    h.dispatch_key(KeyCode::Char('@'));
+    assert!(!h.app.compose_attach_input_open);
+    assert_eq!(h.app.compose_attach_buffer, "");
+}

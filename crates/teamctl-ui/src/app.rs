@@ -184,6 +184,16 @@ pub struct App {
     pub compose_picker_open: bool,
     /// Picker selection cursor — index into `team.channels`.
     pub compose_picker_index: usize,
+    /// T-32: when `true`, the compose modal renders a single-line
+    /// path-input overlay instead of the editor; Enter appends a
+    /// `📎 attachment: <path>` line to the editor body and closes the
+    /// overlay. Tab inside the editor opens it; Esc inside the
+    /// overlay cancels back to the editor (matches the picker
+    /// overlay's modal-vs-modal symmetry from PR-UI-6).
+    pub compose_attach_input_open: bool,
+    /// Single-line buffer for the path-input overlay. Reset on close
+    /// so a cancelled draft can't leak into the next attach attempt.
+    pub compose_attach_buffer: String,
 }
 
 const MAX_DETAIL_LINES: usize = 2000;
@@ -223,6 +233,8 @@ impl App {
             selected_split: 0,
             compose_picker_open: false,
             compose_picker_index: 0,
+            compose_attach_input_open: false,
+            compose_attach_buffer: String::new(),
             pending_chord: None,
             tutorial_pending_for_team: false,
             spinner_frame: 0,
@@ -419,6 +431,53 @@ impl App {
         self.compose_picker_open = false;
     }
 
+    /// T-32: open the path-input overlay. Resets the buffer so a
+    /// previously-cancelled draft can't carry over.
+    pub fn open_compose_attach_input(&mut self) {
+        self.compose_attach_input_open = true;
+        self.compose_attach_buffer.clear();
+    }
+
+    /// T-32: append a `📎 attachment: <path>` line to the compose
+    /// editor and close the overlay. The line lands as a fresh row
+    /// at the end of the body so the operator can edit it (or delete
+    /// it) before sending. Whitespace-only buffers are ignored — Tab
+    /// followed by Enter shouldn't insert an empty marker.
+    pub fn confirm_compose_attach_input(&mut self) {
+        let path = self.compose_attach_buffer.trim().to_string();
+        if !path.is_empty() {
+            let marker = format!("📎 attachment: {path}");
+            // The body's final-trailing-blank rule (Editor::body)
+            // strips empty trailing lines, so an empty last line
+            // doesn't matter — we always push the marker as a new
+            // line after current contents.
+            if let Some(last) = self.compose_editor.lines.last_mut() {
+                if !last.is_empty() {
+                    self.compose_editor.lines.push(marker);
+                } else {
+                    *last = marker;
+                }
+            } else {
+                self.compose_editor.lines.push(marker);
+            }
+            // Park the cursor at end of the new line so subsequent
+            // typing in Insert mode picks up after the marker.
+            self.compose_editor.cursor_row = self.compose_editor.lines.len() - 1;
+            self.compose_editor.cursor_col = self
+                .compose_editor
+                .lines
+                .last()
+                .map(|l| l.len())
+                .unwrap_or(0);
+        }
+        self.close_compose_attach_input();
+    }
+
+    pub fn close_compose_attach_input(&mut self) {
+        self.compose_attach_input_open = false;
+        self.compose_attach_buffer.clear();
+    }
+
     pub fn cycle_mailbox_tab(&mut self) {
         self.mailbox_tab = self.mailbox_tab.next();
     }
@@ -567,6 +626,10 @@ impl App {
         self.compose_target = None;
         self.compose_editor = Editor::default();
         self.compose_error = None;
+        // T-32: ensure the attach overlay state can't survive a
+        // close-and-reopen of the modal.
+        self.compose_attach_input_open = false;
+        self.compose_attach_buffer.clear();
     }
 
     /// Send the current compose body via the injected message
@@ -1084,6 +1147,10 @@ fn render_compose_modal(area: Rect, buf: &mut Buffer, app: &App) {
         render_compose_picker_body(inner, buf, app);
         return;
     }
+    if app.compose_attach_input_open {
+        render_compose_attach_input(inner, buf, app);
+        return;
+    }
     // Reserve the bottom two rows: an error line (rendered when
     // present, blank otherwise) and the footer with key hints.
     let chunks = Layout::default()
@@ -1141,7 +1208,34 @@ fn render_compose_modal(area: Rect, buf: &mut Buffer, app: &App) {
         .style(style)
         .render(chunks[1], buf);
 
-    Paragraph::new("Alt+Enter send · Esc Esc cancel · Tab attach (TODO #32)")
+    Paragraph::new("Alt+Enter send · Esc Esc cancel · Tab attach")
+        .style(muted)
+        .render(chunks[2], buf);
+}
+
+/// T-32: render the path-input overlay. Single-line buffer + a
+/// caret marker, with hints for confirm/cancel. Mirrors the picker
+/// overlay's layout (body / status line / footer) so the modal's
+/// vertical rhythm doesn't shift between the two overlays.
+fn render_compose_attach_input(inner: Rect, buf: &mut Buffer, app: &App) {
+    let muted = Style::default().fg(app.capabilities.muted());
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    let line = ratatui::text::Line::from(vec![
+        ratatui::text::Span::raw(format!("path: {}", app.compose_attach_buffer)),
+        ratatui::text::Span::styled("▏", Style::default().fg(app.capabilities.accent())),
+    ]);
+    Paragraph::new(line).render(chunks[0], buf);
+    Paragraph::new("type or paste an absolute path; the agent reads it via the broker")
+        .style(muted)
+        .render(chunks[1], buf);
+    Paragraph::new("Enter confirm · Esc cancel")
         .style(muted)
         .render(chunks[2], buf);
 }
@@ -1458,6 +1552,28 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
                         }
                         _ => {}
                     }
+                } else if app.compose_attach_input_open {
+                    // T-32: path-input overlay. Keys edit the buffer
+                    // directly; Enter confirms (appends marker line
+                    // to the editor body); Esc cancels back to the
+                    // editor. Same overlay-vs-modal symmetry as the
+                    // picker — Esc dismisses *the overlay*, not the
+                    // whole compose.
+                    match k.code {
+                        KeyCode::Char(c) => app.compose_attach_buffer.push(c),
+                        KeyCode::Backspace => {
+                            app.compose_attach_buffer.pop();
+                        }
+                        KeyCode::Enter => app.confirm_compose_attach_input(),
+                        KeyCode::Esc => app.close_compose_attach_input(),
+                        _ => {}
+                    }
+                } else if k.code == KeyCode::Tab {
+                    // T-32: Tab opens the path-input overlay. The
+                    // editor never sees Tab today (apply_insert
+                    // ignores it), so intercepting here doesn't
+                    // change the editor's surface.
+                    app.open_compose_attach_input();
                 } else {
                     // Route every keypress through the editor; the
                     // editor returns Send / Cancel / Continue.
