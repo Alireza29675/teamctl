@@ -1494,9 +1494,11 @@ async fn handle_inbound_media(bot: &Bot, msg: &Message, state: &State) -> Respon
 /// the operator with formatting intact AND legitimate `_`/`*`/`` ` ``
 /// characters preserved (T-134). Conservative whitelist: `**bold**`,
 /// `__bold__`, `*italic*`, `` `code` ``, fenced code blocks (with optional
-/// language tag), and the existing `- item` / `* item` / `+ item` →
-/// `• item` bullet glyph. Single-underscore italic (`_text_`) is
-/// intentionally NOT converted — underscore is too common in dev text
+/// language tag — restricted to `[A-Za-z0-9_-]` per T-149, so e.g.
+/// `` ```c++ `` renders with `class="language-c"`), and the existing
+/// `- item` / `* item` / `+ item` → `• item` bullet glyph.
+/// Single-underscore italic (`_text_`) is intentionally NOT converted
+/// — underscore is too common in dev text
 /// (`snake_case`, `thread_id`, URLs, paths). Inline conversion is
 /// paired-only on the same line; an unmatched `*` or `` ` `` passes
 /// through literally. `<`, `>`, `&` are escaped in every raw segment
@@ -1551,14 +1553,27 @@ fn render_html(s: &str) -> String {
 }
 
 /// Return `Some(lang)` (possibly empty) if `line` is a fence marker
-/// (`` ``` `` optionally followed by a language tag). Leading whitespace
-/// is permitted; the language tag is the first whitespace-separated
-/// token after the fence — anything past that (e.g. a trailing comment)
-/// is dropped so we don't emit `class="language-rust // comment"` (T-140).
+/// (`` ``` `` optionally followed by a language tag). Leading
+/// whitespace is permitted. The language tag is parsed at the
+/// boundary as the leading run of `[A-Za-z0-9_-]` characters — any
+/// other byte (whitespace, quote, slash, non-ASCII, …) ends the
+/// tag and the rest of the line is dropped. T-149 closes the
+/// quote-in-attribute injection vector this way: a fence like
+/// `` ```"x `` previously yielded `lang = "\"x"`, which then landed
+/// inside `class="language-…"` and broke the parser. Schema-tighten
+/// at the parse boundary instead of growing the escaper to handle
+/// quotes — the ASCII-class rule also matches how every real syntax
+/// highlighter (HighlightJS, Pygments, chroma) classifies a
+/// language tag, so we lose no real-world capability.
 fn fence_marker(line: &str) -> Option<String> {
     let trimmed = line.trim_start();
     let after = trimmed.strip_prefix("```")?;
-    Some(after.split_whitespace().next().unwrap_or("").to_string())
+    Some(
+        after
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+            .collect(),
+    )
 }
 
 fn render_normal_line(line: &str, out: &mut String) {
@@ -2281,12 +2296,11 @@ mod tests {
     }
 
     #[test]
-    fn fence_marker_takes_only_the_first_whitespace_token_as_lang() {
-        // T-140: a fence like ```` ```rust // example ```` previously
-        // produced `class="language-rust // example"`. Tighten to the
-        // first whitespace-separated token so the class attribute stays
-        // clean for syntax highlighters (and so a trailing comment
-        // doesn't bleed into the rendered HTML).
+    fn fence_marker_takes_leading_alphanumeric_dash_underscore_run_as_lang() {
+        // T-149: the language tag is the leading run of `[A-Za-z0-9_-]`
+        // — any other byte (whitespace, quote, slash, non-ASCII)
+        // ends the tag. Cases inherited from T-140 (whitespace
+        // termination) still hold under the tighter rule.
         assert_eq!(fence_marker("```").as_deref(), Some(""));
         assert_eq!(fence_marker("```rust").as_deref(), Some("rust"));
         assert_eq!(fence_marker("```rust // example").as_deref(), Some("rust"));
@@ -2295,6 +2309,82 @@ mod tests {
             Some("python"),
         );
         assert_eq!(fence_marker("not a fence").as_deref(), None);
+    }
+
+    #[test]
+    fn fence_marker_admits_dash_and_underscore_in_lang() {
+        // Real-world language tags use both — `shell-script`,
+        // `objective-c`, `objective_c` all need to round-trip so we
+        // don't regress real syntax-highlighter classes.
+        assert_eq!(
+            fence_marker("```shell-script").as_deref(),
+            Some("shell-script"),
+        );
+        assert_eq!(
+            fence_marker("```objective-c").as_deref(),
+            Some("objective-c"),
+        );
+        assert_eq!(
+            fence_marker("```objective_c").as_deref(),
+            Some("objective_c"),
+        );
+    }
+
+    #[test]
+    fn fence_marker_truncates_lang_at_quote_for_attribute_injection_safety() {
+        // T-149 regression: `html_escape_into` escapes `<>&` but NOT
+        // `"`. A fence like ```` ```"x ```` previously yielded
+        // `lang = "\"x"` which then landed inside `class="language-…"`
+        // and broke the parser. The tighter parse-boundary rule
+        // ends the tag at the first non-`[A-Za-z0-9_-]` byte, so the
+        // quote (and anything after it) is dropped.
+        assert_eq!(fence_marker("```\"x").as_deref(), Some(""));
+        assert_eq!(fence_marker("```rust\"injected\"").as_deref(), Some("rust"));
+        assert_eq!(fence_marker("```\"").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn fence_marker_truncates_lang_at_other_punctuation() {
+        // Slashes, dots, and other punctuation also end the tag —
+        // none of these belong in a syntax-highlighter class anyway,
+        // and dropping them is the safer default than letting them
+        // through into the rendered HTML.
+        assert_eq!(fence_marker("```ru/st").as_deref(), Some("ru"));
+        assert_eq!(fence_marker("```py.thon").as_deref(), Some("py"));
+        assert_eq!(fence_marker("```rust!").as_deref(), Some("rust"));
+        assert_eq!(fence_marker("```c++").as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn fence_marker_truncates_lang_at_non_ascii() {
+        // Non-ASCII chars (emoji, unicode letters) are valid Rust
+        // identifier characters under `is_alphanumeric()` but
+        // shouldn't appear in a syntax-highlighter class. Restrict
+        // to ASCII alphanumerics so an agent emitting ```` ```rüst ````
+        // produces an empty lang tag (renders as plain `<pre>`)
+        // instead of a class attribute with non-ASCII bytes.
+        assert_eq!(fence_marker("```rüst").as_deref(), Some("r"));
+        assert_eq!(fence_marker("```🦀rust").as_deref(), Some(""));
+        assert_eq!(fence_marker("```rust🦀").as_deref(), Some("rust"));
+    }
+
+    #[test]
+    fn render_html_fenced_block_drops_injected_quote_in_lang_tag() {
+        // T-149 round-trip: an agent emitting a fence with a quote
+        // in the lang tag gets a clean fallback (empty tag → plain
+        // `<pre>`) — the prior parser would have produced
+        // `<pre><code class="language-"x">…` and broken Telegram's
+        // HTML parser.
+        let input = "```\"x\nbody\n```";
+        let expected = "<pre>body</pre>";
+        assert_eq!(render_html(input), expected);
+
+        // Quote-after-valid-lang case: `rust` survives, the quote
+        // and everything after it is dropped before the class
+        // attribute is built.
+        let input = "```rust\"injected\nfn main() {}\n```";
+        let expected = "<pre><code class=\"language-rust\">fn main() {}</code></pre>";
+        assert_eq!(render_html(input), expected);
     }
 
     #[test]
