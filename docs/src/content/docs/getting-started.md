@@ -2,7 +2,7 @@
 title: Getting started
 ---
 
-If you're hand-authoring `team-compose.yaml` and skipping interactive `init`, read [How to think about teams](/concepts/teams/) first — it's the cognitive frame the `init` flow would have walked you through.
+If you're hand-authoring `team-compose.yaml` and skipping interactive `init`, read [How to think about agent teams](/concepts/teams/) first — it's the cognitive frame the `init` flow would have walked you through.
 
 ## Prerequisites
 

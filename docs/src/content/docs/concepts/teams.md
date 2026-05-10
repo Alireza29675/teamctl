@@ -1,5 +1,5 @@
 ---
-title: How to think about teams
+title: How to think about agent teams
 ---
 
 We're excited to see what you build with teamctl.
@@ -35,6 +35,8 @@ A teamctl agent is what you reach for when work needs to *keep going* — when t
 *"Can't you just orchestrate sub-agents and skills cleverly enough to feel like a team?"* You can get partway. But each persistent identity you simulate that way — a "researcher" the harness re-instantiates with the same prompt every time, a long-running planner you keep loaded — runs into the same wall: the harness wasn't designed to hold long-lived identities. The moment you grow past three or four of them, the operational cost (saving state, restoring state, naming them, routing between them, introducing new tools, defining their relationships) starts to look a lot like reinventing this tool.
 
 teamctl doesn't replace your sub-agent workflows — it sits a layer above them. Each teamctl agent is a real Claude Code (or Codex, or Gemini) session, free to fire off its own sub-agents for parallel work the same way you already do. What teamctl adds is the *durable identity* the harness can't keep on its own: a name, a role, accrued memory, a place in the org chart.
+
+There's a name for the operational discipline this opens up. Call it **TeamOps** — the mental framework for running teams of agents: how you make small adjustments, how you introduce new tools and define relations between agents, how the team stays scalable and reliable as it grows. teamctl exists because we needed a TeamOps tool for ourselves. More on TeamOps as a category soon.
 
 Here's the consequence: **persistent agents are scarce. Spend them on what earns persistence** — domain ownership — not on work that sub-agents already handle. Function-cut wastes persistence. A "QA agent" or a "code-review agent" is doing work a sub-agent is already perfectly suited for; persistence buys you nothing.
 
