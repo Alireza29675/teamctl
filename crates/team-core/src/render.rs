@@ -3,13 +3,23 @@
 //! Outputs under `<root>/state/`:
 //! - `envs/<project>-<agent>.env`      — env vars for the agent wrapper.
 //! - `mcp/<project>-<agent>.json`      — MCP stdio config for the runtime.
+//! - `role_prompts/<project>-<agent>.md` (multi-file role_prompt only) —
+//!   the ordered concatenation of every source file declared in the
+//!   role's `role_prompt: [...]` list. Re-materialized on every render
+//!   so any source-file edit lands in the agent's prompt at next boot.
 //!
 //! `systemd` / `launchd` unit rendering lives behind a feature flag when
 //! those back-ends are enabled via `supervisor.type`.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::compose::{AgentHandle, Compose};
+use crate::compose::{AgentHandle, Compose, RolePrompt};
+
+/// Separator written between concatenated role-prompt files. Em-dash
+/// framed by blank lines reads cleanly when an operator inspects the
+/// materialized file under `state/role_prompts/`.
+const ROLE_PROMPT_SEPARATOR: &str = "\n\n—\n\n";
 
 /// Absolute path to the rendered env file for a given agent.
 pub fn env_path(root: &Path, project: &str, agent: &str) -> PathBuf {
@@ -21,6 +31,14 @@ pub fn env_path(root: &Path, project: &str, agent: &str) -> PathBuf {
 pub fn mcp_path(root: &Path, project: &str, agent: &str) -> PathBuf {
     root.join("state/mcp")
         .join(format!("{project}-{agent}.json"))
+}
+
+/// Absolute path to the materialized concatenation of a multi-file
+/// `role_prompt` list. Only ever written for the list form — single-file
+/// `role_prompt` keeps pointing at its source path directly.
+pub fn role_prompt_concat_path(root: &Path, project: &str, agent: &str) -> PathBuf {
+    root.join("state/role_prompts")
+        .join(format!("{project}-{agent}.md"))
 }
 
 /// Rendered env + MCP content for a single agent.
@@ -42,11 +60,7 @@ fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
         .expect("agent belongs to a loaded project");
     let mailbox = compose.root.join(&compose.global.broker.path);
     let mcp = mcp_path(&compose.root, h.project, h.agent);
-    let prompt = h
-        .spec
-        .role_prompt
-        .as_ref()
-        .map(|p| compose.root.join(p))
+    let prompt = system_prompt_path(compose, h)
         .map(|p| p.display().to_string())
         .unwrap_or_default();
 
@@ -88,6 +102,61 @@ fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
     s
 }
 
+/// Resolve the absolute path that `SYSTEM_PROMPT_PATH` will point at.
+///
+/// - `None` role_prompt → `None` (env line renders as blank).
+/// - Single source file → `<root>/<source>` (back-compat, no concat
+///   file is written — the operator's source is the prompt).
+/// - List form → the materialized concat path under
+///   `<root>/state/role_prompts/<project>-<agent>.md`. The file at that
+///   path is produced by [`write_role_prompt_concat`]; this helper is
+///   pure and only computes the destination.
+pub fn system_prompt_path(compose: &Compose, h: AgentHandle<'_>) -> Option<PathBuf> {
+    match h.spec.role_prompt.as_ref()? {
+        RolePrompt::Single(p) => Some(compose.root.join(p)),
+        RolePrompt::Multiple(_) => Some(role_prompt_concat_path(&compose.root, h.project, h.agent)),
+    }
+}
+
+/// Materialize the multi-file `role_prompt` concatenation for one agent.
+///
+/// No-op when `role_prompt` is `None` or `Single` — there is nothing to
+/// concatenate. For the list form, every source file is read in declared
+/// order and joined with [`ROLE_PROMPT_SEPARATOR`]; the result overwrites
+/// `<root>/state/role_prompts/<project>-<agent>.md` so subsequent edits
+/// to any source file flow into the agent's prompt at the next render.
+///
+/// Missing source files surface as the underlying `io::Error` so the
+/// caller can fail the apply rather than silently emit a partial concat.
+pub fn write_role_prompt_concat(compose: &Compose, h: AgentHandle<'_>) -> io::Result<()> {
+    let Some(RolePrompt::Multiple(paths)) = h.spec.role_prompt.as_ref() else {
+        return Ok(());
+    };
+
+    let mut buf = String::new();
+    for (idx, rel) in paths.iter().enumerate() {
+        if idx > 0 {
+            buf.push_str(ROLE_PROMPT_SEPARATOR);
+        }
+        let abs = compose.root.join(rel);
+        let bytes = std::fs::read(&abs).map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("read role_prompt source {}: {e}", abs.display()),
+            )
+        })?;
+        // Source files are expected to be UTF-8 markdown; lossy decode
+        // keeps render diagnostics readable if a stray byte sneaks in.
+        buf.push_str(&String::from_utf8_lossy(&bytes));
+    }
+
+    let dest = role_prompt_concat_path(&compose.root, h.project, h.agent);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&dest, buf)
+}
+
 fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> String {
     let mailbox = compose.root.join(&compose.global.broker.path);
     let v = serde_json::json!({
@@ -127,7 +196,7 @@ mod tests {
             Agent {
                 runtime: "claude-code".into(),
                 model: Some("claude-opus-4-7".into()),
-                role_prompt: Some(PathBuf::from("roles/mgr.md")),
+                role_prompt: Some(RolePrompt::Single(PathBuf::from("roles/mgr.md"))),
                 permission_mode: Some("auto".into()),
                 autonomy: "low_risk_only".into(),
                 can_dm: vec![],
@@ -253,5 +322,110 @@ mod tests {
             "a-",
             "prefix must come from compose, not the default"
         );
+    }
+
+    #[test]
+    fn env_points_at_source_for_single_role_prompt() {
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(
+            env.contains("SYSTEM_PROMPT_PATH=/teamctl/roles/mgr.md\n"),
+            "env was: {env}"
+        );
+    }
+
+    #[test]
+    fn env_points_at_concat_path_for_multi_role_prompt() {
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().role_prompt =
+            Some(RolePrompt::Multiple(vec![
+                PathBuf::from("roles/_base.md"),
+                PathBuf::from("roles/mgr.md"),
+            ]));
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(
+            env.contains("SYSTEM_PROMPT_PATH=/teamctl/state/role_prompts/hello-mgr.md\n"),
+            "env was: {env}"
+        );
+    }
+
+    #[test]
+    fn write_role_prompt_concat_is_noop_for_single() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = fixture();
+        c.root = dir.path().to_path_buf();
+        let h = c.agents().next().unwrap();
+        write_role_prompt_concat(&c, h).unwrap();
+        assert!(
+            !role_prompt_concat_path(&c.root, h.project, h.agent).exists(),
+            "single-form role_prompt should not produce a concat file"
+        );
+    }
+
+    #[test]
+    fn write_role_prompt_concat_joins_in_declared_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("roles")).unwrap();
+        std::fs::write(root.join("roles/_base.md"), "BASE").unwrap();
+        std::fs::write(root.join("roles/mgr.md"), "MGR").unwrap();
+
+        let mut c = fixture();
+        c.root = root.to_path_buf();
+        c.projects[0].managers.get_mut("mgr").unwrap().role_prompt =
+            Some(RolePrompt::Multiple(vec![
+                PathBuf::from("roles/_base.md"),
+                PathBuf::from("roles/mgr.md"),
+            ]));
+        let h = c.agents().next().unwrap();
+        write_role_prompt_concat(&c, h).unwrap();
+
+        let dest = role_prompt_concat_path(root, h.project, h.agent);
+        let got = std::fs::read_to_string(&dest).unwrap();
+        assert_eq!(got, "BASE\n\n—\n\nMGR");
+    }
+
+    #[test]
+    fn write_role_prompt_concat_reflects_source_edits() {
+        // Owner-flagged: editing a source file must show up at the next
+        // render. We re-write unconditionally rather than caching.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("roles")).unwrap();
+        std::fs::write(root.join("roles/_base.md"), "v1").unwrap();
+        std::fs::write(root.join("roles/mgr.md"), "MGR").unwrap();
+
+        let mut c = fixture();
+        c.root = root.to_path_buf();
+        c.projects[0].managers.get_mut("mgr").unwrap().role_prompt =
+            Some(RolePrompt::Multiple(vec![
+                PathBuf::from("roles/_base.md"),
+                PathBuf::from("roles/mgr.md"),
+            ]));
+        let h = c.agents().next().unwrap();
+        write_role_prompt_concat(&c, h).unwrap();
+
+        std::fs::write(root.join("roles/_base.md"), "v2").unwrap();
+        let h = c.agents().next().unwrap();
+        write_role_prompt_concat(&c, h).unwrap();
+
+        let dest = role_prompt_concat_path(root, h.project, h.agent);
+        let got = std::fs::read_to_string(&dest).unwrap();
+        assert_eq!(got, "v2\n\n—\n\nMGR");
+    }
+
+    #[test]
+    fn write_role_prompt_concat_errors_on_missing_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = fixture();
+        c.root = dir.path().to_path_buf();
+        c.projects[0].managers.get_mut("mgr").unwrap().role_prompt = Some(RolePrompt::Multiple(
+            vec![PathBuf::from("roles/missing.md")],
+        ));
+        let h = c.agents().next().unwrap();
+        let err = write_role_prompt_concat(&c, h).unwrap_err();
+        assert!(err.to_string().contains("missing.md"), "err was: {err}");
     }
 }

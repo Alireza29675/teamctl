@@ -29,8 +29,14 @@ pub fn run(root: &Path, target: &str) -> Result<()> {
     if let Some(m) = &handle.spec.model {
         println!("model:      {m}");
     }
-    if let Some(p) = &handle.spec.role_prompt {
-        println!("role file:  {}", compose.root.join(p).display());
+    if let Some(rp) = &handle.spec.role_prompt {
+        let paths = rp.paths();
+        if let Some((first, rest)) = paths.split_first() {
+            println!("role file:  {}", compose.root.join(first).display());
+            for p in rest {
+                println!("            {}", compose.root.join(p).display());
+            }
+        }
     }
     if let Some(rt) = &handle.spec.reports_to {
         println!("reports to: {rt}");
