@@ -806,6 +806,9 @@ pub fn refresh_mailbox<M: MailboxSource>(app: &mut App, mailbox_source: &M) {
     if let Ok(batch) = mailbox_source.inbox(&agent_id, app.mailbox.inbox_after) {
         app.mailbox.extend(MailboxTab::Inbox, batch);
     }
+    if let Ok(batch) = mailbox_source.sent(&agent_id, app.mailbox.sent_after) {
+        app.mailbox.extend(MailboxTab::Sent, batch);
+    }
     if let Ok(batch) = mailbox_source.channel_feed(&agent_id, app.mailbox.channel_after) {
         app.mailbox.extend(MailboxTab::Channel, batch);
     }
@@ -1639,6 +1642,9 @@ mod tests {
         fn inbox(&self, _id: &str, _after: i64) -> anyhow::Result<Vec<crate::mailbox::MessageRow>> {
             Ok(Vec::new())
         }
+        fn sent(&self, _id: &str, _after: i64) -> anyhow::Result<Vec<crate::mailbox::MessageRow>> {
+            Ok(Vec::new())
+        }
         fn channel_feed(
             &self,
             _id: &str,
@@ -1747,6 +1753,8 @@ mod tests {
         assert_eq!(app.focused_pane, Pane::Mailbox);
         assert_eq!(app.mailbox_tab, MailboxTab::Inbox);
 
+        dispatch(&mut app, key(KeyCode::Right));
+        assert_eq!(app.mailbox_tab, MailboxTab::Sent);
         dispatch(&mut app, key(KeyCode::Right));
         assert_eq!(app.mailbox_tab, MailboxTab::Channel);
         dispatch(&mut app, key(KeyCode::Right));
@@ -1936,6 +1944,7 @@ mod tests {
     /// private `tests` module).
     struct TripleFilterMock {
         inbox: Vec<crate::mailbox::MessageRow>,
+        sent: Vec<crate::mailbox::MessageRow>,
         channel: Vec<crate::mailbox::MessageRow>,
         wire: Vec<crate::mailbox::MessageRow>,
         calls: std::sync::Mutex<Vec<(&'static str, String, i64)>>,
@@ -1944,6 +1953,10 @@ mod tests {
         fn inbox(&self, id: &str, after: i64) -> anyhow::Result<Vec<crate::mailbox::MessageRow>> {
             self.calls.lock().unwrap().push(("inbox", id.into(), after));
             Ok(self.inbox.clone())
+        }
+        fn sent(&self, id: &str, after: i64) -> anyhow::Result<Vec<crate::mailbox::MessageRow>> {
+            self.calls.lock().unwrap().push(("sent", id.into(), after));
+            Ok(self.sent.clone())
         }
         fn channel_feed(
             &self,
@@ -1963,7 +1976,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_mailbox_fans_out_to_three_filters() {
+    fn refresh_mailbox_fans_out_to_four_filters() {
         use crate::mailbox::MessageRow;
         let mut app = App::new();
         app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
@@ -1973,6 +1986,13 @@ mod tests {
                 sender: "p:b".into(),
                 recipient: "p:a".into(),
                 text: "dm".into(),
+                sent_at: 0.0,
+            }],
+            sent: vec![MessageRow {
+                id: 4,
+                sender: "p:a".into(),
+                recipient: "p:b".into(),
+                text: "outgoing dm".into(),
                 sent_at: 0.0,
             }],
             channel: vec![MessageRow {
@@ -1993,12 +2013,14 @@ mod tests {
         };
         super::refresh_mailbox(&mut app, &mock);
         assert_eq!(app.mailbox.inbox.len(), 1);
+        assert_eq!(app.mailbox.sent.len(), 1);
         assert_eq!(app.mailbox.channel.len(), 1);
         assert_eq!(app.mailbox.wire.len(), 1);
         let calls = mock.calls.lock().unwrap();
         // The selected agent is p:a (auto-set by replace_team to
         // index 0); the wire filter takes the project id `p`.
         assert!(calls.contains(&("inbox", "p:a".into(), 0)));
+        assert!(calls.contains(&("sent", "p:a".into(), 0)));
         assert!(calls.contains(&("channel", "p:a".into(), 0)));
         assert!(calls.contains(&("wire", "p".into(), 0)));
     }

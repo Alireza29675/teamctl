@@ -436,9 +436,10 @@ fn render_mailbox(buf: &mut Buffer, area: Rect, app: &App) {
 }
 
 fn render_mailbox_tabs(buf: &mut Buffer, area: Rect, app: &App) {
-    // `Inbox  Channel  Wire` — active tab gets the focus accent
-    // (REVERSED so it reads as a highlight bar even in monochrome
-    // terminals where colour alone wouldn't carry the signal).
+    // `Inbox  Sent  Channel  Wire` — active tab gets the focus
+    // accent (REVERSED so it reads as a highlight bar even in
+    // monochrome terminals where colour alone wouldn't carry the
+    // signal).
     let active_style = Style::default()
         .fg(app.capabilities.accent())
         .add_modifier(Modifier::REVERSED);

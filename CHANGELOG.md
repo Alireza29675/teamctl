@@ -6,6 +6,18 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ### Added
 
+- **`Sent` mailbox tab in the TUI** (T-122). The mailbox pane gains
+  a fourth tab, `Sent`, between `Inbox` and `Channel`. It lists
+  every row whose sender is the focused agent — DMs the agent
+  sent, telegram replies, channel posts, and wire broadcasts —
+  newest first, one row per outgoing message, reusing the
+  existing row renderer. The cycle is now `Inbox → Sent →
+  Channel → Wire` (`→`/`←` to walk when the mailbox pane is
+  focused). Closes the "did this agent actually emit X" debug
+  loop without pivoting to the recipient — load-bearing for
+  Telegram replies, where the operator otherwise has to focus
+  the user-side mailbox to verify a reply went out.
+
 - **Lazy inbox delivery** (T-104, #104). Channel notifications now
   arrive as short stubs (`📬 1 new message from <sender>: "<first 80
   chars>"`) instead of full bodies, so a new message no longer evicts
