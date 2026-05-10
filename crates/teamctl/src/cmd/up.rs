@@ -77,16 +77,21 @@ pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
     }
 
     // Persist the applied-state snapshot so a reload immediately
-    // afterwards correctly sees zero diff. Scoped runs skip the
-    // snapshot rewrite — applied.json is a whole-tree document, and
-    // overwriting it from a scoped run would clobber unscoped projects'
-    // entries. Operators running scoped commands accept that the next
-    // unscoped `reload` will re-diff against the older snapshot.
-    if scoped.is_none() {
-        let bin = super::team_mcp_bin().display().to_string();
-        let snap = super::snapshot::compute(&compose, &bin);
-        super::snapshot::write(&compose.root, &snap)?;
-    }
+    // afterwards correctly sees zero diff. Scoped runs merge just the
+    // named project's per-agent entries into the existing
+    // applied.json (T-133) — preserves correctness for the next
+    // unscoped reload while still recording what this scoped up
+    // applied.
+    let bin = super::team_mcp_bin().display().to_string();
+    let next = super::snapshot::compute(&compose, &bin);
+    let snap = match scoped.as_deref() {
+        Some(id) => {
+            let prev = super::snapshot::read(&compose.root);
+            super::snapshot::merge_project_into(prev.as_ref(), &next, id)
+        }
+        None => next,
+    };
+    super::snapshot::write(&compose.root, &snap)?;
     Ok(())
 }
 

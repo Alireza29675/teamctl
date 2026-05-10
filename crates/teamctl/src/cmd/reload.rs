@@ -99,9 +99,15 @@ pub fn run(root: &Path, dry_run: bool, project: Option<&str>) -> Result<()> {
     }
 
     apply_plan(&compose, &plan)?;
-    if scoped.is_none() {
-        snapshot::write(&compose.root, &next)?;
-    }
+    // Persist the snapshot. Scoped runs merge the named project's
+    // per-agent entries into the existing applied.json (T-133) —
+    // preserves diff correctness for the next unscoped reload without
+    // clobbering other projects' last-applied fingerprints.
+    let snap = match scoped.as_deref() {
+        Some(id) => snapshot::merge_project_into(prev.as_ref(), &next, id),
+        None => next,
+    };
+    snapshot::write(&compose.root, &snap)?;
     Ok(())
 }
 
