@@ -136,7 +136,7 @@ teamctl is developed *on* teamctl — by a team of agents running in this very `
 | <img src="docs/assets/team/otis.jpg" width="60"> | **[Otis](.team/roles/otis.md)** | Product engineer | The thorough explainer. Writes the PR descriptions everyone thanks him for — context first, decisions second, trade-offs honest. |
 | <img src="docs/assets/team/kian.jpg" width="60"> | **[Kian](.team/roles/kian.md)** | Product engineer | Quiet and deep. Antennae for security holes and regressions — spots the input that isn't validated, the rename that half-applied. |
 | <img src="docs/assets/team/nico.jpg" width="60"> | **[Nico](.team/roles/nico.md)** | Product engineer | High-frequency communicator. Frequent small updates, low silence. The team always knows where his ticket stands because he says it. |
-| <img src="docs/assets/team/otto.jpg" width="60"> | **[Otto](.team/roles/otto.md)** | Ops | Keeps the dogfood team running cleanly. Lives in a separate project from the dev team — a process can't cleanly restart itself. |
+| <img src="docs/assets/team/otto.jpg" width="60"> | **[Otto](.team/roles/otto.md)** | TeamOps | Keeps the dogfood team running cleanly. Lives in a separate project from the dev team — a process can't cleanly restart itself. |
 
 Each agent runs in `tmux`, with its own identity, its own memory, and a domain it owns. Click any name to read its role prompt. The team coordinates through teamctl's own mailbox, the same one your team will run on.
 
