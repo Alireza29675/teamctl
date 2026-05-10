@@ -42,27 +42,42 @@ log() {
     printf '[agent-wrapper %s] %s\n' "$AGENT" "$*" >&2
 }
 
-# Claude Code shows a non-persistent confirmation dialog every time it
-# starts with `--dangerously-load-development-channels` for a server
-# that isn't on Anthropic's allowlist. team-mcp is off-allowlist during
-# the Channels research preview, so the dialog reappears on every
-# wrapper restart and strands the agent at "Press Enter to confirm".
+# Claude Code surfaces a handful of one-shot confirmation dialogs that
+# strand a headless agent because no operator is at the keyboard:
 #
-# This watcher polls our own tmux pane for the dialog header and sends
-# one Enter when it appears, then exits. Bounded at 60s so it never
-# lingers past a genuine prompt the operator is answering. No-op once
-# team-mcp is allowlisted (the header never shows up), and no-op
-# outside tmux (TMUX_PANE unset).
-auto_confirm_dev_channels() {
+#   - "Loading development channels"   — fires every wrapper start
+#     while team-mcp is off Anthropic's allowlist (Channels research
+#     preview).
+#   - "Bypass Permissions mode"        — fires on first launch under
+#     --dangerously-skip-permissions when the acceptance marker isn't
+#     on disk (fresh $HOME, fresh user, new VM).
+#   - "Stop and wait for limit to reset" — fires when claude hits a
+#     usage-limit cap and asks the operator whether to wait, switch
+#     to extra usage, or upgrade. Default-highlighted option is
+#     "wait", which is the right choice for a supervised headless
+#     agent (operator can intervene manually for a different choice).
+#
+# The watcher polls our own tmux pane for any of these headers and
+# sends one Enter when matched, then sleeps 1s so the dialog clears
+# from the captured frame before the next poll (otherwise the same
+# match would re-fire). Patterns are anchored on text that only
+# appears inside these specific dialogs, so accidental matches
+# against legitimate operator prompts are unlikely.
+#
+# The watcher runs for the full lifetime of the runtime (the limit
+# prompt can fire at any point, not only at boot) and is reaped by
+# the outer loop after the runtime exits. No-op outside tmux
+# (TMUX_PANE unset).
+auto_confirm_known_dialogs() {
     pane="${TMUX_PANE:-${TMUX_SESSION:-}}"
     [ -z "$pane" ] && return 0
     command -v tmux >/dev/null 2>&1 || return 0
-    end=$(( $(date +%s) + 60 ))
-    while [ "$(date +%s)" -lt "$end" ]; do
+    while :; do
         if tmux capture-pane -t "$pane" -p 2>/dev/null \
-            | grep -qF "Loading development channels"; then
+            | grep -qE 'Loading development channels|Bypass Permissions mode|Stop and wait for limit to reset'; then
             tmux send-keys -t "$pane" Enter
-            return 0
+            sleep 1
+            continue
         fi
         sleep 0.5
     done
@@ -139,7 +154,7 @@ while :; do
 
     AUTO_CONFIRM_PID=
     if [ "${AUTO_CONFIRM:-0}" = 1 ]; then
-        auto_confirm_dev_channels &
+        auto_confirm_known_dialogs &
         AUTO_CONFIRM_PID=$!
     fi
     AUTO_CONFIRM=0
