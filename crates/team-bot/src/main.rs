@@ -480,6 +480,15 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
     Ok(())
 }
 
+fn approval_outcome_line(approved: bool, approver_first_name: &str) -> String {
+    let verb = if approved {
+        "✅ Approved"
+    } else {
+        "❌ Rejected"
+    };
+    format!("{verb} by {approver_first_name}")
+}
+
 async fn handle_callback(bot: Bot, q: CallbackQuery, state: Arc<State>) -> ResponseResult<()> {
     let chat_id = q.message.as_ref().map(|m| m.chat().id.0).unwrap_or(0);
     if !state.is_authorized(chat_id) {
@@ -539,13 +548,9 @@ async fn handle_callback(bot: Bot, q: CallbackQuery, state: Arc<State>) -> Respo
         let chat = msg.chat().id;
         let mid = msg.id();
         let original = msg.regular_message().and_then(|m| m.text()).unwrap_or("");
-        let outcome = if approved {
-            "✅ Approved by Alireza"
-        } else {
-            "❌ Rejected by Alireza"
-        };
+        let outcome = approval_outcome_line(approved, &q.from.first_name);
         let new_text = if original.is_empty() {
-            outcome.to_string()
+            outcome.clone()
         } else {
             format!("{original}\n\n{outcome}")
         };
@@ -1725,6 +1730,23 @@ mod tests {
         // the caller can reject (sending an empty immediate row would be
         // useless). Caller is responsible for the empty-body guard.
         assert_eq!(peel_readnow("/readnow "), ("", Some("immediate")));
+    }
+
+    #[test]
+    fn approval_outcome_line_uses_approver_first_name() {
+        assert_eq!(approval_outcome_line(true, "Hamed"), "✅ Approved by Hamed",);
+        assert_eq!(
+            approval_outcome_line(false, "Hamed"),
+            "❌ Rejected by Hamed",
+        );
+    }
+
+    #[test]
+    fn approval_outcome_line_handles_unicode_first_name() {
+        assert_eq!(
+            approval_outcome_line(true, "علیرضا"),
+            "✅ Approved by علیرضا",
+        );
     }
 
     fn seed(conn: &Connection) {
