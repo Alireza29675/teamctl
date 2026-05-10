@@ -1,5 +1,22 @@
-# teamctl runtime state — do not commit.
-state/
+# teamctl runtime state — do not commit by default. Two carve-outs
+# are project-shaped (per #141) and committed: each agent's
+# `ways-of-working.md` (durable operator instructions) and
+# `painpoints/` (process signals the agent surfaced for hugo to
+# action). Everything else under `state/` — mailbox db, envs,
+# mcp configs, sessions, logs, memory, handoffs, etc. — is host- or
+# runtime-shaped and stays ignored.
+#
+# Negation order matters: ignore the whole subtree, walk the
+# directory chain back in, then re-include only the leaves we want
+# committed. Adding new committed paths under state/ requires both
+# a `!state/<path>` rule below AND, for any new directory, a
+# matching `!state/<path>/` re-include so git can traverse.
+state/*
+!state/*/
+state/*/*
+!state/*/ways-of-working.md
+!state/*/painpoints/
+!state/*/painpoints/**
 
 # Secrets — never commit. `.env.example` is the checked-in template.
 .env
