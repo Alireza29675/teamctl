@@ -106,6 +106,35 @@ pub fn read(root: &Path) -> Option<Snapshot> {
     }
 }
 
+/// T-133: merge a freshly-computed snapshot's per-project entries into
+/// a prior snapshot. Used by scoped `up` and `reload` so `applied.json`
+/// carries the named project's current fingerprints without
+/// overwriting other projects' last-applied state. Other projects'
+/// agent entries pass through from `prior` unchanged; entries belonging
+/// to the named project that exist in `prior` but not `next` (project
+/// rename or removal) are dropped. Top-level metadata is taken from
+/// `next` because it reflects the YAML state the operator just looked
+/// at — the next unscoped reload still re-diffs other projects'
+/// agents against their stale fingerprints, so correctness holds.
+pub fn merge_project_into(prior: Option<&Snapshot>, next: &Snapshot, project_id: &str) -> Snapshot {
+    let prefix = format!("{project_id}:");
+    let mut agents: BTreeMap<String, AgentEntry> =
+        prior.map(|s| s.agents.clone()).unwrap_or_default();
+    agents.retain(|id, _| !id.starts_with(&prefix));
+    for (id, entry) in &next.agents {
+        if id.starts_with(&prefix) {
+            agents.insert(id.clone(), entry.clone());
+        }
+    }
+    Snapshot {
+        schema: SCHEMA_VERSION,
+        applied_at: next.applied_at.clone(),
+        compose_digest: next.compose_digest.clone(),
+        global: next.global.clone(),
+        agents,
+    }
+}
+
 /// Persist the snapshot to disk, creating parent dirs as needed.
 pub fn write(root: &Path, snapshot: &Snapshot) -> Result<()> {
     let path = snapshot_path(root);
@@ -443,5 +472,139 @@ mod tests {
         assert_eq!(hash_str("hello"), hash_str("hello"));
         assert_ne!(hash_str("hello"), hash_str("hello "));
         assert!(hash_str("x").starts_with("blake3:"));
+    }
+
+    // ── T-133 merge_project_into ───────────────────────────────────
+
+    #[test]
+    fn merge_replaces_named_project_entries_and_keeps_others() {
+        // Scoped up of project `a` against a prior snapshot that
+        // covers `a` and `b`. Result: `a`'s entries reflect `next`'s
+        // (current) fingerprints; `b`'s entries are untouched.
+        let prior = snap(vec![
+            (
+                "a:m",
+                entry("a-a-m", fp("old-env", "old-mcp", PromptFingerprint::None)),
+            ),
+            (
+                "b:m",
+                entry("a-b-m", fp("b-env", "b-mcp", PromptFingerprint::None)),
+            ),
+        ]);
+        let next = snap(vec![
+            (
+                "a:m",
+                entry("a-a-m", fp("new-env", "new-mcp", PromptFingerprint::None)),
+            ),
+            (
+                "b:m",
+                entry(
+                    "a-b-m",
+                    fp("b-changed-env", "b-mcp", PromptFingerprint::None),
+                ),
+            ),
+        ]);
+        let merged = merge_project_into(Some(&prior), &next, "a");
+        assert_eq!(merged.agents["a:m"].fingerprints.env, "new-env");
+        // b's entry is taken from prior, not next — scoped run does
+        // NOT carry forward project b's recomputed fingerprints.
+        assert_eq!(merged.agents["b:m"].fingerprints.env, "b-env");
+    }
+
+    #[test]
+    fn merge_drops_named_project_entries_present_in_prior_but_not_next() {
+        // A worker was renamed/removed inside project `a`. The
+        // scoped-merged snapshot drops the stale entry so the next
+        // unscoped reload doesn't try to teardown an agent the
+        // current YAML no longer defines.
+        let prior = snap(vec![
+            (
+                "a:gone",
+                entry("a-a-gone", fp("e", "m", PromptFingerprint::None)),
+            ),
+            (
+                "b:keep",
+                entry("a-b-keep", fp("e", "m", PromptFingerprint::None)),
+            ),
+        ]);
+        let next = snap(vec![(
+            "a:m",
+            entry("a-a-m", fp("e", "m", PromptFingerprint::None)),
+        )]);
+        let merged = merge_project_into(Some(&prior), &next, "a");
+        assert!(!merged.agents.contains_key("a:gone"));
+        assert!(merged.agents.contains_key("a:m"));
+        assert!(merged.agents.contains_key("b:keep"));
+    }
+
+    #[test]
+    fn merge_with_no_prior_falls_back_to_next_filtered() {
+        // First-ever scoped run on a fresh root: applied.json is
+        // absent, so prior is None. The merged snapshot ends up with
+        // only the named project's entries from `next`. Subsequent
+        // unscoped reload re-renders the rest.
+        let next = snap(vec![
+            ("a:m", entry("a-a-m", fp("e", "m", PromptFingerprint::None))),
+            ("b:m", entry("a-b-m", fp("e", "m", PromptFingerprint::None))),
+        ]);
+        let merged = merge_project_into(None, &next, "a");
+        assert!(merged.agents.contains_key("a:m"));
+        assert!(!merged.agents.contains_key("b:m"));
+    }
+
+    #[test]
+    fn merge_uses_next_top_level_metadata() {
+        // compose_digest, global, applied_at always come from `next`
+        // — they reflect the YAML state the operator just looked at.
+        // Other-project per-agent fingerprints stay at prior values
+        // (re-diffed by the next unscoped reload), so correctness
+        // holds without needing two separate digest fields.
+        let prior = Snapshot {
+            applied_at: "old-time".into(),
+            compose_digest: "blake3:old".into(),
+            global: GlobalSnap {
+                tmux_prefix: "old-".into(),
+                ..GlobalSnap::default()
+            },
+            agents: BTreeMap::new(),
+            ..Snapshot::default()
+        };
+        let next = Snapshot {
+            applied_at: "new-time".into(),
+            compose_digest: "blake3:new".into(),
+            global: GlobalSnap {
+                tmux_prefix: "new-".into(),
+                ..GlobalSnap::default()
+            },
+            agents: BTreeMap::new(),
+            ..Snapshot::default()
+        };
+        let merged = merge_project_into(Some(&prior), &next, "a");
+        assert_eq!(merged.applied_at, "new-time");
+        assert_eq!(merged.compose_digest, "blake3:new");
+        assert_eq!(merged.global.tmux_prefix, "new-");
+    }
+
+    #[test]
+    fn merge_does_not_touch_prefix_collision_projects() {
+        // `aa:m` does not start with `a:` — scoped merge for project
+        // `a` must leave `aa`'s entries untouched.
+        let prior = snap(vec![
+            (
+                "a:m",
+                entry("a-a-m", fp("a-env", "m", PromptFingerprint::None)),
+            ),
+            (
+                "aa:m",
+                entry("a-aa-m", fp("aa-env", "m", PromptFingerprint::None)),
+            ),
+        ]);
+        let next = snap(vec![(
+            "a:m",
+            entry("a-a-m", fp("new-env", "m", PromptFingerprint::None)),
+        )]);
+        let merged = merge_project_into(Some(&prior), &next, "a");
+        assert_eq!(merged.agents["a:m"].fingerprints.env, "new-env");
+        assert_eq!(merged.agents["aa:m"].fingerprints.env, "aa-env");
     }
 }

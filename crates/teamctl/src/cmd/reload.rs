@@ -41,7 +41,7 @@ use team_core::supervisor::{AgentSpec, AgentState, DrainOutcome, Supervisor, Tmu
 
 use super::snapshot::{self, AgentEntry, ReloadPlan, RemovedAgent};
 
-pub fn run(root: &Path, dry_run: bool) -> Result<()> {
+pub fn run(root: &Path, dry_run: bool, project: Option<&str>) -> Result<()> {
     let compose = super::load(root)?;
     let errs = team_core::validate::validate(&compose);
     if !errs.is_empty() {
@@ -50,6 +50,9 @@ pub fn run(root: &Path, dry_run: bool) -> Result<()> {
         }
         anyhow::bail!("{} validation error(s) — fix before reload", errs.len());
     }
+    let scoped = project
+        .map(|name| super::project_filter::resolve(&compose, name))
+        .transpose()?;
 
     let prev = snapshot::read(&compose.root);
     let bin = super::team_mcp_bin().display().to_string();
@@ -60,7 +63,10 @@ pub fn run(root: &Path, dry_run: bool) -> Result<()> {
     // fingerprints cover everything that flows from compose +
     // role_prompt files. Together they're a tight "nothing applied,
     // nothing to do" check.
-    let plan = snapshot::plan(prev.as_ref(), &next);
+    let mut plan = snapshot::plan(prev.as_ref(), &next);
+    if let Some(id) = scoped.as_deref() {
+        plan = filter_plan_to_project(plan, id);
+    }
     let no_changes = plan.is_empty()
         && prev
             .as_ref()
@@ -80,13 +86,62 @@ pub fn run(root: &Path, dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
-    super::up::ensure_wrapper_and_dirs(&compose)?;
-    super::up::render_all_public(&compose)?;
-    super::up::register_all_public(&compose)?;
+    // Per T-133: scoped runs skip the global wrapper rewrite and the
+    // whole-tree DB rewrite (they would clobber other projects'
+    // state). Per-project artefact rendering still happens so
+    // freshly-edited env or mcp files land before the supervisor
+    // restarts. The snapshot is still written below — but merged
+    // into the prior snapshot rather than replacing it.
+    if let Some(id) = scoped.as_deref() {
+        super::up::render_project_public(&compose, id)?;
+    } else {
+        super::up::ensure_wrapper_and_dirs(&compose)?;
+        super::up::render_all_public(&compose)?;
+        super::up::register_all_public(&compose)?;
+    }
 
     apply_plan(&compose, &plan)?;
-    snapshot::write(&compose.root, &next)?;
+    // Persist the snapshot. Scoped runs merge the named project's
+    // per-agent entries into the existing applied.json (T-133) —
+    // preserves diff correctness for the next unscoped reload without
+    // clobbering other projects' last-applied fingerprints.
+    let snap = match scoped.as_deref() {
+        Some(id) => snapshot::merge_project_into(prev.as_ref(), &next, id),
+        None => next,
+    };
+    snapshot::write(&compose.root, &snap)?;
     Ok(())
+}
+
+/// Filter a plan down to entries whose agent id begins with
+/// `<project_id>:`. Used when `teamctl reload` is invoked with a
+/// project arg — the diff is computed across the whole compose, but
+/// only the named project's portion gets applied. The kept ids are
+/// untouched in the plan; the next unscoped reload will diff against
+/// the original snapshot and reconcile any project the scoped run
+/// missed.
+fn filter_plan_to_project(plan: ReloadPlan, project_id: &str) -> ReloadPlan {
+    let prefix = format!("{project_id}:");
+    let in_project = |id: &str| id.starts_with(&prefix);
+    ReloadPlan {
+        add: plan.add.into_iter().filter(|id| in_project(id)).collect(),
+        change: plan
+            .change
+            .into_iter()
+            .filter(|(id, _)| in_project(id))
+            .collect(),
+        remove: plan
+            .remove
+            .into_iter()
+            .filter(|r| in_project(&r.id))
+            .collect(),
+        keep: plan.keep.into_iter().filter(|id| in_project(id)).collect(),
+        change_prior: plan
+            .change_prior
+            .into_iter()
+            .filter(|(id, _)| in_project(id))
+            .collect(),
+    }
 }
 
 /// Write the plan to stdout in the same per-line format the apply
@@ -201,6 +256,10 @@ fn spec_from_prior(compose: &Compose, id: &str, prior: &AgentEntry) -> AgentSpec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cmd::snapshot::{
+        AgentEntry, ChangedInputs, Fingerprints, PromptFingerprint, RemovedAgent,
+    };
+    use std::collections::BTreeMap;
 
     #[test]
     fn drain_suffix_empty_on_graceful() {
@@ -210,5 +269,86 @@ mod tests {
     #[test]
     fn drain_suffix_annotates_timeout() {
         assert!(drain_suffix(DrainOutcome::TimedOutKilled).contains("drain timed out"));
+    }
+
+    fn entry(env: &str) -> AgentEntry {
+        AgentEntry {
+            tmux_session: "a-x".into(),
+            env_file: env.into(),
+            fingerprints: Fingerprints {
+                env: String::new(),
+                mcp: String::new(),
+                role_prompt: PromptFingerprint::None,
+            },
+        }
+    }
+
+    fn removed(id: &str) -> RemovedAgent {
+        RemovedAgent {
+            id: id.into(),
+            tmux_session: format!("a-{id}"),
+            env_file: PathBuf::from(""),
+        }
+    }
+
+    fn changed_inputs() -> ChangedInputs {
+        ChangedInputs {
+            env: true,
+            mcp: false,
+            role_prompt: false,
+        }
+    }
+
+    #[test]
+    fn filter_plan_keeps_only_matching_project_entries() {
+        // Whole-tree plan covers two projects; scoped reload trims it
+        // to one. The other project's add/change/remove/keep entries
+        // disappear so apply_plan never touches them.
+        let mut change_prior = BTreeMap::new();
+        change_prior.insert("a:m".into(), entry("/tmp/a-m.env"));
+        change_prior.insert("b:m".into(), entry("/tmp/b-m.env"));
+        let plan = ReloadPlan {
+            add: vec!["a:w".into(), "b:w".into()],
+            change: vec![
+                ("a:m".into(), changed_inputs()),
+                ("b:m".into(), changed_inputs()),
+            ],
+            remove: vec![removed("a:gone"), removed("b:gone")],
+            keep: vec!["a:keep".into(), "b:keep".into()],
+            change_prior,
+        };
+
+        let filtered = filter_plan_to_project(plan, "a");
+        assert_eq!(filtered.add, vec!["a:w"]);
+        assert_eq!(filtered.change.len(), 1);
+        assert_eq!(filtered.change[0].0, "a:m");
+        assert_eq!(filtered.remove.len(), 1);
+        assert_eq!(filtered.remove[0].id, "a:gone");
+        assert_eq!(filtered.keep, vec!["a:keep"]);
+        assert_eq!(filtered.change_prior.len(), 1);
+        assert!(filtered.change_prior.contains_key("a:m"));
+    }
+
+    #[test]
+    fn filter_plan_does_not_match_prefix_collisions() {
+        // Project ids `a` and `aa` share a prefix but the filter
+        // separates them — `aa:m` does not start with `a:` and stays
+        // out of the project-`a` slice.
+        let plan = ReloadPlan {
+            add: vec!["a:m".into(), "aa:m".into(), "ab:m".into()],
+            ..ReloadPlan::default()
+        };
+        let filtered = filter_plan_to_project(plan, "a");
+        assert_eq!(filtered.add, vec!["a:m"]);
+    }
+
+    #[test]
+    fn filter_plan_returns_empty_when_no_entries_match() {
+        let plan = ReloadPlan {
+            add: vec!["a:m".into(), "b:m".into()],
+            ..ReloadPlan::default()
+        };
+        let filtered = filter_plan_to_project(plan, "z");
+        assert!(filtered.is_empty());
     }
 }

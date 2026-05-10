@@ -12,6 +12,7 @@ pub mod init;
 pub mod inspect;
 pub mod logs;
 pub mod mail;
+pub mod project_filter;
 pub mod reload;
 pub mod rl_watch;
 pub mod send;

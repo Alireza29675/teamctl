@@ -34,9 +34,9 @@ Set `TEAMCTL_LOG=debug` for verbose tracing.
 | Command | Effect |
 |---|---|
 | `teamctl validate` | Parse the compose tree and check invariants. Exits non-zero on error. |
-| `teamctl up` | Render artifacts, register agents in the mailbox, start every tmux session. Auto-registers the current root as a context on first run. |
-| `teamctl down` | Stop every tmux session. State is preserved. |
-| `teamctl reload` | Diff against the last-applied snapshot; restart only changed agents. |
+| `teamctl up [PROJECT]` | Render artifacts, register agents in the mailbox, start every tmux session. Auto-registers the current root as a context on first run. Pass an optional project name (`project.id` or filename stem) to scope to one project — scoped runs skip the cross-project DB rewrite and merge just that project's per-agent entries into `applied.json`. |
+| `teamctl down [PROJECT]` | Stop every tmux session. State is preserved. Optional project name scopes to one project. |
+| `teamctl reload [PROJECT]` | Diff against the last-applied snapshot; restart only changed agents. Optional project name applies the diff for that project only and merges its per-agent entries into `applied.json`, leaving other projects' last-applied state untouched. |
 
 ## Inspection
 
