@@ -2,6 +2,8 @@
 title: Getting started
 ---
 
+If you're hand-authoring `team-compose.yaml` and skipping interactive `init`, read [How to think about agent teams](/concepts/teams/) first — it's the cognitive frame the `init` flow would have walked you through.
+
 ## Prerequisites
 
 - Linux (Ubuntu 22.04+, Debian 12+, Arch) or macOS.

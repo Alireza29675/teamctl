@@ -27,6 +27,7 @@ export default defineConfig({
         {
           label: 'Concepts',
           items: [
+            { label: 'How to think about agent teams', link: '/concepts/teams/' },
             { label: 'Projects', link: '/concepts/projects/' },
             { label: 'Channels', link: '/concepts/channels/' },
             { label: 'Runtimes', link: '/concepts/runtimes/' },
