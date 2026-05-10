@@ -239,6 +239,7 @@ mod tests {
                 rate_limits: Default::default(),
                 interfaces: vec![],
                 projects: vec![],
+                attachments: Default::default(),
             },
             projects: vec![Project {
                 version: 2,

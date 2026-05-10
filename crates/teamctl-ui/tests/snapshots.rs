@@ -305,11 +305,11 @@ fn approvals_modal_multi_row_cursor_advanced_at_120x30() {
 }
 
 #[test]
-fn compose_modal_renders_target_body_and_attach_todo_footer() {
-    // PR-UI-5: compose modal opens with the DM target in the
-    // title bar, the editor body in the middle, and a footer
-    // referencing attach issue #32 (so the missing affordance is
-    // visible to operators, not silent).
+fn compose_modal_renders_target_body_and_attach_footer() {
+    // PR-UI-5 + T-32: compose modal opens with the DM target in
+    // the title bar, the editor body in the middle, and a footer
+    // advertising the `Tab attach` affordance (T-32 wired the
+    // path-input overlay; before T-32 the footer carried a TODO).
     let mut app = fresh_app();
     app.replace_team(fixture_team(
         "writing-team",
@@ -343,9 +343,10 @@ fn compose_modal_renders_target_body_and_attach_todo_footer() {
         s.contains("line one") && s.contains("line two"),
         "body missing"
     );
+    assert!(s.contains("Tab attach"), "footer attach hint missing: {s}");
     assert!(
-        s.contains("Tab attach (TODO #32)"),
-        "footer attach hint missing: {s}"
+        !s.contains("TODO #32"),
+        "footer should not carry the TODO once the affordance ships: {s}"
     );
     insta::assert_snapshot!("compose_modal_120x30", s);
 }

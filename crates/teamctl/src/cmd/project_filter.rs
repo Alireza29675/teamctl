@@ -90,6 +90,7 @@ mod tests {
                         file: PathBuf::from(*f),
                     })
                     .collect(),
+                attachments: Default::default(),
             },
             projects: refs.iter().map(|(_, id, n)| project(id, n)).collect(),
         }
