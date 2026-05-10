@@ -65,9 +65,10 @@ enum Command {
     Up {
         /// Optional project to scope the operation to (matches
         /// `project.id` or the project filename without `.yaml`). When
-        /// omitted, operates on every project. Scoped runs skip
-        /// cross-project DB and snapshot rewrites, leaving other
-        /// projects' state untouched.
+        /// omitted, operates on every project. Scoped runs skip the
+        /// cross-project DB rewrite and merge just the named project's
+        /// per-agent entries into `applied.json`, leaving other
+        /// projects' last-applied state untouched.
         #[arg(value_name = "PROJECT")]
         project: Option<String>,
     },

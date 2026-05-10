@@ -86,10 +86,12 @@ pub fn run(root: &Path, dry_run: bool, project: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    // Per T-133: scoped runs skip the global wrapper/DB/snapshot
-    // rewrites because each clobbers state owned by other projects.
-    // Per-project artefact rendering still happens so a freshly-
-    // edited env or mcp file lands before the supervisor restarts.
+    // Per T-133: scoped runs skip the global wrapper rewrite and the
+    // whole-tree DB rewrite (they would clobber other projects'
+    // state). Per-project artefact rendering still happens so
+    // freshly-edited env or mcp files land before the supervisor
+    // restarts. The snapshot is still written below — but merged
+    // into the prior snapshot rather than replacing it.
     if let Some(id) = scoped.as_deref() {
         super::up::render_project_public(&compose, id)?;
     } else {
