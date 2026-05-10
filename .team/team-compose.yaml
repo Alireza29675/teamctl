@@ -9,6 +9,22 @@
 # For a minimal starter team, `cd` into your project and run
 # `teamctl init` (the `solo` template is closer to what most
 # operators will copy first).
+#
+# Per-role ways-of-working convention (#126):
+#
+#   Every role file under `roles/` references the standard
+#   `.team/state/<role>/ways-of-working.md` for durable operator
+#   instructions ("from now on do X", "never do Y"). The file is
+#   gitignored — it lives under `.team/state/` — and lazy-created
+#   on first write. Each role reads it at the start of every tick
+#   and appends when the project owner gives a standing rule.
+#   Otto (operations) holds write authority on every agent's
+#   ways-of-working.md so process changes land in writing rather
+#   than verbal guidance that evaporates across restarts.
+#
+#   When adding a new role to `roles/`, copy the ways-of-working
+#   subsection from any existing role's §6 Memory section so the
+#   convention stays uniform.
 
 version: 2
 

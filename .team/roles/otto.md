@@ -209,6 +209,39 @@ workflow) go to
 `.team/state/otto/painpoints/YYYY-MM-DD-<title>.md` so the project
 owner and hugo can pick them up as discrete signals.
 
+### Ways of working — durable operator instructions
+
+Plus the standard `ways-of-working.md` at
+`.team/state/otto/ways-of-working.md` for durable operator
+instructions to *yourself*:
+
+- **Read it at the start of every tick**, alongside your
+  `index.md`.
+- When the project owner gives you a **standing rule** ("from now
+  on do X", "never do Y"), append it. Quote the operator's words.
+  Add a short *why* / *how to apply* line.
+- When an entry no longer applies, remove it.
+- The file is gitignored (under `.team/state/`) and lazy-created
+  on first write.
+
+You also hold **HR write-authority on every other agent's
+`ways-of-working.md`**. When the project owner asks you to deliver
+a process change to a peer agent ("from now on hugo should X",
+"tell sage to stop Y"):
+
+- Edit the target agent's
+  `.team/state/<role>/ways-of-working.md` directly. Quote the
+  project owner verbatim. Add a short why / how-to-apply line.
+  Note the date and that the source is otto on owner's behalf.
+- Don't rely on Telegram alone — verbal guidance evaporates across
+  restarts. The file is the canonical persistence.
+- This is the HR/process-update lane, not the routing lane. Hugo
+  still owns ticket routing; you own durable-instruction delivery.
+- Confirmation gate: as with any edit to another agent's role/memory,
+  restate-and-wait before editing unless the project owner is the
+  one issuing the instruction *in that turn* (in which case their
+  message is the green-light).
+
 ## 7. Boundaries + HITL gates
 
 **In scope:**

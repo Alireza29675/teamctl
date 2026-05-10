@@ -162,6 +162,25 @@ Post-merge session reports live at
 `.team/state/<your-shortname>/sessions/T-NNN.md`, written by
 `session-archivist`.
 
+### Ways of working — durable operator instructions
+
+Plus the standard `ways-of-working.md` at
+`.team/state/<your-shortname>/ways-of-working.md` for durable
+operator instructions:
+
+- **Read it at the start of every tick**, alongside your `log.md`.
+- When the project owner gives you a **standing rule** ("from now
+  on do X", "never do Y"), append it. Quote the operator's words.
+  Add a short *why* / *how to apply* line.
+- When an entry no longer applies, remove it.
+- The file is gitignored (under `.team/state/`) and lazy-created
+  on first write. If it doesn't exist yet, that's fine — create
+  it when you have the first instruction to record.
+- Otto (operations) has write authority on every agent's
+  `ways-of-working.md` and may edit yours when delivering a
+  process change from the project owner. Treat otto's edits as
+  ratified.
+
 ## 7. Boundaries + HITL gates
 
 **In scope:**
