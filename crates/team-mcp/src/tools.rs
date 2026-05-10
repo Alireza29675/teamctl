@@ -51,7 +51,7 @@ pub fn schema() -> Value {
         },
         {
             "name": "inbox_peek",
-            "description": "Return up to `limit` unacked messages addressed to the caller. Non-destructive.",
+            "description": "Return up to `limit` unacked messages addressed to the caller. Non-destructive — peek does not mark anything resolved. Use this to browse the queue; use `inbox_read` to commit to handling specific ids (which fetches + auto-acks).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -61,8 +61,20 @@ pub fn schema() -> Value {
             }
         },
         {
+            "name": "inbox_read",
+            "description": "Fetch full bodies for the listed message ids and mark them resolved in the same call (T-104: read-is-resolve). The default channel notification is a stub; call `inbox_read` with the stub's `meta.id` to drill in. Ids the caller can't see, or already-acked ids, are silently skipped.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["ids"],
+                "properties": {
+                    "ids": { "type": "array", "items": { "type": "integer" }, "minItems": 1 }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "inbox_ack",
-            "description": "Mark the listed message ids as acknowledged so they stop appearing in inbox_peek/inbox_watch.",
+            "description": "Mark the listed message ids as acknowledged without reading the body — use to dismiss messages you've decided not to handle. To handle (read + resolve), use `inbox_read` instead.",
             "inputSchema": {
                 "type": "object",
                 "required": ["ids"],
@@ -202,6 +214,7 @@ pub async fn call(ctx: &Ctx, params: Value) -> Result<Value, String> {
         "whoami" => Ok(content_text(&ctx.agent_id)),
         "dm" => dm(ctx, p.arguments).await,
         "inbox_peek" => inbox_peek(ctx, p.arguments),
+        "inbox_read" => inbox_read(ctx, p.arguments),
         "inbox_ack" => inbox_ack(ctx, p.arguments),
         "inbox_watch" => inbox_watch(ctx, p.arguments).await,
         "broadcast" => broadcast(ctx, p.arguments),
@@ -687,6 +700,20 @@ fn inbox_ack(ctx: &Ctx, args: Value) -> Result<Value, String> {
     let a: InboxAckArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
     let n = ctx.store.inbox_ack(&a.ids).map_err(|e| e.to_string())?;
     Ok(content_json(&json!({ "acked": n })))
+}
+
+#[derive(Deserialize)]
+struct InboxReadArgs {
+    ids: Vec<i64>,
+}
+
+fn inbox_read(ctx: &Ctx, args: Value) -> Result<Value, String> {
+    let a: InboxReadArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+    let msgs = ctx
+        .store
+        .inbox_read(&ctx.agent_id, &a.ids)
+        .map_err(|e| e.to_string())?;
+    Ok(content_json(&json!({ "messages": msgs })))
 }
 
 #[derive(Deserialize, Default)]

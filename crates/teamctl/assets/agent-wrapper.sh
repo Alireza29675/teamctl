@@ -34,7 +34,7 @@ fi
 # Default to empty here so `set -u` doesn't trip the `[ -n "$EFFORT" ]`
 # check below for agents that omit it.
 : "${EFFORT:=}"
-: "${BOOTSTRAP_PROMPT:=Begin your shift as ${AGENT}. Team traffic is delivered to you as \`<channel source=\"team\">\` events via Claude Code Channels -- you do not need to poll. Process each event per your role and the system prompt, calling \`inbox_ack\` on the message ids you handle. Between events, idle. Use \`inbox_peek\` only for catch-up after a restart.}"
+: "${BOOTSTRAP_PROMPT:=Begin your shift as ${AGENT}. Team traffic is delivered to you as \`<channel source=\"team\">\` events via Claude Code Channels -- you do not need to poll. By default the body is a short \"📬 1 new message ...\" stub (meta.lazy=\"1\"); call \`inbox_read\` with the meta.id to fetch the full body and resolve it in one step. If the stub doesn't merit handling, call \`inbox_ack\` to dismiss. When the body lands inline (no meta.lazy, e.g. operator used \`/readnow\`), act on it directly and call \`inbox_ack\` on the id when done. Between events, idle. Use \`inbox_peek\` only for non-destructive catch-up after a restart.}"
 
 cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || true
 

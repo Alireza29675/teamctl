@@ -6,6 +6,17 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ### Added
 
+- **Lazy inbox delivery** (T-104, #104). Channel notifications now
+  arrive as short stubs (`📬 1 new message from <sender>: "<first 80
+  chars>"`) instead of full bodies, so a new message no longer evicts
+  the agent's working memory. The agent drills in via the new
+  `inbox_read` MCP tool, which fetches full bodies and auto-resolves
+  the rows in one transaction. Stubs carry `meta.lazy="1"` so the
+  agent can branch its behavior. Two opt-outs: per-message
+  `/readnow ` prefix on Telegram messages routes the body inline;
+  global env var `TEAM_LAZY_INBOX=0` restores pre-T-104 full-body
+  delivery. `inbox_peek` keeps non-destructive semantics for
+  post-restart catch-up.
 - **Telegram voice messages via Groq Whisper** (T-101). When
   `interfaces.telegram.speech_to_text` is set on a manager, voice
   notes sent to that bot are transcribed via the Groq STT API and

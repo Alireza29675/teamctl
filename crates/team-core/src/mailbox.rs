@@ -155,6 +155,12 @@ pub fn ensure(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // id this reply threads under for `reply_parameters`. NULL on
         // pre-T-086-B rows and on rows that aren't Telegram-bound.
         "ALTER TABLE messages ADD COLUMN telegram_msg_id INTEGER",
+        // T-104: per-message delivery mode for lazy inbox. NULL = lazy
+        // (the channel watcher emits a stub; the agent drills in via
+        // `inbox_read`). `'immediate'` = full body delivered inline,
+        // bypassing the stub. Set by the bot when an operator prefixes a
+        // message with `/readnow `.
+        "ALTER TABLE messages ADD COLUMN delivery_mode TEXT",
     ];
     for stmt in migrations {
         if let Err(e) = conn.execute(stmt, []) {
