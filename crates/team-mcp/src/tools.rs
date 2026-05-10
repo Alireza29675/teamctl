@@ -180,6 +180,11 @@ pub fn schema() -> Value {
             }
         },
         {
+            "name": "show_typing",
+            "description": "Show a Telegram \"typing…\" indicator in the operator's chat. Available only to managers (`is_manager: true`). Use right before kicking off work that takes more than a moment to produce visible output, so the operator gets a social cue that you're working rather than staring at silence. The indicator clears the moment any text from `reply_to_user` reaches the chat, or after a 10-second ceiling — whichever comes first. Calling `show_typing` again within an active window extends the ceiling (resets the 10s clock). No-op-safe: calling repeatedly is fine.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
             "name": "react_to_user",
             "description": "Apply an emoji reaction to a specific Telegram message from the operator. Available only to managers (`is_manager: true`). Use to acknowledge an inbound DM lightly without sending a full reply — 👀 to signal you're on it, ✍ to signal you're typing, 👍 to ack done. Each `react_to_user` call replaces any previous bot reaction on that message; pass an unsupported emoji and the call rejects with a clear error before reaching Telegram. The set of allowed emoji is the standard Telegram bot-reaction set (premium-tier-agnostic, ~75 emoji); use what you'd reach for in normal chat reactions. Pass the `telegram_msg_id` value from the inbound mailbox row you're reacting to.",
             "inputSchema": {
@@ -223,6 +228,7 @@ pub async fn call(ctx: &Ctx, params: Value) -> Result<Value, String> {
         "request_approval" => request_approval(ctx, p.arguments).await,
         "reply_to_user" => reply_to_user(ctx, p.arguments).await,
         "react_to_user" => react_to_user(ctx, p.arguments).await,
+        "show_typing" => show_typing(ctx).await,
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -629,6 +635,42 @@ async fn react_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
     Ok(content_json(
         &json!({ "id": id, "recipient": recipient, "telegram_msg_id": a.telegram_msg_id, "emoji": a.emoji }),
     ))
+}
+
+/// T-102: open or extend a Telegram "typing…" window for the operator's
+/// chat. Like `reply_to_user` and `react_to_user`, the actual Telegram
+/// call happens in `team-bot`; this side just appends a discriminator
+/// row to the mailbox. The bot's outbound dispatcher reads
+/// `kind = "typing"` and refreshes `sendChatAction` until either a
+/// text/image/file row from the same agent path lands (which clears the
+/// window) or a 10-second ceiling expires.
+async fn show_typing(ctx: &Ctx) -> Result<Value, String> {
+    if !ctx
+        .store
+        .is_manager(&ctx.agent_id)
+        .map_err(|e| e.to_string())?
+    {
+        return Err(format!(
+            "show_typing: only managers can show typing (caller={})",
+            ctx.agent_id
+        ));
+    }
+    let project = ctx.project().to_string();
+    let recipient = "user:telegram";
+    let id = ctx
+        .store
+        .send_dm_kind(
+            &project,
+            &ctx.agent_id,
+            recipient,
+            "",
+            None,
+            "typing",
+            "{}",
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(content_json(&json!({ "id": id, "recipient": recipient })))
 }
 
 #[derive(Deserialize)]
@@ -1162,6 +1204,54 @@ mod tests {
         assert!(
             err.contains("telegram_msg_id") || err.contains("missing"),
             "missing required field error: {err}"
+        );
+    }
+
+    // ── T-102 show_typing ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn show_typing_persists_kind_and_empty_payload() {
+        // Affirmative path: a manager-side call lands a row keyed by
+        // `kind = "typing"` with an empty JSON payload. The bot's
+        // dispatcher discriminates on `kind` alone, so the payload only
+        // has to be valid JSON.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = show_typing(&ctx).await.unwrap();
+        let id = resp["structuredContent"]["id"].as_i64().unwrap();
+        let (kind, payload) = fetch_kind_and_payload(&ctx.store, id);
+        assert_eq!(kind.as_deref(), Some("typing"));
+        assert_eq!(payload.as_deref(), Some("{}"));
+    }
+
+    #[tokio::test]
+    async fn show_typing_returns_message_id_and_recipient() {
+        // Response shape: callers get the new mailbox row id back so
+        // they can correlate it (mostly useful in tests + diagnostics —
+        // production agents fire-and-forget) and the recipient string
+        // matches the same constant `reply_to_user` and `react_to_user`
+        // emit, so a single response shape spans the manager-side
+        // tools.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = show_typing(&ctx).await.unwrap();
+        assert!(resp["structuredContent"]["id"].as_i64().is_some());
+        assert_eq!(resp["structuredContent"]["recipient"], "user:telegram");
+    }
+
+    #[tokio::test]
+    async fn show_typing_non_manager_is_rejected() {
+        // Manager gate: workers can't open a typing window. Mirrors the
+        // `reply_to_user` / `react_to_user` gating so the manager-only
+        // surface stays consistent.
+        let f = NamedTempFile::new().unwrap();
+        let store = Store::open(f.path()).unwrap();
+        store
+            .upsert_agent("p:dev", "p", "P", "dev", "claude-code", false)
+            .unwrap();
+        let ctx = Ctx::new("p:dev".to_string(), store);
+        let err = show_typing(&ctx).await.unwrap_err();
+        assert!(
+            err.contains("only managers"),
+            "non-manager must be gated: {err}"
         );
     }
 
