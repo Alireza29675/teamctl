@@ -3,9 +3,11 @@ description: First-run teamctl onboarding — from no-teamctl-installed to a run
 allowed-tools: Bash, Read, Write, Edit
 ---
 
-`/teamctl:init` is the first-run onboarding for teamctl. Seven stages: prerequisites and install (Stage 1), pick a team shape (Stage 2), confirm the proposed org (Stage 3), scaffold `.team/` and reveal the YAML (Stage 4), bring it up (Stage 5), wire Telegram (Stage 6), point at the lifecycle commands (Stage 7).
+`/teamctl:init` is the first-run onboarding for teamctl. Seven stages: prerequisites and install (Stage 1), a discovery conversation that surfaces the user's domains (Stage 2), confirm the proposed org (Stage 3), scaffold `.team/` and reveal the YAML (Stage 4), bring it up (Stage 5), wire Telegram (Stage 6), point at the lifecycle commands (Stage 7).
 
 Read [RULES.md](../RULES.md) before each stage. Voice rails: 1-2 sentences per beat, "experienced reliable coworker", emojis sparingly. Body voice is runtime-neutral. *"Claude Code runtime"* is a fact about the agent and stays; *"Claude reads the file"* is voice drift and goes. Substrate constraints are non-negotiable. The flow is resumable and idempotent — re-running skips anything already done.
+
+> **The shape of Stage 2 matters.** This skill does not hand users a template menu. It walks them through a discovery conversation that surfaces the *domains* in their work — the things with their own state, history, and decisions that compound over time. The cut is by domain ownership, not by job function. Read [`docs/src/content/docs/concepts/teams.md`](../../../docs/src/content/docs/concepts/teams.md) before tuning Stage 2 prose; the methodology there is canonical.
 
 ## Stage 1 — Detect & install
 
@@ -31,180 +33,230 @@ Run the chosen command yourself when the user confirms and the harness allows it
 
 If `tmux`, `git`, or `claude` are the ones missing, name what's missing and the canonical install path for the user's platform (`brew install tmux`, the Claude Code installer, etc.). Don't pretend to install runtimes the plugin can't reasonably manage — surface the gap and pause.
 
-## Stage 2 — What's the team for?
+## Stage 2 — Discover the domains
 
-Single beat:
+This stage is a conversation, not a quiz. The user names *things* in their work; you sharpen and stress-test each one; together you arrive at the set of domains that earn a persistent agent. No template menu. No multiple-choice surface. Read on for the verbatim openers, the sharpening passes, the stress tests, the two-gate validation, and the two fallback paths.
 
-> What kind of work? Pick one or describe yours:
+### 2a. Open the conversation
 
-Then the four named defaults, **verbatim**, in this order:
+Single beat, verbatim:
 
-> 1. OSS maintainer — a maintainer + 4 workers (triage, bug-fix, docs, release-manager); pauses for you on releases and merges to main.
-> 2. Editorial room — an editor + 3 workers (writer, fact-checker, seo-research); pauses for you before publish.
-> 3. Indie studio — a director + 3 workers (designer, writer, playtest-critic); pauses for you before releases or outbound emails.
-> 4. Solo triage — a manager + 2 workers (research, inbox); pauses for you before sending anything external.
+> What things in your work have their own state and history — things that change while you're not looking?
 
-Then the escape hatch, **verbatim**:
+Wait for the user to answer in their own words. Don't list examples. Don't offer multiple-choice. The question is the only thing on screen.
 
-> Or: tell me what your team should look like and I'll scaffold one to fit.
+If the user names one or more candidates, advance to **2b. Sharpen**.
 
-If the user picks 1, 2, 3, or 4, advance to Stage 3 with that named default. The pick is sticky — re-running the command later resumes from this point.
+If the user struggles, says "I don't know" or "I'm not sure what you mean," reach for the second primary question, verbatim:
 
-If the user picks the escape hatch and describes a custom team, hold for v1 with this surface:
+> Different angle — what do you keep re-explaining to yourself every time you context-switch back to it?
 
-> v1 ships with the four named defaults; describing your own team in plain English is on the way. Pick one of the four for now and you can edit afterwards with `/teamctl:adjust`.
+Wait again. If the user still can't surface anything, advance to the **can't-name-anything fallback** in section 2f.
 
-Then reoffer the four picks. One graceful surface, no apology spiral.
+### 2b. Sharpen each candidate
+
+For each candidate the user names, run one sharpening pass. Pick the pass that fits the candidate's shape — don't run them all on the same candidate; that's a quiz.
+
+- **If the candidate sounds substrate-shaped** (a database, a file system, an API endpoint, a config file — things that hold facts but don't decide):
+
+  > Does it make decisions, or just hold facts?
+
+  Substrates hold facts; domains decide. If the user's answer pulls toward "decides" (or names the *people / system* deciding on the substrate), the real candidate is the deciding layer, not the substrate. Reflect that back and continue.
+
+- **If the candidate sounds task-shaped** (a recurring activity, a periodic process — "code reviews every Friday," "weekly newsletter," "sprint planning"):
+
+  > Is this a thing that recurs, or a thing with its own lifecycle?
+
+  Recurring tasks belong to sub-agents — they're fired off per call, no persistence needed. Lifecycle = persistence territory. If the user's answer pulls toward "recurs," gently mark this candidate as sub-agent territory and continue. If the answer pulls toward "lifecycle" (state that compounds across the recurrences), the candidate is real.
+
+- **If the candidate is vague** ("the codebase," "the project," "the business"):
+
+  > What would break if no one owned it?
+
+  Pulls the user toward the ownership consequence — what concretely degrades or rots without an owner? If the answer is concrete and load-bearing, the candidate is real. If the answer is vague, the candidate hasn't been named at the right altitude yet — ask the user to pick the most important piece of "the codebase" or "the project" and run the sharpening again.
+
+The output of 2b is a refined candidate list: things that have been disambiguated from substrates, tasks, and vagueness.
+
+### 2c. Stress-test the candidates
+
+For each refined candidate, run **one** stress test. Don't run all three on the same candidate. Choose the one that fits.
+
+- **The vacation-rot test** — when the candidate is real but the user hasn't articulated *why* it matters:
+
+  > If no one owned this for two weeks, what would silently rot?
+
+  Concrete answer ("examples drift, broken links accumulate, version mismatch creeps in") = the candidate holds. Vague answer ("nothing really, things just slow down") = the candidate may not be domain-shaped. Mark it and ask the user to reconsider.
+
+- **The personification test** — when you want to surface whether the candidate has *positions*, not just state:
+
+  > If [candidate] had opinions, what would they be?
+
+  Domains have positions (the auth domain "wants" sessions short-lived; the docs domain "wants" examples runnable). If the user can name two or three opinions for the candidate, it's domain-shaped. If they can't, it's probably a substrate or a task.
+
+- **The hiring test** — when the candidate is ambiguous between function and domain:
+
+  > If you hired a human for this, would their title be a function (PM, QA, engineer) or a domain (auth, search, docs)?
+
+  Function title = the cut is wrong; the candidate is shaped around what someone *does*, not what they *own*. Reflect that back: "Sounds like that's a function-shaped role. The work itself probably lives in one of the domains we've named — or it's a sub-agent." Then revisit the candidate at the domain altitude.
+
+### 2d. Validate against the two gates
+
+For candidates that survive sharpening and stress tests, confirm both gates explicitly with the user. This is conversational, not a checklist; you're confirming that the candidate is real.
+
+**Gate (a) — entry conditions.** All three required:
+
+- **Ownership.** Is this a *thing* the agent will own end-to-end — not a slice, not a task?
+- **Time management.** Does the work have its own rhythm? Will the agent decide when to act, not just what to do when called?
+- **Persistent memory.** Will context accrue — decisions today informing decisions next month?
+
+**Gate (b) — at least one situational trigger.** Confirm at least one of:
+
+- **Domain separation** (state, history, decisions that compound)
+- **Focus separation** (continuous attention, not a fired-off task)
+- **Multiple opinions** (you want pushback from a peer with their own perspective)
+- **Synergy** (agents riff and improve each other's output over time)
+
+If both gates pass, the candidate earns a persistent agent. If either gate fails, gently surface that to the user — "that one feels more sub-agent-shaped, let's set it aside" — and continue with the remaining candidates.
+
+Stop the discovery loop when the user has surfaced **2-5 candidates that pass both gates**. Don't push for more; small teams are fine. If the user surfaces more than 5, ask whether to consolidate or to split into multiple projects (both are valid).
+
+### 2e. Offer inspirations (optional, user-driven)
+
+After the user has named their own domains, offer to show how other teams have cut theirs:
+
+> Want to see how other teams have cut their domains? I can show you four shapes from teams that have run on teamctl — not to pick from, just to compare yours against.
+
+If the user says yes, show the four legacy shapes (drawn from `examples/<folder>/.team/`) as a single inline reference, each with a one-line label describing what kind of work it fits:
+
+> **OSS maintainer** — a maintainer + 4 workers (triage, bug-fix, docs, release-manager). Fits maintained open-source repos.
+>
+> **Editorial room** — an editor + 3 workers (writer, fact-checker, seo-research). Fits content publishing.
+>
+> **Indie studio** — a director + 3 workers (designer, writer, playtest-critic). Fits small game / product teams.
+>
+> **Solo triage** — a manager + 2 workers (research, inbox). Fits a single operator's working queue.
+
+The user does **not** pick from these. They are shape-references only. The team you build in Stage 4 comes from the user's discovered domains, not from this list.
+
+If the user passes on the inspirations, advance to Stage 3 directly.
+
+### 2f. Fallback — user can't name anything
+
+If, after both primary questions and a fair attempt at sharpening, the user cannot surface a single candidate domain, the honest surface is verbatim:
+
+> Sometimes the cut isn't visible from the inside. You can hand-author `.team/team-compose.yaml` directly, or come back to `/teamctl:init` after you've worked with teamctl for a bit and the domains have surfaced themselves. Want me to point you at the docs page on how to think about teams?
+
+If the user says yes, surface the link: [docs/src/content/docs/concepts/teams.md](../../../docs/src/content/docs/concepts/teams.md) (in the deployed docs, `/concepts/teams/`). Then exit gracefully — no scaffolding, no template fallback. The user will return when they're ready.
+
+### 2g. Fallback — every candidate fails the gates
+
+If the user names things but every candidate fails the gates (most often because the candidates are tasks, not domains), the honest surface is verbatim:
+
+> The things you named are real, but they read more like tasks than domains. Tasks are sub-agent territory in Claude Code — they're already handled, no persistence needed. Want to keep going and see if a domain surfaces, or pause here and read the docs page first?
+
+Offer the docs link as an exit. If the user wants to keep going, return to **2a** with the second primary question (re-explanation cost) — different angle, different surface area.
+
+If a third pass fails, treat it as the can't-name-anything fallback and exit gracefully. Don't force a wrong-shaped team into existence.
 
 ## Stage 3 — Propose org
 
-Render the chosen default's org as a **named** ASCII tree. The team is named — never `team-1`, never `default`. Infer the name from the cwd's directory:
+Take the candidate domains the user surfaced in Stage 2 and propose an org. The team is named — never `team-1`, never `default`. Infer the name from the cwd's directory:
 
 - `~/dev/acme-blog` → `Acme blog`
 - `~/projects/sidequest-game` → `Sidequest game`
 
-If the cwd name is generic (`workspace`, `project`, `dev`, `code`, `src`, single letter), prompt once with a sensible default for the chosen team type:
+If the cwd name is generic (`workspace`, `project`, `dev`, `code`, `src`, single letter), prompt once for a name:
 
-> What should I call this team? (`OSS maintainers` / `Editorial desk` / `Studio team` / `Triage desk`)
+> What should I call this team?
 
-If the user just hits enter, take the offered default.
+If the user just hits enter, generate a sensible default from the surfaced domains (e.g., the first domain's name + " team": "Auth team," "Docs team"). Don't fall back to `team-1`.
 
-The tree maps the chosen default's actual roster from `examples/<name>/.team/projects/<id>.yaml`. Manager on top, "← you talk to this one on Telegram" annotation on the manager box, workers fanning out below.
+### Synthesise the org
 
-### OSS maintainer (5 agents)
+From the surfaced domains, suggest:
+
+- **Manager** — the most operator-facing or coordination-shaped domain (the one the operator most often needs to talk to directly). If the user surfaced one obviously-coordination-shaped candidate, propose that. Otherwise, ask once: "Which of these domains do you want as the manager — the one you'll DM most often?"
+- **Workers** — every other surfaced domain becomes a worker reporting to the manager.
+
+If the user surfaced only **1 candidate**, propose a single-agent team (manager only, no workers). Single-agent teamctl teams are valid; the persistence and identity still earn the substrate.
+
+If the user surfaced **more than 5**, ask whether to consolidate (some domains might compose into a single agent) or to split into multiple projects (each project gets its own manager + workers). Both are valid; don't silently truncate.
+
+Render the org as a named ASCII tree. Manager on top with the "← you talk to this one on Telegram" annotation, workers fanning out below. Use the same shape the legacy stage used:
 
 ```
-                ┌──────────────┐
-                │  maintainer  │ ← you talk to this one on Telegram
-                └──────┬───────┘
+              ┌──────────────────┐
+              │     <manager>    │ ← you talk to this one on Telegram
+              └────────┬─────────┘
                        │
-       ┌───────────┬───┴────┬─────────────────┐
-       │           │        │                 │
-  ┌────▼─────┐ ┌───▼────┐ ┌─▼────┐ ┌──────────▼────────┐
-  │  triage  │ │bug_fix │ │ docs │ │  release_manager  │
-  └──────────┘ └────────┘ └──────┘ └───────────────────┘
+       ┌───────────────┼─────────────────┐
+       │               │                 │
+  ┌────▼────┐ ┌────────▼─────┐ ┌─────────▼────┐
+  │ <wkr_1> │ │   <wkr_2>    │ │   <wkr_3>    │
+  └─────────┘ └──────────────┘ └──────────────┘
 ```
 
-### Editorial room (4 agents)
-
-```
-              ┌──────────────┐
-              │ head_editor  │ ← you talk to this one on Telegram
-              └──────┬───────┘
-                     │
-       ┌─────────────┼──────────────────┐
-       │             │                  │
-  ┌────▼───────┐ ┌───▼──────────┐ ┌─────▼────────┐
-  │news_writer │ │ fact_checker │ │ seo_research │
-  └────────────┘ └──────────────┘ └──────────────┘
-```
-
-### Indie studio (4 agents)
-
-```
-              ┌──────────────┐
-              │   director   │ ← you talk to this one on Telegram
-              └──────┬───────┘
-                     │
-       ┌─────────────┼──────────────────┐
-       │             │                  │
-  ┌────▼─────┐ ┌─────▼────┐ ┌───────────▼───────┐
-  │ designer │ │  writer  │ │  playtest_critic  │
-  └──────────┘ └──────────┘ └───────────────────┘
-```
-
-### Solo triage (3 agents)
-
-```
-       ┌──────────────┐
-       │   manager    │ ← you talk to this one on Telegram
-       └──────┬───────┘
-              │
-       ┌──────┴───────┐
-       │              │
-  ┌────▼─────┐  ┌─────▼────┐
-  │ research │  │  inbox   │
-  └──────────┘  └──────────┘
-```
-
-Closing line, with the agent count for the chosen default:
+Closing line:
 
 ```
 N Claude Code agents · Opus 4.7 · effort high. ship it?
 ```
 
-Where N is `5` for OSS maintainer, `4` for editorial room, `4` for indie studio, `3` for solo triage. The runtime descriptor is intentional — the v1 plugin scaffolds Claude Code agents on Opus 4.7 at high effort, per the parent ticket. Sister plugins handle other runtimes.
+Where N is the surfaced count.
 
-If the user confirms with "ship it", "yes", "go", or similar, advance to Stage 4. If they push back — wanting to drop a worker, swap a model, route a manager through Slack instead of Telegram — surface this once:
+If the user confirms with "ship it", "yes", "go", or similar, advance to Stage 4. If they push back — wanting to rename an agent, swap a worker into the manager seat, drop a candidate — accept the edit inline and re-render the tree. The user can adjust freely here; they're confirming a synthesis, not picking from a menu. Once confirmed, advance.
 
-> v1 ships the four named defaults as-is; the `/teamctl:adjust` ongoing skill (after init) handles edits. Want to ship as-is and I'll point you at `/teamctl:adjust` afterwards?
+If the user wants larger changes (different team name, redo the whole synthesis), step back to Stage 2 and re-sharpen. Don't force a shape the user doesn't recognise.
 
-Take a yes/no. If yes, advance. If no, accept it gracefully and exit; the user can re-run `/teamctl:init` later or hand-author `.team/team-compose.yaml` directly.
+## Stage 4 — Scaffold from synthesis, then reveal
 
-## Stage 4 — Init + reveal
+This is the moment the plugin commits to disk. Inputs handed off from Stages 2-3: the **surfaced domains** (each with the user's own words for what the agent owns + the gates that justified its persistence), the **manager / worker split**, the **team name**, and the **cwd** to scaffold into.
 
-This is the moment the plugin commits to disk. Inputs handed off from Stages 2-3: the **chosen default** (one of the four named picks), the **team name** (e.g. "Acme editorial", never `team-1`), and the **cwd** to scaffold into.
-
-The plugin scaffolds `.team/` directly. **Don't shell out to `teamctl init`** — its static `solo` / `blank` templates can't express the four named defaults' richer shape (per-manager Telegram interfaces, scoped channels, full HITL `globally_sensitive_actions`, budget). The four `examples/<folder>/.team/` trees are the canonical golden output; Stage 4 reproduces them byte-for-byte modulo three intentional substitutions (project id, team name, `tmux_prefix`).
-
-### Default-name → example-folder mapping
-
-User-facing skill labels diverge from on-disk folder names for two of the four. Resolve before reading the source tree:
-
-| Skill label (Stage 2) | `examples/<folder>/` | project YAML |
-| --- | --- | --- |
-| OSS maintainer       | `oss-maintainer`     | `projects/oss.yaml` |
-| Editorial room       | `newsletter-office`  | `projects/newsroom.yaml` |
-| Indie studio         | `indie-game-studio`  | `projects/studio.yaml` |
-| Solo triage          | `solo-triage`        | `projects/triage.yaml` |
-
-The folder-rename tickets parked separately (per parent T-077 clarifications log); the skill maps the label to the folder, no apology surface needed.
-
-**Editorial room asymmetry.** `examples/newsletter-office/.team/team-compose.yaml` lists two projects (`newsroom.yaml` + `blog-site.yaml`) and carries a top-level `interfaces:` email block wired to `newsroom:head_editor`. The "Editorial room" pick maps to the **newsroom project only** (the 4-agent roster the user confirmed in Stage 3). Drop the `blog-site.yaml` entry from the user's `projects:` list. Keep the email-interface block — it's how head_editor is reached in this default and is part of what the user signed up for.
+The plugin scaffolds `.team/` programmatically from the synthesised inputs. **No example folder is copied byte-for-byte.** The legacy `examples/<folder>/.team/` trees are role-prompt **substance inspiration** only (see role-prompt generation below); they are never the source of `team-compose.yaml` or `projects/<project-id>.yaml`.
 
 ### Derived inputs
 
 - **Project id** — kebab-case slug of the team name. Lowercase, alphanumeric + hyphens, collapse runs of hyphens, trim leading/trailing hyphens. "Acme editorial" → `acme-editorial`. "Side-project triage!" → `side-project-triage`.
-- **`tmux_prefix`** — `<project-id>-` (trailing hyphen). Used in the user's `team-compose.yaml`.
-- **Project-YAML filename** — `projects/<project-id>.yaml` in the user's tree (the example's filename, e.g. `oss.yaml`, gets renamed to the user's project id).
+- **`tmux_prefix`** — `<project-id>-` (trailing hyphen). Used in `team-compose.yaml`.
+- **Project-YAML filename** — `projects/<project-id>.yaml`.
 - **Team display name** — the user's chosen string verbatim, written to the `name:` field in `projects/<project-id>.yaml`.
 
 ### Files to write
 
-Read each file from `examples/<folder>/.team/` and write the same content under `<cwd>/.team/`, applying the three substitutions and one filename rename:
-
 ```
 <cwd>/.team/
-├── team-compose.yaml         # copy from example; substitute tmux_prefix + projects: file:
-├── projects/<project-id>.yaml # copy from example's projects/<example-id>.yaml; substitute project.id + project.name
+├── team-compose.yaml         # synthesised from a programmatic template; tmux_prefix + projects: file:
+├── projects/<project-id>.yaml # synthesised — channels, manager, workers, Telegram interface placeholders
 ├── roles/<role>.md           # one per agent — generated on the fly, see below
-├── .env.example              # copy from example verbatim (already canonical — TEAMCTL_TG_<NAME>_* for telegram defaults; NEWSROOM_EMAIL_* for editorial-room)
-└── .gitignore                # copy from example verbatim
+├── .env.example              # canonical template; TEAMCTL_TG_<NAME>_TOKEN / _CHATS placeholders per manager
+└── .gitignore                # canonical template
 ```
 
-Substitutions are surgical:
+The shape of each file:
 
-- `team-compose.yaml`: change `tmux_prefix:` value (e.g. `oss-` → `acme-editorial-`); change the entry under `projects:` to `- file: projects/<project-id>.yaml` so it points at the user's renamed project YAML.
-- `projects/<project-id>.yaml`: change `project.id:` (e.g. `oss` → `acme-editorial`) and `project.name:` (e.g. `OSS Maintainer` → `Acme editorial`). Channels, managers, workers, ACLs, and interfaces stay byte-for-byte.
+- **`team-compose.yaml`** — `version: 2`, broker `sqlite` at `state/mailbox.db`, supervisor `tmux` with `tmux_prefix: <project-id>-`, a single `projects:` entry pointing at `projects/<project-id>.yaml`, and a `globally_sensitive_actions` block carrying the canonical defaults (publish, release, deploy, payment, external messages — same shape the legacy examples use). No plugin-specific keys, no markers.
+- **`projects/<project-id>.yaml`** — `project.id: <project-id>`, `project.name: <team display name>`, an `all` channel with `members: '*'`, a `managers:` map with the manager entry (runtime `claude-code`, model `claude-opus-4-7`, effort `high`, `role_prompt: roles/<manager>.md`, `interfaces.telegram` with `bot_token_env: TEAMCTL_TG_<MANAGER_UPPER>_TOKEN` and `chat_ids_env: TEAMCTL_TG_<MANAGER_UPPER>_CHATS`), and a `workers:` map with each worker entry (same fields except no `interfaces.telegram` block). `can_dm` and `can_broadcast` populated from the manager-worker relationships.
+- **`.env.example`** — one block per manager, the two env vars commented with what to fill in. Same shape as legacy `.env.example` files.
+- **`.gitignore`** — canonical: `state/`, `.env`.
 
-Everything else — broker block, supervisor type, budget, hitl `globally_sensitive_actions`, channels list, manager/worker definitions, env-var references in `interfaces.telegram.bot_token_env` / `chat_ids_env` — copies verbatim. The example folders already use the canonical `TEAMCTL_TG_<NAME>_TOKEN` / `TEAMCTL_TG_<NAME>_CHATS` shape; no env-var work needed here.
-
-**No plugin-specific markers anywhere.** No `# generated-by:` comments. No skill signatures. No "this file was scaffolded by /teamctl:init" preamble. A user opening `team-compose.yaml` should not be able to tell it came from a plugin (substrate constraint #3).
+**Substrate constraint #3 still applies**: the output must be byte-for-byte indistinguishable from a hand-authored team. No `# generated-by:` markers anywhere. No plugin-only keys. A user inspecting `team-compose.yaml` cannot tell it came from a plugin.
 
 ### Role-prompt generation
 
-For each agent in `projects/<project-id>.yaml` — managers and workers both — generate `roles/<agent-id>.md` on the fly. **Don't copy the example's role prompt verbatim**; the example is inspiration, not a template. Generation runs inside this Claude Code session — read the spine plus the role facts, then write the role prompt directly to disk.
+For each agent in `projects/<project-id>.yaml` — manager and each worker — generate `roles/<agent-id>.md` on the fly. Generation runs inside this Claude Code session: read the spine plus the role facts, then write the role prompt directly to disk.
 
 For each agent, supply the model with:
 
 1. **The 8-section spine**, read verbatim from `plugins/claude-code/role-prompt-style.md`. Every generated role prompt has all eight section headers in order: Identity, Mission, Voice, Best practices, Loop, Memory, Boundaries + HITL gates, Hard rules.
-2. **Role facts** drawn from the chosen project YAML and the team context:
-   - Agent id, agent kind (manager / worker), reports-to relationship, peers in the same project.
+2. **Role facts** drawn from the synthesised inputs and the project YAML:
+   - The agent's domain — the user's own words for what this agent owns (from Stage 2).
+   - The gates that justified its persistence (which Gate (b) triggers fired from Stage 2d).
+   - Agent kind (manager / worker), reports-to relationship, peers in the same project.
    - Channels the agent is on (`can_dm`, `can_broadcast` from the YAML).
    - HITL gates from the team's `globally_sensitive_actions`.
-   - Telegram-bound or not (manager only — read `interfaces.telegram` presence).
-3. **Substance inspiration** — the corresponding `examples/<folder>/.team/roles/<agent-id>.md`. Read it for *what kind of work this role does*; restate in the user's team's terms (the team name, the chosen default's project framing). The 8-section spine output may diverge in shape from the example's prose; substance should match.
-4. **Voice** — default coworker baseline at this stage (slack-style, short, concise, clear, emoji-friendly, "experienced reliable coworker"). Stage 6 regenerates Telegram-bound managers' prompts with custom-voice overrides if the user asks for one; Stage 4 doesn't pre-empt that.
+   - Telegram-bound or not (manager-only — read `interfaces.telegram` presence).
+3. **Substance inspiration** — find the closest legacy `examples/<folder>/.team/roles/<role>.md` by domain shape (not by user-facing label). For an "auth" domain agent, look at how the example role prompts handle owning a specific surface end-to-end. **Read it for shape and tone, not for content copy.** Restate in the user's team's terms.
+4. **Voice** — default coworker baseline (slack-style, short, concise, clear, emoji-friendly, "experienced reliable coworker"). Stage 6 regenerates Telegram-bound managers' prompts with custom-voice overrides if the user asks for one; Stage 4 doesn't pre-empt that.
 
 Write the prompt directly to `<cwd>/.team/roles/<agent-id>.md`. No CLAUDE attribution in the file. No "generated by" footer. The prompt should read like a careful human wrote it.
 
@@ -214,11 +266,11 @@ Run `teamctl validate` from `<cwd>`. Exit 0 is the gate.
 
 If validate succeeds, advance to the reveal beat.
 
-If validate fails (theoretically shouldn't if the example folders are sound, but defensive):
+If validate fails:
 
 > Hmm, validate flagged this: `<error verbatim>`. Want me to undo the `.team/` and stop, or leave it for you to inspect?
 
-Surface the error **verbatim** — don't re-format, don't paraphrase, don't massage. The user gets the rollback choice or the inspect choice; honour either. Validation failure here means a plugin bug, and the honest surface is the recovery path.
+Surface the error **verbatim** — don't re-format, don't paraphrase, don't massage. The user gets the rollback choice or the inspect choice; honour either. Validation failure here means a plugin bug; the honest surface is the recovery path.
 
 ### Reveal beat
 
@@ -237,10 +289,10 @@ Single beat:
 On confirm, run `teamctl up` from `<cwd>`. Parse the output for the agent count and the tmux-prefix-named sessions, then report inline:
 
 ```
-✓ 5 sessions alive in tmux (oss-maintainer, oss-triage, oss-bug_fix, oss-docs, oss-release_manager)
+✓ N sessions alive in tmux (<prefix><manager>, <prefix><wkr_1>, ...)
 ```
 
-Adapt the count and the names from the chosen default's roster and the project-id's `tmux_prefix`. The bullet is the whole beat — no celebration paragraph after it.
+Adapt the count and the names from the synthesised roster and the project-id's `tmux_prefix`. The bullet is the whole beat — no celebration paragraph after it.
 
 If `teamctl up` fails, surface the error verbatim and offer two paths forward — retry, or look at it together. Don't restart Stages 1-4. Voice rails: 1-2 sentences, "experienced reliable coworker," no apology spiral.
 
@@ -252,17 +304,9 @@ The "look at it together" beat is teammate-flavored on purpose. The user picked 
 
 The plugin **instructs**, doesn't wrap. `teamctl bot setup` is interactive (BotFather token paste, `/start` chat-id polling, env-var-name overrides) and runs in the user's terminal, not in a Bash subshell. Tell the user where to point the wizard; the wizard itself iterates managers, walks BotFather, captures token + chat id, writes `<cwd>/.team/.env`, and edits `interfaces.telegram` through the comment-preserving substrate (`team_core::yaml_edit`).
 
-### Pre-existing non-telegram interface pre-check
-
-Some defaults ship a manager with a non-Telegram interface already wired — editorial room's `head_editor` carries `email` from the newsroom template. Before pointing the user at the wizard, ask once per manager that has a non-Telegram `interfaces.<adapter>` block:
-
-> `<manager>` reaches you via `<existing-interface>` already. Add Telegram on top, or skip Telegram for this one?
-
-If the user picks "add Telegram", proceed to the defer beat — the wizard handles the YAML edit alongside the existing interface. If the user picks "skip Telegram", mark this manager as Stage-6-skipped-for-Telegram and continue. Voice-customize still fires for skipped managers (interface-independent). The Telegram-already-wired case isn't pre-checked here — `teamctl bot setup` recognises existing Telegram and surfaces *"already configured (skipped)"* / *"Resume?"* on its own.
-
 ### Closure + defer
 
-> All set up. Now let's connect your managers to Telegram.
+> All set up. Now let's connect your manager to Telegram.
 >
 > Run `teamctl bot setup` in a terminal — it'll walk you through it. (If anything breaks, run it again or skip and use `/teamctl:adjust` later.)
 
@@ -272,7 +316,7 @@ The tail clause — *"If anything breaks, run it again or skip and use `/teamctl
 
 ### Voice-customize sub-beat
 
-Continue immediately after the defer beat — don't block-wait for the user to finish the wizard. Voice-customize is local config (it edits `roles/<manager>.md`), interface-independent, and the user can keep both threads moving. Per manager (Telegram-bound or skip-Telegram from the pre-check), ask:
+Continue immediately after the defer beat — don't block-wait for the user to finish the wizard. Voice-customize is local config (it edits `roles/<manager>.md`), interface-independent, and the user can keep both threads moving. For the manager (only managers — workers stay on the Stage-4 default voice):
 
 > Want to customize `<manager>`'s voice, or use the default?
 
@@ -282,11 +326,9 @@ Continue immediately after the defer beat — don't block-wait for the user to f
 
 > Describe the voice you want — a sentence or two is plenty. Tone, formality, emoji use — whatever you want different.
 
-Capture the overrides. Re-run T-077-C's role-prompt-gen mechanism for THIS manager only, with the custom-voice override merged into section 3 (Voice) of the 8-section spine. Sections 1, 2, 4-8 stay as Stage 4 generated them. Overwrite `<cwd>/.team/roles/<manager>.md` with the regenerated prompt.
+Capture the overrides. Re-run the role-prompt-gen mechanism for THIS manager only, with the custom-voice override merged into section 3 (Voice) of the 8-section spine. Sections 1, 2, 4-8 stay as Stage 4 generated them. Overwrite `<cwd>/.team/roles/<manager>.md` with the regenerated prompt.
 
-If the user has multiple managers, drop the long default-voice description on subsequent prompts — *"Want to customize `editor`'s voice too, or use the default?"* is enough; the user already knows what default means.
-
-Per project-owner directive: voice-customize fires for managers only (workers stay on the Stage-4 default voice). Skip-Telegram managers still get it; voice customization doesn't depend on Telegram.
+If the synthesised team has more than one manager (rare in v1 — only when the user explicitly surfaced multiple operator-facing domains and split into separate projects), drop the long default-voice description on subsequent prompts. *"Want to customize `<other-manager>`'s voice too, or use the default?"* is enough.
 
 ## Stage 7 — UI + lifecycle
 
@@ -313,4 +355,8 @@ In case any stage tempts a shortcut:
 3. The `.team/` output Stage 4 produces is byte-for-byte identical to a hand-authored team — no plugin-only state, no generated-by markers.
 4. Every action this command takes is reproducible by hand-editing YAML afterwards.
 
-> See `.team/tasks/2026-05-03-teamctl-cc-plugin/SLICING.md` for the full slice plan.
+## The principle this implements
+
+The discovery conversation in Stage 2 teaches one thing: agents are cut by **domain ownership**, not by job function. PM / QA / engineer / designer reproduces a traditional org chart, which is often wrong even for humans. The right cut is by domains — things with their own state, history, and decisions that compound.
+
+For the full methodology, the two-gate framing, anti-patterns, and rationale, read [`docs/src/content/docs/concepts/teams.md`](../../../docs/src/content/docs/concepts/teams.md). That page is the canonical companion. If anything in this skill drifts from the methodology there, the docs page wins.
