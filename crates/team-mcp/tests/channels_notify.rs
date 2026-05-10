@@ -15,6 +15,19 @@ fn team_mcp_bin() -> std::path::PathBuf {
     env!("CARGO_BIN_EXE_team-mcp").into()
 }
 
+/// Budget for an expected JSON-RPC frame from the child — both direct
+/// responses (`recv_json`) and unsolicited channel notifications
+/// (`wait_for_method`). Hot-path wall clock is well under 100ms, but
+/// `cargo test` runs these tests in parallel and each spawns 1–2
+/// team-mcp child processes, so a loaded CI runner can occasionally
+/// push frame latency past the 2s/5s budgets we used before. 10s gives
+/// ~6× headroom over the typical green-run wall clock while still
+/// failing fast when something is genuinely broken. The negative-path
+/// test (`watcher_skips_pre_existing_unacked_messages_at_startup`)
+/// keeps its own deliberately-short budget — we want it to fail fast
+/// when no notification is expected.
+const RPC_BUDGET: Duration = Duration::from_secs(10);
+
 /// Reads stdout on a worker thread and surfaces lines via mpsc, so callers
 /// can `recv_timeout` instead of relying on a `read()` that blocks past
 /// our deadline (the negative-path test would otherwise wait for the
@@ -166,7 +179,7 @@ fn initialize_advertises_channel_capability() {
     let mailbox = tmp.path().join("mailbox.db");
     let mut p = Peer::spawn(&team_mcp_bin(), "hello:dev", &mailbox);
     p.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let resp = p.lines.recv_json(Duration::from_secs(2));
+    let resp = p.lines.recv_json(RPC_BUDGET);
     assert_eq!(
         resp["result"]["capabilities"]["experimental"]["claude/channel"],
         json!({}),
@@ -186,7 +199,7 @@ fn new_inbox_row_pushes_channel_notification_to_subscribed_agent() {
     // so its channel watcher unblocks.
     let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
     dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
     dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
 
     // mgr: the sender. Does NOT trip its initialised gate, so its watcher
@@ -194,7 +207,7 @@ fn new_inbox_row_pushes_channel_notification_to_subscribed_agent() {
     // per call" simple on this side.
     let mut mgr = Peer::spawn(&bin, "hello:mgr", &mailbox);
     mgr.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+    let _ = mgr.lines.recv_json(RPC_BUDGET);
 
     // Give dev's watcher a beat to capture the (empty) high-water mark
     // before the row arrives, so the new row strictly exceeds last_seen.
@@ -209,14 +222,14 @@ fn new_inbox_row_pushes_channel_notification_to_subscribed_agent() {
             "arguments": { "to": "dev", "text": "ping via channels" }
         }
     }));
-    let dm_resp = mgr.lines.recv_json(Duration::from_secs(2));
+    let dm_resp = mgr.lines.recv_json(RPC_BUDGET);
     let msg_id = dm_resp["result"]["structuredContent"]["id"]
         .as_i64()
         .expect("dm returned no id");
 
     let notif = dev
         .lines
-        .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
+        .wait_for_method("notifications/claude/channel", RPC_BUDGET)
         .expect("expected notifications/claude/channel within 5s");
 
     // T-104: lazy inbox is the default — the wire `content` is a short
@@ -261,7 +274,7 @@ fn watcher_skips_pre_existing_unacked_messages_at_startup() {
     // Seed an inbox row for dev *before* dev's process starts.
     let mut mgr = Peer::spawn(&bin, "hello:mgr", &mailbox);
     mgr.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+    let _ = mgr.lines.recv_json(RPC_BUDGET);
     mgr.write(&json!({
         "jsonrpc": "2.0",
         "id": 2,
@@ -271,13 +284,13 @@ fn watcher_skips_pre_existing_unacked_messages_at_startup() {
             "arguments": { "to": "dev", "text": "stale, not via channels" }
         }
     }));
-    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+    let _ = mgr.lines.recv_json(RPC_BUDGET);
     mgr.shutdown();
 
     // Now spawn dev and trip the initialised gate.
     let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
     dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
     dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
 
     // 1.5 s — three watcher ticks. No notification should arrive.
@@ -305,7 +318,7 @@ fn immediate_message_delivers_full_body_inline() {
 
     let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
     dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
     dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
     thread::sleep(Duration::from_millis(150));
 
@@ -326,7 +339,7 @@ fn immediate_message_delivers_full_body_inline() {
 
     let notif = dev
         .lines
-        .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
+        .wait_for_method("notifications/claude/channel", RPC_BUDGET)
         .expect("expected notifications/claude/channel within 5s");
     assert_eq!(
         notif["params"]["content"], "the build just broke, can you investigate",
@@ -350,12 +363,12 @@ fn lazy_inbox_disabled_by_env_delivers_full_body() {
 
     let mut dev = Peer::spawn_with_env(&bin, "hello:dev", &mailbox, &[("TEAM_LAZY_INBOX", "0")]);
     dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
     dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
 
     let mut mgr = Peer::spawn(&bin, "hello:mgr", &mailbox);
     mgr.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+    let _ = mgr.lines.recv_json(RPC_BUDGET);
     thread::sleep(Duration::from_millis(150));
 
     mgr.write(&json!({
@@ -367,11 +380,11 @@ fn lazy_inbox_disabled_by_env_delivers_full_body() {
             "arguments": { "to": "dev", "text": "full inline because env opted out" }
         }
     }));
-    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+    let _ = mgr.lines.recv_json(RPC_BUDGET);
 
     let notif = dev
         .lines
-        .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
+        .wait_for_method("notifications/claude/channel", RPC_BUDGET)
         .expect("expected notifications/claude/channel within 5s");
     assert_eq!(
         notif["params"]["content"], "full inline because env opted out",
@@ -422,7 +435,7 @@ fn channel_stub_includes_channel_name_in_preview() {
 
     let mut dev = Peer::spawn(&bin, "hello:dev-agent", &mailbox);
     dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
     dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
     thread::sleep(Duration::from_millis(150));
 
@@ -437,7 +450,7 @@ fn channel_stub_includes_channel_name_in_preview() {
 
     let notif = dev
         .lines
-        .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
+        .wait_for_method("notifications/claude/channel", RPC_BUDGET)
         .expect("expected notifications/claude/channel within 5s");
     assert_eq!(
         notif["params"]["content"],
@@ -459,12 +472,12 @@ fn long_body_preview_truncates_at_80_with_ellipsis() {
 
     let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
     dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
     dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
 
     let mut mgr = Peer::spawn(&bin, "hello:mgr", &mailbox);
     mgr.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+    let _ = mgr.lines.recv_json(RPC_BUDGET);
     thread::sleep(Duration::from_millis(150));
 
     let body = "x".repeat(200);
@@ -477,11 +490,11 @@ fn long_body_preview_truncates_at_80_with_ellipsis() {
             "arguments": { "to": "dev", "text": body }
         }
     }));
-    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+    let _ = mgr.lines.recv_json(RPC_BUDGET);
 
     let notif = dev
         .lines
-        .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
+        .wait_for_method("notifications/claude/channel", RPC_BUDGET)
         .expect("expected notifications/claude/channel within 5s");
     let content = notif["params"]["content"].as_str().unwrap().to_string();
     assert!(
@@ -511,11 +524,11 @@ fn inbox_read_returns_bodies_and_auto_acks() {
 
     let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
     dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
 
     let mut mgr = Peer::spawn(&bin, "hello:mgr", &mailbox);
     mgr.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+    let _ = mgr.lines.recv_json(RPC_BUDGET);
 
     mgr.write(&json!({
         "jsonrpc": "2.0",
@@ -523,7 +536,7 @@ fn inbox_read_returns_bodies_and_auto_acks() {
         "method": "tools/call",
         "params": { "name": "dm", "arguments": { "to": "dev", "text": "first" } }
     }));
-    let dm1 = mgr.lines.recv_json(Duration::from_secs(2));
+    let dm1 = mgr.lines.recv_json(RPC_BUDGET);
     let id1 = dm1["result"]["structuredContent"]["id"].as_i64().unwrap();
 
     mgr.write(&json!({
@@ -532,7 +545,7 @@ fn inbox_read_returns_bodies_and_auto_acks() {
         "method": "tools/call",
         "params": { "name": "dm", "arguments": { "to": "dev", "text": "second" } }
     }));
-    let dm2 = mgr.lines.recv_json(Duration::from_secs(2));
+    let dm2 = mgr.lines.recv_json(RPC_BUDGET);
     let id2 = dm2["result"]["structuredContent"]["id"].as_i64().unwrap();
 
     // Read both — should get full bodies back AND ack them.
@@ -542,7 +555,7 @@ fn inbox_read_returns_bodies_and_auto_acks() {
         "method": "tools/call",
         "params": { "name": "inbox_read", "arguments": { "ids": [id1, id2] } }
     }));
-    let read_resp = dev.lines.wait_for_response(10, Duration::from_secs(2));
+    let read_resp = dev.lines.wait_for_response(10, RPC_BUDGET);
     let msgs = read_resp["result"]["structuredContent"]["messages"]
         .as_array()
         .expect("inbox_read returns messages array");
@@ -557,7 +570,7 @@ fn inbox_read_returns_bodies_and_auto_acks() {
         "method": "tools/call",
         "params": { "name": "inbox_peek", "arguments": {} }
     }));
-    let peek_resp = dev.lines.wait_for_response(11, Duration::from_secs(2));
+    let peek_resp = dev.lines.wait_for_response(11, RPC_BUDGET);
     let remaining = peek_resp["result"]["structuredContent"]["messages"]
         .as_array()
         .expect("inbox_peek returns messages array");
@@ -581,15 +594,15 @@ fn inbox_read_rejects_ids_addressed_to_other_agents() {
 
     let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
     dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
 
     let mut mgr = Peer::spawn(&bin, "hello:mgr", &mailbox);
     mgr.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+    let _ = mgr.lines.recv_json(RPC_BUDGET);
 
     let mut other = Peer::spawn(&bin, "hello:other", &mailbox);
     other.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
-    let _ = other.lines.recv_json(Duration::from_secs(2));
+    let _ = other.lines.recv_json(RPC_BUDGET);
 
     // mgr DMs `other`, not `dev`.
     mgr.write(&json!({
@@ -598,7 +611,7 @@ fn inbox_read_rejects_ids_addressed_to_other_agents() {
         "method": "tools/call",
         "params": { "name": "dm", "arguments": { "to": "other", "text": "private to other" } }
     }));
-    let dm_resp = mgr.lines.recv_json(Duration::from_secs(2));
+    let dm_resp = mgr.lines.recv_json(RPC_BUDGET);
     let id_for_other = dm_resp["result"]["structuredContent"]["id"]
         .as_i64()
         .unwrap();
@@ -611,7 +624,7 @@ fn inbox_read_rejects_ids_addressed_to_other_agents() {
         "method": "tools/call",
         "params": { "name": "inbox_read", "arguments": { "ids": [id_for_other] } }
     }));
-    let read_resp = dev.lines.wait_for_response(10, Duration::from_secs(2));
+    let read_resp = dev.lines.wait_for_response(10, RPC_BUDGET);
     let msgs = read_resp["result"]["structuredContent"]["messages"]
         .as_array()
         .unwrap();
@@ -626,7 +639,7 @@ fn inbox_read_rejects_ids_addressed_to_other_agents() {
         "method": "tools/call",
         "params": { "name": "inbox_peek", "arguments": {} }
     }));
-    let peek_resp = other.lines.wait_for_response(11, Duration::from_secs(2));
+    let peek_resp = other.lines.wait_for_response(11, RPC_BUDGET);
     let remaining = peek_resp["result"]["structuredContent"]["messages"]
         .as_array()
         .unwrap();
