@@ -30,3 +30,4 @@ supervisor:
 # itself; agents work on the codebase they live inside.
 projects:
   - file: projects/teamctl.yaml
+  - file: projects/ops.yaml

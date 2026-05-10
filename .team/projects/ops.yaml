@@ -1,0 +1,23 @@
+version: 2
+project:
+  id: ops
+  name: teamctl ops
+  cwd: ..
+channels:
+- name: all
+  members: '*'
+managers:
+  otto:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/otto.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    can_dm: []
+    can_broadcast:
+    - all
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_OTTO_TOKEN
+        chat_ids_env: TEAMCTL_TG_OTTO_CHATS
+workers: {}
