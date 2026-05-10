@@ -131,7 +131,7 @@ pub fn schema() -> Value {
                 "properties": {
                     "text":      {
                         "type": "string",
-                        "description": "Plain text only — no markdown, no headings, no code fences (none of it renders on chat surfaces like Telegram). Use emojis sparingly to aid scanability (✅ done, ⚠️ caution, 🔧 working, ❓ question). Aim for short, chat-sized messages; split long output into multiple calls rather than sending a wall of text."
+                        "description": "Mostly plain text. A small markdown subset is rendered: `**bold**`, `__bold__`, `*italic*`, `` `code` ``, and triple-backtick fenced code blocks (with optional language tag). Single-underscore italic (`_text_`) is intentionally not rendered — underscore is too common in code-style text. Bullet lines (`- item` / `* item` / `+ item`) become `• item`. Plain `<`, `>`, `&` are safe — escaped automatically. No headings (Telegram does not render them). Use emojis sparingly to aid scanability (✅ done, ⚠️ caution, 🔧 working, ❓ question). Aim for short, chat-sized messages; split long output into multiple calls rather than sending a wall of text."
                     },
                     "image": {
                         "type": "object",
