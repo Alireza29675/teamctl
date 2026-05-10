@@ -2328,6 +2328,14 @@ mod tests {
             fence_marker("```objective_c").as_deref(),
             Some("objective_c"),
         );
+        // Leading dash/underscore is intentionally allowed: the
+        // `take_while` predicate has no leading-char restriction,
+        // and both chars are in the allowed set so there's zero
+        // injection risk. Pin the shape so a future reader doesn't
+        // wonder whether `-rust` should have been rejected (per
+        // ada's #154 peer review).
+        assert_eq!(fence_marker("```-rust").as_deref(), Some("-rust"));
+        assert_eq!(fence_marker("```_rust").as_deref(), Some("_rust"));
     }
 
     #[test]
