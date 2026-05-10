@@ -23,6 +23,7 @@ pub mod tail;
 pub mod ui;
 pub mod up;
 pub mod update;
+pub mod update_check;
 pub mod validate;
 pub mod warn;
 

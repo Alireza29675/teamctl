@@ -9,6 +9,7 @@ use team_core::supervisor::{AgentSpec, Supervisor, TmuxSupervisor};
 
 pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
     let compose = super::load(root)?;
+    super::update_check::maybe_print_banner(&compose.root);
     let errs = team_core::validate::validate(&compose);
     if !errs.is_empty() {
         for e in &errs {

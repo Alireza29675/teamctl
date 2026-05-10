@@ -134,7 +134,7 @@ pub fn detect_install_method(exe: &Path) -> InstallMethod {
 
 // ── Latest-version probe ────────────────────────────────────────────
 
-fn fetch_latest_version() -> Result<String> {
+pub(crate) fn fetch_latest_version() -> Result<String> {
     // GitHub's releases API returns JSON. We only need `tag_name`, and
     // the response can be either pretty-printed (line per field) or a
     // single 80kB blob, so we scan the body as a whole string rather
@@ -164,7 +164,7 @@ fn extract_tag_name(body: &str) -> Option<String> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum VersionOrder {
+pub(crate) enum VersionOrder {
     Older,
     Equal,
     Newer,
@@ -174,7 +174,7 @@ enum VersionOrder {
 /// suffixes (e.g. `-rc.1`) are stripped before comparison; we treat
 /// them as equal to the base version for update-prompt purposes,
 /// because anyone running a pre-release knowingly opted in.
-fn compare_versions(local: &str, latest: &str) -> VersionOrder {
+pub(crate) fn compare_versions(local: &str, latest: &str) -> VersionOrder {
     let l = parse_triplet(local);
     let r = parse_triplet(latest);
     match l.cmp(&r) {
