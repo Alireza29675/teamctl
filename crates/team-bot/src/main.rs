@@ -22,7 +22,7 @@ use teloxide::net::Download;
 use teloxide::prelude::*;
 use teloxide::types::{
     BotCommand, ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
-    MessageId, ReactionType, ReplyParameters,
+    MessageId, ParseMode, ReactionType, ReplyParameters,
 };
 use tokio::sync::Mutex;
 
@@ -419,11 +419,15 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
             let mut out = String::from("Pending approvals:\n");
             for (id, agent, action, summary) in rows {
                 out.push_str(&format!(
-                    "#{id} {agent} · {action}: {}\n",
-                    render_plain(&summary)
+                    "#{id} {} · {}: {}\n",
+                    html_escape_str(&agent),
+                    html_escape_str(&action),
+                    render_html(&summary),
                 ));
             }
-            bot.send_message(msg.chat.id, out).await?;
+            bot.send_message(msg.chat.id, out)
+                .parse_mode(ParseMode::Html)
+                .await?;
         }
     } else if trimmed == "/start" || trimmed == "/help" {
         let body = match state.manager.as_deref() {
@@ -636,9 +640,14 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
             ]]);
             let text = format!(
                 "🔐 #{id}  {agent}\naction: {action}\n{}",
-                render_plain(&summary)
+                render_html(&summary)
             );
-            let send_ok = bot.send_message(chat, text).reply_markup(kb).await.is_ok();
+            let send_ok = bot
+                .send_message(chat, text)
+                .parse_mode(ParseMode::Html)
+                .reply_markup(kb)
+                .await
+                .is_ok();
             if send_ok {
                 let c = state.conn.lock().await;
                 let _ = c.execute(
@@ -937,12 +946,16 @@ fn parse_reaction_payload(payload: &str) -> Option<ReactionPayload> {
 
 async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
     let kind = classify_kind(row.kind.as_deref());
+    // Attribution is plain prose with a single em-dash — no `<>&` to escape,
+    // but we still concat it AFTER the rendered body so any HTML tags emitted
+    // for the agent text close before this line.
     let attribution = format!("\n\n— replied by {}", row.sender);
     let reply = reply_parameters_for(row.telegram_msg_id);
     match kind {
         DispatchKind::Text => {
-            let mut req =
-                bot.send_message(chat, format!("{}{attribution}", render_plain(&row.text)));
+            let mut req = bot
+                .send_message(chat, format!("{}{attribution}", render_html(&row.text)))
+                .parse_mode(ParseMode::Html);
             if let Some(rp) = reply.clone() {
                 req = req.reply_parameters(rp);
             }
@@ -955,9 +968,10 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
                         chat,
                         format!(
                             "{} (media payload unparseable){attribution}",
-                            render_plain(&row.text)
+                            render_html(&row.text)
                         ),
                     )
+                    .parse_mode(ParseMode::Html)
                     .await;
                 return;
             };
@@ -966,29 +980,36 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
                     .send_message(
                         chat,
                         format!(
-                            "{} (unsupported media source `{}`){attribution}",
-                            render_plain(&row.text),
-                            payload.source
+                            "{} (unsupported media source <code>{}</code>){attribution}",
+                            render_html(&row.text),
+                            html_escape_str(&payload.source)
                         ),
                     )
+                    .parse_mode(ParseMode::Html)
                     .await;
                 return;
             };
             let caption_text = payload
                 .caption
                 .as_deref()
-                .map(|c| format!("{}{attribution}", render_plain(c)))
+                .map(|c| format!("{}{attribution}", render_html(c)))
                 .unwrap_or_else(|| attribution.trim_start().to_string());
             let result = match kind {
                 DispatchKind::Image => {
-                    let mut req = bot.send_photo(chat, input).caption(caption_text);
+                    let mut req = bot
+                        .send_photo(chat, input)
+                        .caption(caption_text)
+                        .parse_mode(ParseMode::Html);
                     if let Some(rp) = reply.clone() {
                         req = req.reply_parameters(rp);
                     }
                     req.await.err()
                 }
                 DispatchKind::File => {
-                    let mut req = bot.send_document(chat, input).caption(caption_text);
+                    let mut req = bot
+                        .send_document(chat, input)
+                        .caption(caption_text)
+                        .parse_mode(ParseMode::Html);
                     if let Some(rp) = reply.clone() {
                         req = req.reply_parameters(rp);
                     }
@@ -1042,7 +1063,8 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
         }
         DispatchKind::UnknownFallback => {
             let _ = bot
-                .send_message(chat, format!("{}{attribution}", render_plain(&row.text)))
+                .send_message(chat, format!("{}{attribution}", render_html(&row.text)))
+                .parse_mode(ParseMode::Html)
                 .await;
         }
     }
@@ -1461,50 +1483,177 @@ async fn handle_inbound_media(bot: &Bot, msg: &Message, state: &State) -> Respon
     Ok(())
 }
 
-/// Strip lightweight markdown so Telegram renders clean prose with emoji
-/// accents instead of literal `**bold**` / `_italic_` / `- bullet` syntax.
-/// We deliberately do not translate to MarkdownV2 — Alireza prefers plain
-/// text, and stripping is failure-mode-symmetric (no escaping landmines).
-fn render_plain(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for (idx, line) in s.lines().enumerate() {
-        if idx > 0 {
+/// Render a small markdown subset to Telegram HTML so agent messages reach
+/// the operator with formatting intact AND legitimate `_`/`*`/`` ` ``
+/// characters preserved (T-134). Conservative whitelist: `**bold**`,
+/// `__bold__`, `*italic*`, `` `code` ``, fenced code blocks (with optional
+/// language tag), and the existing `- item` / `* item` / `+ item` →
+/// `• item` bullet glyph. Single-underscore italic (`_text_`) is
+/// intentionally NOT converted — underscore is too common in dev text
+/// (`snake_case`, `thread_id`, URLs, paths). Inline conversion is
+/// paired-only on the same line; an unmatched `*` or `` ` `` passes
+/// through literally. `<`, `>`, `&` are escaped in every raw segment
+/// (including inside `<code>` / `<pre>` per Telegram's HTML parser).
+///
+/// Callers pair the output with `.parse_mode(ParseMode::Html)` on the
+/// teloxide send. Telegram supports a fixed HTML whitelist (`<b>`,
+/// `<i>`, `<u>`, `<s>`, `<code>`, `<pre>`, `<a>`, `<tg-spoiler>`); the
+/// emitted tags here stay inside that whitelist.
+fn render_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + s.len() / 8);
+    let lines: Vec<&str> = s.lines().collect();
+    let mut i = 0;
+    let mut first = true;
+    while i < lines.len() {
+        if !first {
             out.push('\n');
         }
-        let trimmed = line.trim_start();
-        let leading = &line[..line.len() - trimmed.len()];
-        let body = if let Some(rest) = trimmed
-            .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "))
-            .or_else(|| trimmed.strip_prefix("+ "))
-        {
-            format!("• {rest}")
-        } else {
-            trimmed.to_string()
-        };
-        out.push_str(leading);
-        out.push_str(&strip_inline_markdown(&body));
+        first = false;
+        let line = lines[i];
+        // Fenced code block? Look for a matching close on a later line.
+        if let Some(lang) = fence_marker(line) {
+            let close_idx = ((i + 1)..lines.len()).find(|&j| fence_marker(lines[j]).is_some());
+            if let Some(close) = close_idx {
+                if lang.is_empty() {
+                    out.push_str("<pre>");
+                } else {
+                    out.push_str("<pre><code class=\"language-");
+                    html_escape_into(&mut out, &lang);
+                    out.push_str("\">");
+                }
+                for (k, body_line) in lines[(i + 1)..close].iter().enumerate() {
+                    if k > 0 {
+                        out.push('\n');
+                    }
+                    html_escape_into(&mut out, body_line);
+                }
+                if lang.is_empty() {
+                    out.push_str("</pre>");
+                } else {
+                    out.push_str("</code></pre>");
+                }
+                i = close + 1;
+                continue;
+            }
+            // Unmatched fence: fall through and treat as a normal line.
+        }
+        render_normal_line(line, &mut out);
+        i += 1;
     }
     out
 }
 
-/// Drop `**`, `__`, single `*` / `_` emphasis, and inline-code backticks.
-/// Keeps URL text intact (we never see `[label](url)` rendered as a link
-/// anyway in plain Telegram messages).
-fn strip_inline_markdown(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if (c == '*' || c == '_') && chars.peek() == Some(&c) {
-            // Paired `**` / `__` emphasis → drop both.
-            chars.next();
-            continue;
+/// Return `Some(lang)` (possibly empty) if `line` is a fence marker
+/// (`` ``` `` optionally followed by a language tag). Leading whitespace
+/// is permitted; trailing whitespace around the language tag is trimmed.
+fn fence_marker(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let after = trimmed.strip_prefix("```")?;
+    Some(after.trim().to_string())
+}
+
+fn render_normal_line(line: &str, out: &mut String) {
+    let trimmed = line.trim_start();
+    let leading = &line[..line.len() - trimmed.len()];
+    let body = if let Some(rest) = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .or_else(|| trimmed.strip_prefix("+ "))
+    {
+        format!("• {rest}")
+    } else {
+        trimmed.to_string()
+    };
+    out.push_str(leading);
+    render_inline_html(&body, out);
+}
+
+/// Inline-pass markdown → HTML for one line. Recognised: `**…**`,
+/// `__…__` → `<b>`; `*…*` → `<i>`; `` `…` `` → `<code>`. Pairing is
+/// per-line: an open delimiter without a matching close on the same
+/// line falls through to escaped-literal output. Content inside a
+/// recognised pair is HTML-escaped but NOT recursively re-parsed for
+/// further markdown.
+fn render_inline_html(s: &str, out: &mut String) {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Pair lookup requires non-empty content — `<b></b>`,
+        // `<i></i>`, `<code></code>` are never desired output, and the
+        // empty-content match is what causes a stray `**` or backtick
+        // run to swallow itself instead of passing through literally.
+        if bytes.get(i..i + 2) == Some(b"**") {
+            if let Some(end) = s[i + 2..].find("**").filter(|&e| e > 0) {
+                let close = i + 2 + end;
+                out.push_str("<b>");
+                html_escape_into(out, &s[i + 2..close]);
+                out.push_str("</b>");
+                i = close + 2;
+                continue;
+            }
         }
-        if c == '*' || c == '_' || c == '`' {
-            continue;
+        if bytes.get(i..i + 2) == Some(b"__") {
+            if let Some(end) = s[i + 2..].find("__").filter(|&e| e > 0) {
+                let close = i + 2 + end;
+                out.push_str("<b>");
+                html_escape_into(out, &s[i + 2..close]);
+                out.push_str("</b>");
+                i = close + 2;
+                continue;
+            }
         }
-        out.push(c);
+        if bytes[i] == b'`' {
+            if let Some(end) = s[i + 1..].find('`').filter(|&e| e > 0) {
+                let close = i + 1 + end;
+                out.push_str("<code>");
+                html_escape_into(out, &s[i + 1..close]);
+                out.push_str("</code>");
+                i = close + 1;
+                continue;
+            }
+        }
+        if bytes[i] == b'*' {
+            if let Some(end) = s[i + 1..].find('*').filter(|&e| e > 0) {
+                let close = i + 1 + end;
+                out.push_str("<i>");
+                html_escape_into(out, &s[i + 1..close]);
+                out.push_str("</i>");
+                i = close + 1;
+                continue;
+            }
+        }
+        let next = s[i..]
+            .chars()
+            .next()
+            .expect("byte index inside string bounds yields a char");
+        match next {
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            _ => out.push(next),
+        }
+        i += next.len_utf8();
     }
+}
+
+/// Escape `<`, `>`, `&` per Telegram's HTML parse mode. Quote escaping
+/// is unnecessary outside attributes; the only attribute we emit is
+/// `class="language-…"` and the language tag is HTML-escaped before
+/// substitution.
+fn html_escape_into(out: &mut String, s: &str) {
+    for c in s.chars() {
+        match c {
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            _ => out.push(c),
+        }
+    }
+}
+
+fn html_escape_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    html_escape_into(&mut out, s);
     out
 }
 
@@ -1990,30 +2139,120 @@ mod tests {
     }
 
     #[test]
-    fn render_plain_strips_paired_emphasis() {
-        assert_eq!(render_plain("**bold** text"), "bold text");
-        assert_eq!(render_plain("__also bold__"), "also bold");
-        assert_eq!(render_plain("plain `code` here"), "plain code here");
+    fn render_html_paired_bold_emphasis() {
+        assert_eq!(render_html("**bold** text"), "<b>bold</b> text");
+        assert_eq!(render_html("__also bold__"), "<b>also bold</b>");
     }
 
     #[test]
-    fn render_plain_strips_single_emphasis() {
-        assert_eq!(render_plain("*italic* text"), "italic text");
-        assert_eq!(render_plain("_underscored_"), "underscored");
+    fn render_html_paired_italic_and_inline_code() {
+        assert_eq!(render_html("*italic* text"), "<i>italic</i> text");
+        assert_eq!(
+            render_html("plain `code` here"),
+            "plain <code>code</code> here"
+        );
     }
 
     #[test]
-    fn render_plain_translates_list_bullets() {
+    fn render_html_translates_list_bullets() {
         let input = "- one\n- two\n  * nested\n+ three";
         let expected = "• one\n• two\n  • nested\n• three";
-        assert_eq!(render_plain(input), expected);
+        assert_eq!(render_html(input), expected);
     }
 
     #[test]
-    fn render_plain_preserves_emoji_and_plain_prose() {
+    fn render_html_preserves_emoji_and_converts_inline() {
         let input = "🔐 deploy\nrouting prompt to one channel — the **right** one";
-        let expected = "🔐 deploy\nrouting prompt to one channel — the right one";
-        assert_eq!(render_plain(input), expected);
+        let expected = "🔐 deploy\nrouting prompt to one channel — the <b>right</b> one";
+        assert_eq!(render_html(input), expected);
+    }
+
+    #[test]
+    fn render_html_leaves_single_underscore_alone() {
+        // Underscore is too common in dev text to convert. `thread_id`,
+        // `snake_case_var`, `path/with_underscore` must all survive.
+        assert_eq!(render_html("thread_id"), "thread_id");
+        assert_eq!(render_html("snake_case_var here"), "snake_case_var here");
+        assert_eq!(render_html("_underscored_"), "_underscored_");
+    }
+
+    #[test]
+    fn render_html_unmatched_delimiters_pass_through() {
+        // Single `*` or `` ` `` with no closing partner on the same line
+        // must reach the operator verbatim. The regression that motivated
+        // T-134 was `array[i] = b * 2` losing its `*`.
+        assert_eq!(render_html("array[i] = b * 2"), "array[i] = b * 2");
+        assert_eq!(render_html("unmatched `tick"), "unmatched `tick");
+        assert_eq!(
+            render_html("unmatched **bold-open"),
+            "unmatched **bold-open"
+        );
+    }
+
+    #[test]
+    fn render_html_pairing_is_per_line() {
+        // An open `*` on one line cannot pair with a `*` on the next.
+        let input = "*open\nclose*";
+        assert_eq!(render_html(input), "*open\nclose*");
+    }
+
+    #[test]
+    fn render_html_escapes_lt_gt_amp_in_raw_text() {
+        // Quoting a `<channel>` tag must not break Telegram's HTML
+        // parser AND must not drop characters.
+        assert_eq!(
+            render_html("<channel source=\"team\"> & friends"),
+            "&lt;channel source=\"team\"&gt; &amp; friends",
+        );
+    }
+
+    #[test]
+    fn render_html_escapes_inside_inline_code() {
+        // Telegram's HTML parser requires escaping inside `<code>` too.
+        assert_eq!(
+            render_html("see `<thing>` for more"),
+            "see <code>&lt;thing&gt;</code> for more",
+        );
+    }
+
+    #[test]
+    fn render_html_fenced_block_no_language() {
+        let input = "before\n```\nlet x = 1;\n```\nafter";
+        let expected = "before\n<pre>let x = 1;</pre>\nafter";
+        assert_eq!(render_html(input), expected);
+    }
+
+    #[test]
+    fn render_html_fenced_block_with_language_tag() {
+        let input = "```rust\nfn main() {}\n```";
+        let expected = "<pre><code class=\"language-rust\">fn main() {}</code></pre>";
+        assert_eq!(render_html(input), expected);
+    }
+
+    #[test]
+    fn render_html_fenced_block_escapes_html_inside() {
+        let input = "```\n<channel> & co\n```";
+        let expected = "<pre>&lt;channel&gt; &amp; co</pre>";
+        assert_eq!(render_html(input), expected);
+    }
+
+    #[test]
+    fn render_html_unmatched_fence_falls_through_as_normal_line() {
+        // A lone ``` with no closer must not swallow the rest of the
+        // message — emit it as a regular line (escaping handles the
+        // backticks fine, since they're delimiters not html-special).
+        let input = "```\nstray";
+        // Backticks-only opener falls through to inline pass; the lone
+        // ``` becomes a `<code>` opener with no close, which itself
+        // falls through → literal. Result is the input verbatim.
+        assert_eq!(render_html(input), "```\nstray");
+    }
+
+    #[test]
+    fn render_html_inline_code_is_not_re_parsed() {
+        // Backtick content is NOT recursively converted — `**bold**`
+        // inside a code span renders as literal text, not as <b>.
+        assert_eq!(render_html("`**not bold**`"), "<code>**not bold**</code>",);
     }
 
     /// T-036 — exercise the SQL ordering pattern used by `handle_callback`
