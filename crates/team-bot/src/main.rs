@@ -9,10 +9,11 @@
 //! mirror this crate's shape: an async loop against the same SQLite mailbox
 //! plus an adapter-specific transport.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -100,7 +101,24 @@ struct State {
     /// without `speech_to_text` configured, or the API key was unset at
     /// spawn time).
     stt: Option<SttRuntime>,
+    /// T-102 typing windows: per-chat deadline for the active "typing…"
+    /// indicator. Keyed by `ChatId`; value is the `Instant` after which
+    /// the window has expired. Empty when no agent has called
+    /// `show_typing` recently. The outbound dispatcher writes here when
+    /// it sees a `kind = "typing"` row, the typing-refresh task reads +
+    /// drops expired entries every ~4s, and any text/image/file
+    /// dispatch clears the entry for that chat so the indicator
+    /// disappears the moment a real message lands.
+    typing: Mutex<HashMap<ChatId, Instant>>,
 }
+
+/// T-102: ceiling on a single typing window. Telegram's
+/// `sendChatAction("typing")` only persists ~5s on its own; we re-fire
+/// every `TYPING_REFRESH_INTERVAL` while the window is active, capped at
+/// `TYPING_WINDOW_CEILING` so a forgotten clear can't pin the indicator
+/// open indefinitely.
+const TYPING_WINDOW_CEILING: Duration = Duration::from_secs(10);
+const TYPING_REFRESH_INTERVAL: Duration = Duration::from_secs(4);
 
 /// T-101: resolved STT settings the voice handler needs at request time.
 /// Constructed once at startup from the four `--stt-*` flags.
@@ -179,6 +197,7 @@ async fn main() -> Result<()> {
         tmux_prefix: cli.tmux_prefix,
         media_root,
         stt,
+        typing: Mutex::new(HashMap::new()),
     });
 
     // T-086-H: register the manager's runtime-appropriate slash commands
@@ -209,6 +228,17 @@ async fn main() -> Result<()> {
         let bot = bot.clone();
         let state = state.clone();
         tokio::spawn(async move { outbound_loop(bot, state).await });
+    }
+
+    // T-102 typing indicator: re-fire `sendChatAction` every ~4s for any
+    // chat with a still-active typing window. Kept as its own task
+    // because the outbound poll cadence (500ms) is too tight to drive
+    // refreshes from there without churning Telegram with redundant
+    // calls.
+    {
+        let bot = bot.clone();
+        let state = state.clone();
+        tokio::spawn(async move { typing_refresh_loop(bot, state).await });
     }
 
     // Inbound: teloxide repl-style, one handler for everything.
@@ -678,12 +708,63 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
             if !route_ok {
                 continue;
             }
-            forward_row(&bot, chat, &row).await;
+            // T-102: keep the typing window in sync with the dispatch
+            // about to happen. Text/image/file → clear (real content
+            // arriving means the indicator should disappear); typing →
+            // open/extend so the refresh loop keeps it alive until the
+            // ceiling. Reaction + UnknownFallback don't touch the
+            // window — a reaction is a soft signal, not a "the agent
+            // finished talking" event.
+            let kind = classify_kind(row.kind.as_deref());
+            match kind {
+                DispatchKind::Text | DispatchKind::Image | DispatchKind::File => {
+                    let mut map = state.typing.lock().await;
+                    clear_typing_window(&mut map, chat);
+                }
+                DispatchKind::Typing => {
+                    let mut map = state.typing.lock().await;
+                    extend_typing_window(&mut map, chat, Instant::now(), TYPING_WINDOW_CEILING);
+                    drop(map);
+                    // Fire one immediately so the operator sees
+                    // "typing…" within the next ~1s rather than waiting
+                    // up to TYPING_REFRESH_INTERVAL for the refresh
+                    // task's first tick.
+                    if let Err(e) = bot.send_chat_action(chat, ChatAction::Typing).await {
+                        tracing::warn!("send_chat_action failed for row {}: {e}", row.id);
+                    }
+                }
+                _ => {}
+            }
+            if !matches!(kind, DispatchKind::Typing) {
+                forward_row(&bot, chat, &row).await;
+            }
             let c = state.conn.lock().await;
             let _ = c.execute(
                 "UPDATE messages SET acked_at = strftime('%s','now') WHERE id = ?1",
                 params![row.id],
             );
+        }
+    }
+}
+
+/// T-102 background task: every `TYPING_REFRESH_INTERVAL`, drop expired
+/// per-chat windows and re-fire `sendChatAction("typing")` on whatever
+/// remains. Telegram's typing indicator persists ~5s natively, so a 4s
+/// refresh keeps the bubble visible without gaps. The ceiling
+/// (`TYPING_WINDOW_CEILING`) bounds the refresh — once `now` passes the
+/// stored deadline the entry is dropped, the indicator naturally
+/// expires on the Telegram side, and the chat goes quiet.
+async fn typing_refresh_loop(bot: Bot, state: Arc<State>) {
+    loop {
+        tokio::time::sleep(TYPING_REFRESH_INTERVAL).await;
+        let active: Vec<ChatId> = {
+            let mut map = state.typing.lock().await;
+            refresh_typing_windows(&mut map, Instant::now())
+        };
+        for chat in active {
+            if let Err(e) = bot.send_chat_action(chat, ChatAction::Typing).await {
+                tracing::warn!("typing refresh send_chat_action failed for {chat}: {e}");
+            }
         }
     }
 }
@@ -773,6 +854,12 @@ enum DispatchKind {
     /// the dispatcher routes through `setMessageReaction` rather than
     /// sending a chat message.
     Reaction,
+    /// T-102: outbound typing indicator. No payload fields used — the
+    /// row is purely a discriminator that tells the bot to open or
+    /// extend a per-chat typing window. The dispatcher fires one
+    /// `sendChatAction("typing")` immediately and leaves the periodic
+    /// refresh to `typing_refresh_loop`.
+    Typing,
     /// Structured row whose payload didn't parse — surface as a text
     /// fallback so the operator sees the raw payload rather than nothing.
     UnknownFallback,
@@ -784,8 +871,42 @@ fn classify_kind(kind: Option<&str>) -> DispatchKind {
         Some("image") => DispatchKind::Image,
         Some("file") => DispatchKind::File,
         Some("reaction") => DispatchKind::Reaction,
+        Some("typing") => DispatchKind::Typing,
         _ => DispatchKind::UnknownFallback,
     }
+}
+
+/// T-102 pure helper: open or extend a typing window for `chat`. The
+/// new deadline is `now + ceiling`; an existing entry's deadline is
+/// overwritten (this is the spec's "second call resets the 10s clock").
+/// Returns the freshly written deadline so callers / tests can assert
+/// against it.
+fn extend_typing_window(
+    map: &mut HashMap<ChatId, Instant>,
+    chat: ChatId,
+    now: Instant,
+    ceiling: Duration,
+) -> Instant {
+    let deadline = now + ceiling;
+    map.insert(chat, deadline);
+    deadline
+}
+
+/// T-102 pure helper: clear the typing window for `chat`. Returns
+/// whether an entry was actually removed; the dispatcher doesn't act on
+/// the bool today, but the return value lets tests pin both the present
+/// and absent cases. Called before every text/image/file dispatch so
+/// the indicator disappears the moment a real message lands.
+fn clear_typing_window(map: &mut HashMap<ChatId, Instant>, chat: ChatId) -> bool {
+    map.remove(&chat).is_some()
+}
+
+/// T-102 pure helper: drop entries whose deadline has passed and return
+/// the chats whose windows are still active at `now`. The refresh loop
+/// uses the returned list to issue another `sendChatAction` round.
+fn refresh_typing_windows(map: &mut HashMap<ChatId, Instant>, now: Instant) -> Vec<ChatId> {
+    map.retain(|_, deadline| *deadline > now);
+    map.keys().copied().collect()
 }
 
 /// Parsed reaction payload (T-086-E). The MCP layer writes
@@ -906,6 +1027,13 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
             if let Some(e) = result {
                 tracing::warn!("set_message_reaction failed for row {}: {e}", row.id);
             }
+        }
+        DispatchKind::Typing => {
+            // T-102: typing rows are handled by `outbound_loop` directly
+            // (it opens/extends the per-chat window and fires
+            // sendChatAction). They short-circuit before reaching
+            // `forward_row`; this arm exists only to keep the match
+            // exhaustive without flagging the row as unknown.
         }
         DispatchKind::UnknownFallback => {
             let _ = bot
@@ -2346,6 +2474,102 @@ mod tests {
             parse_reaction_payload(r#"{"telegram_msg_id":7,"emoji":42}"#).is_none(),
             "non-string emoji"
         );
+    }
+
+    // ── T-102 typing-indicator helpers ───────────────────────────
+
+    #[test]
+    fn classify_kind_routes_typing() {
+        // Sibling to the reaction dispatch test. A future refactor that
+        // drops the `Some("typing")` arm degrades the indicator to
+        // `UnknownFallback`, which would post the row's empty `text` to
+        // the chat — we want that to fail this test rather than ship.
+        assert_eq!(classify_kind(Some("typing")), DispatchKind::Typing);
+    }
+
+    #[test]
+    fn classify_kind_unknown_fallback_unchanged_for_typing_lookalikes() {
+        // Regression guard mirroring the reaction test: only the exact
+        // string "typing" routes; "type" / "typings" stay in the
+        // unknown bucket so a typo on the MCP side is loud, not silent.
+        assert_eq!(classify_kind(Some("type")), DispatchKind::UnknownFallback);
+        assert_eq!(
+            classify_kind(Some("typings")),
+            DispatchKind::UnknownFallback
+        );
+    }
+
+    #[test]
+    fn extend_typing_window_inserts_new_entry_with_deadline() {
+        // First call for a chat: map gains an entry whose deadline is
+        // exactly `now + ceiling`. The pure helper is the shared core
+        // between the dispatcher and the refresh loop, so it has to
+        // round-trip the math without rounding surprises.
+        let mut map: HashMap<ChatId, Instant> = HashMap::new();
+        let now = Instant::now();
+        let ceiling = Duration::from_secs(10);
+        let deadline = extend_typing_window(&mut map, ChatId(42), now, ceiling);
+        assert_eq!(deadline, now + ceiling);
+        assert_eq!(map.get(&ChatId(42)), Some(&(now + ceiling)));
+    }
+
+    #[test]
+    fn extend_typing_window_resets_existing_deadline_on_second_call() {
+        // Spec's "second call extends the window (resets the 10s
+        // clock)": the new deadline is computed from the *new* `now`,
+        // not appended to the old one. A monotonic clock makes "newer
+        // is later" the correct invariant.
+        let mut map: HashMap<ChatId, Instant> = HashMap::new();
+        let t0 = Instant::now();
+        let ceiling = Duration::from_secs(10);
+        extend_typing_window(&mut map, ChatId(7), t0, ceiling);
+        let t1 = t0 + Duration::from_secs(3);
+        let deadline = extend_typing_window(&mut map, ChatId(7), t1, ceiling);
+        assert_eq!(deadline, t1 + ceiling);
+        assert_eq!(map.get(&ChatId(7)), Some(&(t1 + ceiling)));
+    }
+
+    #[test]
+    fn clear_typing_window_removes_present_entry_and_reports_true() {
+        let mut map: HashMap<ChatId, Instant> = HashMap::new();
+        let now = Instant::now();
+        extend_typing_window(&mut map, ChatId(1), now, Duration::from_secs(10));
+        assert!(clear_typing_window(&mut map, ChatId(1)));
+        assert!(!map.contains_key(&ChatId(1)));
+    }
+
+    #[test]
+    fn clear_typing_window_returns_false_when_chat_not_tracked() {
+        // A text/image/file dispatch happens whether or not a typing
+        // window was open; the helper has to stay no-op-safe in the
+        // absent case rather than panicking.
+        let mut map: HashMap<ChatId, Instant> = HashMap::new();
+        assert!(!clear_typing_window(&mut map, ChatId(99)));
+    }
+
+    #[test]
+    fn refresh_typing_windows_drops_expired_and_returns_active() {
+        // The refresh loop wakes every ~4s, drops anything past its
+        // ceiling, and re-fires `sendChatAction` on whatever's left.
+        // Pinning both halves of that: drop the expired entry, return
+        // the still-active chats.
+        let mut map: HashMap<ChatId, Instant> = HashMap::new();
+        let now = Instant::now();
+        map.insert(ChatId(1), now + Duration::from_secs(2));
+        map.insert(ChatId(2), now - Duration::from_millis(10));
+        let active = refresh_typing_windows(&mut map, now);
+        assert_eq!(active, vec![ChatId(1)]);
+        assert!(map.contains_key(&ChatId(1)));
+        assert!(!map.contains_key(&ChatId(2)));
+    }
+
+    #[test]
+    fn refresh_typing_windows_returns_empty_on_empty_map() {
+        // Steady state: no agent has called `show_typing` recently, so
+        // the refresh loop's tick produces no Telegram traffic.
+        let mut map: HashMap<ChatId, Instant> = HashMap::new();
+        let active = refresh_typing_windows(&mut map, Instant::now());
+        assert!(active.is_empty());
     }
 
     // ── T-086-B reply_parameters dispatch ────────────────────────
