@@ -638,6 +638,10 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
                 InlineKeyboardButton::callback("Approve", format!("approve:{id}")),
                 InlineKeyboardButton::callback("Deny", format!("deny:{id}")),
             ]]);
+            // T-140: parity with /pending — escape interpolated agent
+            // payloads even when today's `[a-z0-9_-]:[a-z0-9_-]` schema
+            // makes `<>&` unreachable. Defense-in-depth: the renderer
+            // doesn't lean on the schema invariant.
             let text = format!(
                 "🔐 #{id}  {}\naction: {}\n{}",
                 html_escape_str(&agent),
@@ -2291,6 +2295,43 @@ mod tests {
             Some("python"),
         );
         assert_eq!(fence_marker("not a fence").as_deref(), None);
+    }
+
+    #[test]
+    fn hitl_card_text_format_pins_agent_then_action_then_summary() {
+        // Pin the HITL approval card's format-string composition so
+        // a future edit can't silently swap `agent`/`action` order or
+        // drop one of the escapes — the standalone
+        // `html_escape_str_escapes_the_three_html_specials_only` test
+        // covers the function, not the composition (per ada's #145
+        // peer review).
+        let id: i64 = 42;
+        let agent = "pm";
+        let action = "approve";
+        let summary = "ship the **release**";
+        let actual = format!(
+            "🔐 #{id}  {}\naction: {}\n{}",
+            html_escape_str(agent),
+            html_escape_str(action),
+            render_html(summary),
+        );
+        assert_eq!(
+            actual,
+            "🔐 #42  pm\naction: approve\nship the <b>release</b>",
+        );
+
+        // And the in-schema-but-with-html-specials variant — confirms
+        // escape fires before the format-string lands on Telegram.
+        let actual_escaped = format!(
+            "🔐 #{id}  {}\naction: {}\n{}",
+            html_escape_str("ops:<bot>"),
+            html_escape_str("kill & restart"),
+            render_html(summary),
+        );
+        assert_eq!(
+            actual_escaped,
+            "🔐 #42  ops:&lt;bot&gt;\naction: kill &amp; restart\nship the <b>release</b>",
+        );
     }
 
     #[test]
