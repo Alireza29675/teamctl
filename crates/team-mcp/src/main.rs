@@ -47,6 +47,14 @@ struct Cli {
     /// Path to the SQLite mailbox database.
     #[arg(long, env = "TEAMCTL_MAILBOX")]
     mailbox: PathBuf,
+
+    /// Tmux session prefix (matches `compose.global.supervisor.tmux_prefix`).
+    /// Used by `compact_self` (T-109) to compute the caller's tmux session
+    /// name as `<prefix><project>-<role>`. Default matches `team-core`'s
+    /// default prefix so a hand-launched MCP server still works on a
+    /// stock team.
+    #[arg(long, env = "TEAMCTL_TMUX_PREFIX", default_value = "t-")]
+    tmux_prefix: String,
 }
 
 /// Poll cadence for the channel watcher. SQLite SELECT against a WAL-mode
@@ -66,7 +74,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let store = store::Store::open(&cli.mailbox)?;
-    let ctx = tools::Ctx::new(cli.agent_id.clone(), store);
+    let ctx = tools::Ctx::new(cli.agent_id.clone(), store, cli.tmux_prefix.clone());
 
     tracing::info!(
         agent_id = %cli.agent_id,

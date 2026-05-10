@@ -594,6 +594,22 @@ impl Store {
         Ok(n == 1)
     }
 
+    /// Runtime adapter registered for `agent_id` (e.g. `claude-code`,
+    /// `codex`). Returns `None` if the agent isn't registered. Used by
+    /// `compact_self` to gate the `/compact` slash command on Claude
+    /// Code, since other runtimes don't recognize that command shape.
+    pub fn runtime_for(&self, agent_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let runtime = conn
+            .query_row(
+                "SELECT runtime FROM agents WHERE id = ?1",
+                params![agent_id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok();
+        Ok(runtime)
+    }
+
     /// Unacked count for an agent. Used by `teamctl status`.
     #[allow(dead_code)]
     pub fn inbox_depth(&self, agent_id: &str) -> Result<i64> {

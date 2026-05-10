@@ -97,6 +97,14 @@ fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> Stri
                 "args": [
                     "--agent-id", format!("{}:{}", h.project, h.agent),
                     "--mailbox", mailbox.display().to_string(),
+                    // T-109: compact_self resolves the caller's tmux pane
+                    // as `<prefix><project>-<agent>`. Pass the configured
+                    // prefix explicitly so teams overriding the default
+                    // (`a-`, `oss-`, …) route the slash command to the
+                    // right session. team-bot gets the same arg threaded
+                    // from `teamctl bot up`; this keeps the two MCP-side
+                    // and bot-side resolvers in sync.
+                    "--tmux-prefix", compose.global.supervisor.tmux_prefix.clone(),
                 ],
                 "env": {}
             }
@@ -216,6 +224,33 @@ mod tests {
         assert_eq!(
             v["mcpServers"]["team"]["args"][1].as_str().unwrap(),
             "hello:mgr"
+        );
+    }
+
+    #[test]
+    fn mcp_json_threads_tmux_prefix_from_compose() {
+        // T-109: compact_self routes its tmux send-keys to
+        // `<prefix><project>-<agent>` and reads the prefix from a CLI arg
+        // (default `t-` only fits a stock team). Render must surface the
+        // configured prefix so teams overriding it (e.g. `a-` here) get
+        // their pane resolved correctly.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let (_, mcp) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        let v: serde_json::Value = serde_json::from_str(&mcp).unwrap();
+        let args: Vec<&str> = v["mcpServers"]["team"]["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
+        let i = args.iter().position(|a| *a == "--tmux-prefix").expect(
+            "render_mcp must emit --tmux-prefix so compact_self resolves the caller's pane",
+        );
+        assert_eq!(
+            args[i + 1],
+            "a-",
+            "prefix must come from compose, not the default"
         );
     }
 }
