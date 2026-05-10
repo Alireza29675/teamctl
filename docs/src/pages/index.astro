@@ -20,7 +20,7 @@ const upCmd = 'teamctl up';
 // re-routing through marketing.
 const yaml = [
   'project:',
-  '  id: writing',
+  '  id: newsletter',
   '',
   'managers:',
   '  editor:',
@@ -28,13 +28,9 @@ const yaml = [
   '    model: claude-opus-4-7',
   '',
   'workers:',
-  '  writer:',
+  '  curator:',
   '    runtime: codex',
   '    model: gpt-5-codex',
-  '    reports_to: editor',
-  '  researcher:',
-  '    runtime: claude-code',
-  '    model: claude-sonnet-4-6',
   '    reports_to: editor',
 ];
 
@@ -57,15 +53,15 @@ const yamlHtml = yaml
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>teamctl — docker-compose for persistent AI agent teams</title>
+    <title>teamctl — a team of AI agents, declared in YAML</title>
     <meta
       name="description"
-      content="Docker-compose for persistent AI agent teams. Declare a team in YAML and supervise it like services."
+      content="A team of AI agents, declared in YAML, supervised on your machine. Each agent owns a domain. They coordinate through a durable mailbox. Built for TeamOps."
     />
-    <meta property="og:title" content="teamctl — docker-compose for persistent AI agent teams" />
+    <meta property="og:title" content="teamctl — a team of AI agents, declared in YAML" />
     <meta
       property="og:description"
-      content="Docker-compose for persistent AI agent teams. Declare a team in YAML and supervise it like services."
+      content="A team of AI agents, declared in YAML, supervised on your machine. Each agent owns a domain. They coordinate through a durable mailbox. Built for TeamOps."
     />
   </head>
   <body>
@@ -83,8 +79,8 @@ const yamlHtml = yaml
       </figure>
 
       <header class="lede">
-        <h1>Autonomous Teams of Agents</h1>
-        <p class="subline">declared in YAML, supervised like docker-compose and accessed via Telegram.</p>
+        <h1>A team of AI agents, declared in YAML.</h1>
+        <p class="subline">Each agent owns a domain — its own identity, memory, and lifecycle. They coordinate through a durable mailbox. You stay in the loop on what matters. Built for <strong>TeamOps</strong>.</p>
       </header>
 
       <figure class="demo" aria-label="Example team.yaml and the command to start it">

@@ -72,7 +72,7 @@ teamctl gc --project newsroom
 
 It does **not** remove unacked messages, pending approvals, or live bridges — those are load-bearing state.
 
-The shorter the TTL, the smaller the working set, the lower the per-turn token cost. A TTL of 24 hours is fine for fast-moving teams; 72 hours is the default; longer than a week is rarely useful.
+The shorter the TTL, the smaller the working set, the lower the per-turn token cost. The default is 24 hours; bumping to 72 makes sense for slower-moving teams; longer than a week is rarely useful.
 
 ## Why we ship broadcast despite the spam risk
 

@@ -36,6 +36,7 @@ export default defineConfig({
             { label: 'Interfaces', link: '/concepts/interfaces/' },
             { label: 'HITL', link: '/concepts/hitl/' },
             { label: 'Rate limits', link: '/concepts/rate-limits/' },
+            { label: 'Ways of working', link: '/concepts/ways-of-working/' },
           ],
         },
         {
