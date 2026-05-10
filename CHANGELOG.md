@@ -6,6 +6,29 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ### Added
 
+- **`role_prompt` accepts a list of paths** (T-103). The compose
+  schema's `role_prompt` field now accepts either a single path
+  (current behavior, unchanged) or a list of paths concatenated in
+  declared order at agent boot. Lets a role compose from a shared
+  base plus per-agent specifics without duplicating role copy:
+  ```yaml
+  managers:
+    pm:
+      role_prompt:
+        - roles/_base-engineer.md
+        - roles/pm.md
+  ```
+  The list form materializes
+  `state/role_prompts/<project>-<agent>.md` (em-dash separator
+  between sources) and points the runtime there. The file is
+  re-written unconditionally on every `up` / `reload`, so editing
+  any source flows into the agent's prompt at the next render —
+  no stale concat artifacts. Single-form behavior, fingerprint
+  shape, and `SYSTEM_PROMPT_PATH` are byte-identical to the
+  pre-T-103 path; existing composes upgrade with zero forced
+  agent restarts. Empty `role_prompt: ""` and `role_prompt: []`
+  are now rejected at validate (was a silent hole pre-T-103).
+
 - **`Sent` mailbox tab in the TUI** (T-122). The mailbox pane gains
   a fourth tab, `Sent`, between `Inbox` and `Channel`. It lists
   every row whose sender is the focused agent — DMs the agent

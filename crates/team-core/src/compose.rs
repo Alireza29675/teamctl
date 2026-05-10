@@ -392,10 +392,15 @@ impl RolePrompt {
         }
     }
 
-    /// True when the list form holds zero entries. The single form is
-    /// always non-empty (a string is always present).
-    pub fn is_empty_list(&self) -> bool {
-        matches!(self, RolePrompt::Multiple(v) if v.is_empty())
+    /// True when the configured value resolves to no actual source
+    /// path: an empty string in the single form, or an empty list in
+    /// the multi form. Renderer would silently produce
+    /// `SYSTEM_PROMPT_PATH=<root>/` otherwise — caught at validate.
+    pub fn is_blank(&self) -> bool {
+        match self {
+            RolePrompt::Single(p) => p.as_os_str().is_empty(),
+            RolePrompt::Multiple(v) => v.is_empty(),
+        }
     }
 }
 

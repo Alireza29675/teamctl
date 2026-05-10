@@ -109,6 +109,12 @@ pub fn render_project_public(compose: &Compose, project_id: &str) -> Result<()> 
         let (env, mcp) = render_agent(compose, h, &bin);
         fs::write(env_path(&compose.root, h.project, h.agent), env)?;
         fs::write(mcp_path(&compose.root, h.project, h.agent), mcp)?;
+        // Mirror render_all_public: the scoped path must also
+        // re-materialize multi-file role_prompt concat or a scoped
+        // reload after a source-file edit boots the agent against a
+        // stale concat file (zombie-prompt regression).
+        write_role_prompt_concat(compose, h)
+            .with_context(|| format!("write role_prompt concat for {}:{}", h.project, h.agent))?;
     }
     Ok(())
 }
@@ -388,6 +394,10 @@ fn source_dotenv_into_process(root: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::DEFAULT_WRAPPER;
+    use super::*;
+    use std::collections::BTreeMap;
+    use team_core::compose::*;
+    use team_core::render::role_prompt_concat_path;
 
     /// The wrapper's `auto_confirm_known_dialogs` watcher relies on a
     /// fixed set of dialog-header substrings. A silent edit that drops
@@ -406,5 +416,81 @@ mod tests {
                 "DEFAULT_WRAPPER missing marker: {marker}",
             );
         }
+    }
+
+    fn compose_with_multi_role_prompt(root: &Path, project_id: &str) -> Compose {
+        let mut managers = BTreeMap::new();
+        managers.insert(
+            "mgr".into(),
+            Agent {
+                runtime: "claude-code".into(),
+                model: None,
+                role_prompt: Some(RolePrompt::Multiple(vec![
+                    PathBuf::from("roles/_base.md"),
+                    PathBuf::from("roles/mgr.md"),
+                ])),
+                permission_mode: None,
+                autonomy: "low_risk_only".into(),
+                can_dm: vec![],
+                can_broadcast: vec![],
+                reports_to: None,
+                on_rate_limit: None,
+                effort: None,
+                interfaces: None,
+            },
+        );
+        Compose {
+            root: root.to_path_buf(),
+            global: Global {
+                version: 2,
+                broker: Default::default(),
+                supervisor: Default::default(),
+                budget: Default::default(),
+                hitl: Default::default(),
+                rate_limits: Default::default(),
+                interfaces: vec![],
+                projects: vec![],
+                attachments: Default::default(),
+            },
+            projects: vec![Project {
+                version: 2,
+                project: ProjectMeta {
+                    id: project_id.into(),
+                    name: project_id.into(),
+                    cwd: root.to_path_buf(),
+                },
+                channels: vec![],
+                managers,
+                workers: Default::default(),
+            }],
+        }
+    }
+
+    #[test]
+    fn render_project_public_writes_role_prompt_concat() {
+        // Regression for T-103 qa finding: the scoped reload path
+        // must materialize the multi-file role_prompt concat too,
+        // else editing a source file and running
+        // `teamctl reload <project>` boots the agent against a stale
+        // concat file (zombie-prompt).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("roles")).unwrap();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        std::fs::write(root.join("roles/_base.md"), "BASE").unwrap();
+        std::fs::write(root.join("roles/mgr.md"), "MGR").unwrap();
+
+        let compose = compose_with_multi_role_prompt(root, "p");
+        render_project_public(&compose, "p").expect("render_project_public");
+
+        let concat = role_prompt_concat_path(root, "p", "mgr");
+        let got = std::fs::read_to_string(&concat).expect("concat file written");
+        assert_eq!(got, "BASE\n\n—\n\nMGR");
+
+        // No zombies: a source edit + re-render must update the concat.
+        std::fs::write(root.join("roles/_base.md"), "BASE-v2").unwrap();
+        render_project_public(&compose, "p").expect("render_project_public re-run");
+        let got = std::fs::read_to_string(&concat).unwrap();
+        assert_eq!(got, "BASE-v2\n\n—\n\nMGR");
     }
 }

@@ -209,26 +209,44 @@ fn fingerprint_role_prompt(
     let Some(rp) = role_prompt else {
         return PromptFingerprint::None;
     };
-    // Hash a length-prefixed concat so a one-file change, a reorder, or
-    // a split/join across the file boundary all produce distinct
-    // fingerprints. Any missing file short-circuits to `Missing`,
-    // naming the first absent path so the failure is actionable.
-    let mut hasher = blake3::Hasher::new();
-    for rel in rp.paths() {
-        let abs = compose.root.join(rel);
-        let bytes = match fs::read(&abs) {
-            Ok(b) => b,
-            Err(_) => {
-                return PromptFingerprint::Missing {
+    match rp {
+        // Single arm is byte-for-byte the legacy hash so existing
+        // single-form fingerprints survive the upgrade. Without this,
+        // the next up/reload after this lands forces a fresh CC
+        // session for every agent that has a `role_prompt`.
+        RolePrompt::Single(rel) => {
+            let abs = compose.root.join(rel);
+            match fs::read(&abs) {
+                Ok(bytes) => PromptFingerprint::Present {
+                    hash: hash_bytes(&bytes),
+                },
+                Err(_) => PromptFingerprint::Missing {
                     path: rel.display().to_string(),
-                };
+                },
             }
-        };
-        hasher.update(&(bytes.len() as u64).to_le_bytes());
-        hasher.update(&bytes);
-    }
-    PromptFingerprint::Present {
-        hash: format!("blake3:{}", hasher.finalize().to_hex()),
+        }
+        // Multi arm length-prefixes every source so a split/join
+        // across the file boundary produces a distinct hash. No prior
+        // fingerprint exists for this shape, so back-compat is moot.
+        RolePrompt::Multiple(paths) => {
+            let mut hasher = blake3::Hasher::new();
+            for rel in paths {
+                let abs = compose.root.join(rel);
+                let bytes = match fs::read(&abs) {
+                    Ok(b) => b,
+                    Err(_) => {
+                        return PromptFingerprint::Missing {
+                            path: rel.display().to_string(),
+                        };
+                    }
+                };
+                hasher.update(&(bytes.len() as u64).to_le_bytes());
+                hasher.update(&bytes);
+            }
+            PromptFingerprint::Present {
+                hash: format!("blake3:{}", hasher.finalize().to_hex()),
+            }
+        }
     }
 }
 
@@ -657,6 +675,7 @@ mod tests {
                 rate_limits: Default::default(),
                 interfaces: vec![],
                 projects: vec![],
+                attachments: Default::default(),
             },
             projects: vec![Project {
                 version: 2,
@@ -713,6 +732,29 @@ mod tests {
             fingerprint_role_prompt(&c, Some(&ab)),
             fingerprint_role_prompt(&c, Some(&ba)),
         );
+    }
+
+    #[test]
+    fn fingerprint_single_form_matches_legacy_byte_hash() {
+        // Back-compat: every agent with a single-string `role_prompt`
+        // already has a `blake3:<hex>` fingerprint stored in
+        // applied.json. The Single arm must produce the same hash
+        // those rows already hold, otherwise the first up/reload after
+        // this lands force-restarts every agent in the fleet.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("roles")).unwrap();
+        let body = b"manager role copy\n".to_vec();
+        std::fs::write(root.join("roles/mgr.md"), &body).unwrap();
+
+        let c = compose_with_root(root);
+        let rp = RolePrompt::Single(PathBuf::from("roles/mgr.md"));
+        let got = fingerprint_role_prompt(&c, Some(&rp));
+        let expected_legacy = format!("blake3:{}", blake3::hash(&body).to_hex());
+        match got {
+            PromptFingerprint::Present { hash } => assert_eq!(hash, expected_legacy),
+            other => panic!("expected Present, got {other:?}"),
+        }
     }
 
     #[test]
