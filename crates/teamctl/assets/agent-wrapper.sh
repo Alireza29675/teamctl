@@ -94,6 +94,24 @@ while :; do
         claude-code)
             BIN=claude
             set --
+            # T-118: deterministic session id + display name so the
+            # conversation persists across teamctl down/up + crash
+            # recovery. UUIDv5 is rendered into the env file by
+            # team-core (claude-code-only); claude creates the session
+            # at this UUID on first spawn and resumes it on every
+            # subsequent spawn. If the session-file at this UUID is
+            # ever removed (manual cleanup, claude session-dir reset),
+            # claude creates a fresh one at the same UUID — self-
+            # healing by construction. The BOOTSTRAP_PROMPT keeps
+            # being injected on every spawn (option 1 from #118):
+            # claude's session-storage slug rule isn't a documented
+            # contract, so a cold-vs-warm probe here would couple the
+            # wrapper to a behavior that could shift between claude
+            # versions. The bootstrap is small enough that warm-start
+            # cost is trivial, and the model recognizes "I've already
+            # done this".
+            [ -n "$CLAUDE_SESSION_ID" ] && set -- "$@" --session-id "$CLAUDE_SESSION_ID"
+            [ -n "$CLAUDE_SESSION_NAME" ] && set -- "$@" -n "$CLAUDE_SESSION_NAME"
             [ -n "$PERMISSION_MODE" ] && set -- "$@" --permission-mode "$PERMISSION_MODE"
             # Autonomous agents have no human at the keyboard, so any
             # permission prompt deadlocks the pane. Skip them at the

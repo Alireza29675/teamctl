@@ -12,7 +12,6 @@ Each runtime lives in `runtimes/<name>.yaml`:
 # runtimes/claude-code.yaml
 binary: claude
 supports_mcp: true
-session_resume: "--continue"
 default_model: claude-opus-4-7
 ```
 

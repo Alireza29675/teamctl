@@ -25,6 +25,13 @@ pub struct Runtime {
     pub binary: String,
     #[serde(default)]
     pub supports_mcp: bool,
+    /// Session-resume hint kept as parsed metadata for back-compat —
+    /// no Rust caller reads this field today. The actual resume
+    /// strategy is hard-coded per-runtime in `agent-wrapper.sh`:
+    /// claude-code uses deterministic UUIDv5 `--session-id` (T-118),
+    /// codex resumes via `--profile`, gemini has no equivalent. Kept
+    /// to avoid breaking any operator-authored `runtimes/*.yaml`
+    /// override that still names the field.
     #[serde(default)]
     pub session_resume: Option<String>,
     #[serde(default)]
