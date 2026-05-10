@@ -67,7 +67,7 @@ impl Widget for Statusline<'_> {
             // focused so stream-keys is discoverable without
             // opening the help overlay.
             Pane::Detail => "Ctrl+E stream keys · / filter · w wall · @ send · q quit",
-            Pane::Mailbox => "[ / ] tabs · ⏎ open · ! broadcast · q quit",
+            Pane::Mailbox => "← / → tabs · ⏎ open · ! broadcast · q quit",
         };
 
         let left = Line::from(vec![tab_hint, sep, Span::styled(contextual, muted)]);

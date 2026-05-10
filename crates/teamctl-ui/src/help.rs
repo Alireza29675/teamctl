@@ -32,7 +32,7 @@ pub const NAVIGATION: &[Binding] = &[
         description: "navigate within focused pane",
     },
     Binding {
-        chord: "[ / ]",
+        chord: "← / →",
         description: "walk mailbox tabs (when mailbox focused)",
     },
     Binding {
