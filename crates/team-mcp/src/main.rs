@@ -148,20 +148,32 @@ fn spawn_channel_watcher(
     initialized: Arc<Notify>,
     lazy_inbox: bool,
 ) {
+    // High-water mark captured *synchronously* at spawn — before the
+    // tokio task is scheduled. Computing it inside the task after
+    // `initialized.notified().await` opened a race: any writer that
+    // inserted between the test (or operator) sending
+    // `notifications/initialized` and the task actually waking would
+    // be captured in `last_seen` and never emitted as a channel
+    // notification. This was the source of the
+    // `immediate_message_delivers_full_body_inline` flake — under
+    // load on CI, the 150ms sleep the test used as a barrier could
+    // be shorter than the watcher's wake-and-peek latency.
+    //
+    // Capturing here shrinks the race window to the ~µs between
+    // `Store::open` and this peek — small enough that no real writer
+    // can plausibly slip in. Any row inserted from this point forward
+    // gets a notification, which is the contract callers expect.
+    let initial_last_seen: i64 = match store.inbox_peek(&agent_id, 1000) {
+        Ok(msgs) => msgs.iter().map(|m| m.id).max().unwrap_or(0),
+        Err(e) => {
+            tracing::warn!(error = %e, "channel watcher initial peek failed");
+            0
+        }
+    };
+
     tokio::spawn(async move {
         initialized.notified().await;
-
-        // High-water mark: messages with `id <= last_seen` were already
-        // present at session start. The bootstrap prompt directs the agent
-        // to fetch those via `inbox_peek` for catch-up, so we don't push
-        // them as channel events (which would race the agent's own peek).
-        let mut last_seen: i64 = match store.inbox_peek(&agent_id, 1000) {
-            Ok(msgs) => msgs.iter().map(|m| m.id).max().unwrap_or(0),
-            Err(e) => {
-                tracing::warn!(error = %e, "channel watcher initial peek failed");
-                0
-            }
-        };
+        let mut last_seen = initial_last_seen;
 
         loop {
             tokio::time::sleep(Duration::from_millis(CHANNEL_POLL_MS)).await;

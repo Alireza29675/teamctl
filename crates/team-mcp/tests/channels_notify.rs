@@ -313,6 +313,67 @@ fn watcher_skips_pre_existing_unacked_messages_at_startup() {
     dev.shutdown();
 }
 
+/// Deflake regression: a row inserted *between* `team-mcp` spawning
+/// and the client sending `notifications/initialized` must still fire
+/// a channel notification once initialized lands. Before the fix at
+/// `main.rs::spawn_channel_watcher`, the watcher computed its
+/// high-water mark inside the spawned task — *after* awaiting on
+/// `initialized.notified()` — so any row written in that window was
+/// captured in `last_seen` and silently never emitted. The
+/// `immediate_message_delivers_full_body_inline` flake was the
+/// canary; this test pins the broader contract so a future refactor
+/// that moves the high-water mark back inside the task fails loudly.
+#[test]
+fn row_written_before_initialized_still_emits_notification() {
+    use rusqlite::Connection;
+
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let bin = team_mcp_bin();
+
+    // Pre-create the schema so the post-spawn INSERT below doesn't
+    // hit a missing-table error. No row is inserted yet — the race
+    // window we exercise is "row arrives after spawn but before
+    // `notifications/initialized`", written further down.
+    let conn = Connection::open(&mailbox).unwrap();
+    team_core::mailbox::ensure(&conn).unwrap();
+    drop(conn);
+
+    let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
+    dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
+
+    // Race window: row inserted after spawn but before initialized.
+    // With `last_seen` captured synchronously at spawn, this row's
+    // id > last_seen, so it gets emitted on the watcher's first poll
+    // after initialized lands. The pre-fix code would have captured
+    // this id in last_seen and never emitted.
+    let conn = Connection::open(&mailbox).unwrap();
+    conn.execute(
+        "INSERT INTO messages
+            (project_id, sender, recipient, text, sent_at, delivery_mode)
+         VALUES ('hello', 'user:telegram', 'hello:dev',
+                 'arrived during the boot window', strftime('%s','now'),
+                 'immediate')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+
+    let notif = dev
+        .lines
+        .wait_for_method("notifications/claude/channel", RPC_BUDGET)
+        .expect("row inserted post-spawn must emit even when written before initialized");
+    assert_eq!(
+        notif["params"]["content"], "arrived during the boot window",
+        "the boot-window row must surface as a channel notification"
+    );
+
+    dev.shutdown();
+}
+
 /// T-104: a row inserted with `delivery_mode='immediate'` (the path the
 /// bot takes when an operator prefixes the message with `/readnow `)
 /// must land inline as the full body, with no `meta.lazy` flag.
