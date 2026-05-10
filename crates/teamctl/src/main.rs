@@ -78,6 +78,13 @@ enum Command {
     /// Wide table: agents, supervisor state, inbox depth.
     #[command(alias = "status")]
     Ps,
+    /// Host-wide list of every teamctl-managed tmux session, across
+    /// projects. No compose root required.
+    Sessions {
+        /// Emit machine-readable JSON instead of the human table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Tail an agent's tmux pane scrollback.
     Logs { target: String },
     /// Live message stream for an agent (-f to follow).
@@ -298,6 +305,9 @@ fn main() -> Result<()> {
     if let Command::Update { method, check, yes } = cli.command {
         return cmd::update::run(method, check, yes);
     }
+    if let Command::Sessions { json } = cli.command {
+        return cmd::sessions::run(json);
+    }
     if let Command::Context { action } = &cli.command {
         return match action {
             ContextAction::Ls => cmd::context::ls(),
@@ -368,6 +378,7 @@ fn main() -> Result<()> {
         }
         Command::Context { .. } => unreachable!("handled above"),
         Command::Init { .. } => unreachable!("handled above"),
+        Command::Sessions { .. } => unreachable!("handled above"),
         Command::Ui { .. } => unreachable!("handled above"),
         Command::Update { .. } => unreachable!("handled above"),
     }

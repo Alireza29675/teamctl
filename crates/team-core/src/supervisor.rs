@@ -149,6 +149,21 @@ impl Supervisor for TmuxSupervisor {
             .status()
             .context("spawn tmux new-session")?;
         anyhow::ensure!(status.success(), "tmux new-session exited {status}");
+        // Tag the session so `teamctl sessions` can identify it as
+        // teamctl-managed across projects without parsing the name.
+        // Best-effort — `-q` swallows tmux errors so a stale tmux build
+        // can't break `up`.
+        let cwd_str = spec.cwd.to_string_lossy();
+        for (key, value) in [
+            ("@teamctl", "1"),
+            ("@teamctl-project", spec.project.as_str()),
+            ("@teamctl-agent", spec.agent.as_str()),
+            ("@teamctl-root", cwd_str.as_ref()),
+        ] {
+            let _ = Command::new("tmux")
+                .args(["set-option", "-q", "-t", &spec.tmux_session, key, value])
+                .status();
+        }
         Ok(())
     }
 
