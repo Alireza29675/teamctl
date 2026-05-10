@@ -6,12 +6,16 @@
 //! probe into commands they already touch every shift, with three
 //! invariants:
 //!
-//! 1. **Once per day per host.** A cache file at
+//! 1. **Once per day per compose root.** A cache file at
 //!    `<root>/state/update-check.json` records the last fetched
 //!    `latest`, the binary `current` it was checked against, and the
 //!    `checked_on` date. Same-day + same-current → skip the network.
 //!    A binary upgrade naturally invalidates the cache because
-//!    `current` flips.
+//!    `current` flips. Note: the throttle is per-compose-root, not
+//!    per-host — an operator running teamctl across N roots on one
+//!    machine performs N daily fetches. Still well within GitHub's
+//!    60/hour anonymous limit; moving to `~/.cache/teamctl/` would
+//!    expand scope past this ticket.
 //! 2. **Silent on every failure.** No network, API rate-limit, parse
 //!    error, on-disk IO error, missing dir — none of these surface to
 //!    the operator. The banner is a soft hint; failing it loud would
@@ -20,6 +24,11 @@
 //! 3. **Banner emits to stderr.** `teamctl status` is column-formatted
 //!    and commonly piped (`| grep`, `| awk`); stdout must stay clean.
 //!    Stderr also matches how `teamctl up` already routes warnings.
+//!
+//! The fetch path inherits `update::curl_get`'s 15s `--max-time`, so
+//! on a slow or unreachable GitHub `teamctl status` can stall up to
+//! 15s — once per day per root. Same constraint as
+//! `teamctl update --check` today; not a regression here.
 
 use std::path::{Path, PathBuf};
 
