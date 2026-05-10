@@ -38,3 +38,11 @@ These are positioning *invariants* — every command implements **with** them, n
 - Plugin-only state is forbidden. State that needs to persist between sessions lives in the user's `.team/` tree, not anywhere this plugin owns.
 - Every action either command takes is reproducible by hand-editing YAML. If you can't describe the change as a YAML diff, it doesn't belong in the plugin.
 - Generated files carry no CLI-specific markers. No `# generated-by:` comments. No plugin signatures. The file should look like a careful human wrote it.
+
+## Canonical flow — domain-over-function
+
+`/teamctl:init` does not hand users a template menu. It walks them through a discovery conversation that surfaces the user's *domains* — things with their own state, history, and decisions — and synthesises a team from those. The cut is by domain ownership, not by job function.
+
+The legacy template-pick stage and the four named defaults (OSS maintainer, Editorial room, Indie studio, Solo triage) live on only as **inspirations**: shape-references the user can compare against after they've named their own domains. Never as pickable starts.
+
+The canonical companion is [`docs/src/content/docs/concepts/teams.md`](../../docs/src/content/docs/concepts/teams.md) — the methodology there is the source of truth. If anything in `/teamctl:init` drifts from that page, the page wins.
