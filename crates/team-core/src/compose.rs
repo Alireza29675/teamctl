@@ -369,12 +369,42 @@ impl ChannelMembers {
     }
 }
 
+/// Reference to one or more role-instruction markdown files.
+///
+/// Single-string form (current) keeps every existing compose parsing
+/// unchanged. List form lets a role compose from multiple files
+/// concatenated in declared order at boot — base + tweaks without
+/// duplicating shared role copy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RolePrompt {
+    Single(PathBuf),
+    Multiple(Vec<PathBuf>),
+}
+
+impl RolePrompt {
+    /// All source paths in declared order. Single yields a one-element
+    /// slice; Multiple yields the list as-is.
+    pub fn paths(&self) -> Vec<&Path> {
+        match self {
+            RolePrompt::Single(p) => vec![p.as_path()],
+            RolePrompt::Multiple(v) => v.iter().map(|p| p.as_path()).collect(),
+        }
+    }
+
+    /// True when the list form holds zero entries. The single form is
+    /// always non-empty (a string is always present).
+    pub fn is_empty_list(&self) -> bool {
+        matches!(self, RolePrompt::Multiple(v) if v.is_empty())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
     #[serde(default = "default_runtime")]
     pub runtime: String,
     pub model: Option<String>,
-    pub role_prompt: Option<PathBuf>,
+    pub role_prompt: Option<RolePrompt>,
     #[serde(default)]
     pub permission_mode: Option<String>,
     #[serde(default = "default_autonomy")]
@@ -764,5 +794,51 @@ interfaces:
         let tmp = tempfile::tempdir().unwrap();
         let err = Compose::discover(tmp.path()).unwrap_err();
         assert!(err.to_string().contains("no `.team/team-compose.yaml`"));
+    }
+
+    #[test]
+    fn role_prompt_parses_single_string_form() {
+        let yaml = "role_prompt: roles/mgr.md\n";
+        let agent: Agent = serde_yaml::from_str(&format!(
+            "runtime: claude-code\nautonomy: low_risk_only\n{yaml}"
+        ))
+        .unwrap();
+        match agent.role_prompt.unwrap() {
+            RolePrompt::Single(p) => assert_eq!(p, PathBuf::from("roles/mgr.md")),
+            other => panic!("expected Single, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn role_prompt_parses_list_form() {
+        let yaml = "role_prompt:\n  - roles/_base.md\n  - roles/mgr.md\n";
+        let agent: Agent = serde_yaml::from_str(&format!(
+            "runtime: claude-code\nautonomy: low_risk_only\n{yaml}"
+        ))
+        .unwrap();
+        match agent.role_prompt.unwrap() {
+            RolePrompt::Multiple(v) => assert_eq!(
+                v,
+                vec![
+                    PathBuf::from("roles/_base.md"),
+                    PathBuf::from("roles/mgr.md"),
+                ]
+            ),
+            other => panic!("expected Multiple, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn role_prompt_paths_returns_declared_order() {
+        let rp = RolePrompt::Multiple(vec![
+            PathBuf::from("a.md"),
+            PathBuf::from("b.md"),
+            PathBuf::from("c.md"),
+        ]);
+        let got: Vec<&Path> = rp.paths();
+        assert_eq!(
+            got,
+            vec![Path::new("a.md"), Path::new("b.md"), Path::new("c.md")]
+        );
     }
 }

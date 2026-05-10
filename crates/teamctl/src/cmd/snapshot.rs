@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use team_core::compose::Compose;
+use team_core::compose::{Compose, RolePrompt};
 use team_core::render::{env_path, render_agent};
 
 pub const SCHEMA_VERSION: u32 = 2;
@@ -154,7 +154,7 @@ pub fn compute(compose: &Compose, team_mcp_bin: &str) -> Snapshot {
     let mut agents = BTreeMap::new();
     for h in compose.agents() {
         let (env, mcp) = render_agent(compose, h, team_mcp_bin);
-        let role_prompt = fingerprint_role_prompt(compose, h.spec.role_prompt.as_deref());
+        let role_prompt = fingerprint_role_prompt(compose, h.spec.role_prompt.as_ref());
         let fingerprints = Fingerprints {
             env: hash_str(&env),
             mcp: hash_str(&mcp),
@@ -202,18 +202,33 @@ fn compose_digest(compose: &Compose) -> String {
     }
 }
 
-fn fingerprint_role_prompt(compose: &Compose, role_prompt: Option<&Path>) -> PromptFingerprint {
-    let Some(rel) = role_prompt else {
+fn fingerprint_role_prompt(
+    compose: &Compose,
+    role_prompt: Option<&RolePrompt>,
+) -> PromptFingerprint {
+    let Some(rp) = role_prompt else {
         return PromptFingerprint::None;
     };
-    let abs = compose.root.join(rel);
-    match fs::read(&abs) {
-        Ok(bytes) => PromptFingerprint::Present {
-            hash: hash_bytes(&bytes),
-        },
-        Err(_) => PromptFingerprint::Missing {
-            path: rel.display().to_string(),
-        },
+    // Hash a length-prefixed concat so a one-file change, a reorder, or
+    // a split/join across the file boundary all produce distinct
+    // fingerprints. Any missing file short-circuits to `Missing`,
+    // naming the first absent path so the failure is actionable.
+    let mut hasher = blake3::Hasher::new();
+    for rel in rp.paths() {
+        let abs = compose.root.join(rel);
+        let bytes = match fs::read(&abs) {
+            Ok(b) => b,
+            Err(_) => {
+                return PromptFingerprint::Missing {
+                    path: rel.display().to_string(),
+                };
+            }
+        };
+        hasher.update(&(bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
+    }
+    PromptFingerprint::Present {
+        hash: format!("blake3:{}", hasher.finalize().to_hex()),
     }
 }
 
@@ -606,5 +621,115 @@ mod tests {
         let merged = merge_project_into(Some(&prior), &next, "a");
         assert_eq!(merged.agents["a:m"].fingerprints.env, "new-env");
         assert_eq!(merged.agents["aa:m"].fingerprints.env, "aa-env");
+    }
+
+    /// Smallest possible Compose for fingerprint tests: one project, one
+    /// manager, no channels. Fingerprint code only reads `compose.root`
+    /// and the agent's `role_prompt`.
+    fn compose_with_root(root: &Path) -> Compose {
+        use std::collections::BTreeMap;
+        use team_core::compose::*;
+        let mut managers = BTreeMap::new();
+        managers.insert(
+            "mgr".into(),
+            Agent {
+                runtime: "claude-code".into(),
+                model: None,
+                role_prompt: None,
+                permission_mode: None,
+                autonomy: "low_risk_only".into(),
+                can_dm: vec![],
+                can_broadcast: vec![],
+                reports_to: None,
+                on_rate_limit: None,
+                effort: None,
+                interfaces: None,
+            },
+        );
+        Compose {
+            root: root.to_path_buf(),
+            global: Global {
+                version: 2,
+                broker: Default::default(),
+                supervisor: Default::default(),
+                budget: Default::default(),
+                hitl: Default::default(),
+                rate_limits: Default::default(),
+                interfaces: vec![],
+                projects: vec![],
+            },
+            projects: vec![Project {
+                version: 2,
+                project: ProjectMeta {
+                    id: "p".into(),
+                    name: "P".into(),
+                    cwd: root.to_path_buf(),
+                },
+                channels: vec![],
+                managers,
+                workers: Default::default(),
+            }],
+        }
+    }
+
+    #[test]
+    fn fingerprint_multifile_flips_on_any_source_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("roles")).unwrap();
+        std::fs::write(root.join("roles/_base.md"), "BASE").unwrap();
+        std::fs::write(root.join("roles/mgr.md"), "MGR").unwrap();
+
+        let c = compose_with_root(root);
+        let rp = RolePrompt::Multiple(vec![
+            PathBuf::from("roles/_base.md"),
+            PathBuf::from("roles/mgr.md"),
+        ]);
+        let before = fingerprint_role_prompt(&c, Some(&rp));
+
+        std::fs::write(root.join("roles/_base.md"), "BASE-v2").unwrap();
+        let after = fingerprint_role_prompt(&c, Some(&rp));
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn fingerprint_multifile_flips_on_reorder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("roles")).unwrap();
+        std::fs::write(root.join("roles/a.md"), "A").unwrap();
+        std::fs::write(root.join("roles/b.md"), "B").unwrap();
+
+        let c = compose_with_root(root);
+        let ab = RolePrompt::Multiple(vec![
+            PathBuf::from("roles/a.md"),
+            PathBuf::from("roles/b.md"),
+        ]);
+        let ba = RolePrompt::Multiple(vec![
+            PathBuf::from("roles/b.md"),
+            PathBuf::from("roles/a.md"),
+        ]);
+        assert_ne!(
+            fingerprint_role_prompt(&c, Some(&ab)),
+            fingerprint_role_prompt(&c, Some(&ba)),
+        );
+    }
+
+    #[test]
+    fn fingerprint_multifile_missing_source_returns_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = compose_with_root(dir.path());
+        let rp = RolePrompt::Multiple(vec![
+            PathBuf::from("roles/present.md"),
+            PathBuf::from("roles/missing.md"),
+        ]);
+        std::fs::create_dir_all(dir.path().join("roles")).unwrap();
+        std::fs::write(dir.path().join("roles/present.md"), "P").unwrap();
+
+        let fp = fingerprint_role_prompt(&c, Some(&rp));
+        match fp {
+            PromptFingerprint::Missing { path } => assert_eq!(path, "roles/missing.md"),
+            other => panic!("expected Missing, got {other:?}"),
+        }
     }
 }

@@ -71,6 +71,9 @@ pub enum ValidationError {
 
     #[error("supervisor.drain_timeout_secs={0} is unreasonable; expected 0..=600")]
     DrainTimeoutOutOfRange(u64),
+
+    #[error("project `{project}`: agent `{agent}` has an empty `role_prompt: []` list")]
+    EmptyRolePromptList { project: String, agent: String },
 }
 
 pub fn validate(compose: &Compose) -> Vec<ValidationError> {
@@ -172,6 +175,14 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
                     agent: id.into(),
                     runtime: a.runtime.clone(),
                 });
+            }
+            if let Some(rp) = &a.role_prompt {
+                if rp.is_empty_list() {
+                    errs.push(ValidationError::EmptyRolePromptList {
+                        project: p.project.id.clone(),
+                        agent: id.into(),
+                    });
+                }
             }
         };
 
@@ -299,5 +310,37 @@ mod tests {
         assert!(!validate(&c)
             .iter()
             .any(|e| matches!(e, ValidationError::DrainTimeoutOutOfRange(_))));
+    }
+
+    #[test]
+    fn empty_role_prompt_list_flags() {
+        let mut c = toy_compose("dev");
+        c.projects[0].managers.get_mut("mgr").unwrap().role_prompt =
+            Some(crate::compose::RolePrompt::Multiple(vec![]));
+        assert!(validate(&c)
+            .iter()
+            .any(|e| matches!(e, ValidationError::EmptyRolePromptList { .. })));
+    }
+
+    #[test]
+    fn single_role_prompt_validates() {
+        let mut c = toy_compose("dev");
+        c.projects[0].managers.get_mut("mgr").unwrap().role_prompt = Some(
+            crate::compose::RolePrompt::Single(PathBuf::from("roles/mgr.md")),
+        );
+        assert!(!validate(&c)
+            .iter()
+            .any(|e| matches!(e, ValidationError::EmptyRolePromptList { .. })));
+    }
+
+    #[test]
+    fn populated_role_prompt_list_validates() {
+        let mut c = toy_compose("dev");
+        c.projects[0].managers.get_mut("mgr").unwrap().role_prompt = Some(
+            crate::compose::RolePrompt::Multiple(vec![PathBuf::from("roles/mgr.md")]),
+        );
+        assert!(!validate(&c)
+            .iter()
+            .any(|e| matches!(e, ValidationError::EmptyRolePromptList { .. })));
     }
 }

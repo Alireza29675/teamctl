@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
-use team_core::render::{env_path, mcp_path, render_agent};
+use team_core::render::{env_path, mcp_path, render_agent, write_role_prompt_concat};
 use team_core::supervisor::{AgentSpec, Supervisor, TmuxSupervisor};
 
 pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
@@ -220,6 +220,11 @@ pub fn render_all_public(compose: &Compose) -> Result<()> {
         let (env, mcp) = render_agent(compose, h, &bin);
         fs::write(env_path(&compose.root, h.project, h.agent), env)?;
         fs::write(mcp_path(&compose.root, h.project, h.agent), mcp)?;
+        // Re-materialize multi-file role_prompt concat unconditionally
+        // so any edit to a source file flows into the agent's prompt at
+        // the next render — single-form is a no-op (back-compat).
+        write_role_prompt_concat(compose, h)
+            .with_context(|| format!("write role_prompt concat for {}:{}", h.project, h.agent))?;
     }
     Ok(())
 }
