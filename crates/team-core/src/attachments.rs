@@ -46,20 +46,13 @@ pub enum RejectReason {
     /// reason for operator-side debugging.
     PathUnresolvable(String),
     /// Resolved path is not a descendant of any `allowed_root`.
-    OutsideAllowedRoots {
-        resolved: PathBuf,
-    },
+    OutsideAllowedRoots { resolved: PathBuf },
     /// Resolved path stat'd > `max_size_bytes`.
-    TooLarge {
-        size: u64,
-        cap: u64,
-    },
+    TooLarge { size: u64, cap: u64 },
     /// Scanner subprocess returned non-zero, timed out, or could not
     /// be spawned. `detail` carries the scanner's stderr (truncated)
     /// or a wrapper-level error.
-    ScannerRejected {
-        detail: String,
-    },
+    ScannerRejected { detail: String },
     /// Read raced with deletion or another `fs::read` failure surfaced
     /// after the size check passed.
     ReadFailed(String),
@@ -156,8 +149,7 @@ pub fn check_and_read(
     if !is_within_any_root(&resolved, &roots) {
         return Err(RejectReason::OutsideAllowedRoots { resolved });
     }
-    let metadata = fs::metadata(&resolved)
-        .map_err(|e| RejectReason::ReadFailed(e.to_string()))?;
+    let metadata = fs::metadata(&resolved).map_err(|e| RejectReason::ReadFailed(e.to_string()))?;
     if metadata.len() > cfg.max_size_bytes {
         return Err(RejectReason::TooLarge {
             size: metadata.len(),
@@ -362,10 +354,7 @@ mod tests {
         // render path. Both render_plain and the upcoming HTML
         // renderer must reproduce these byte-for-byte. Pinning a
         // representative sample.
-        let r = RejectReason::TooLarge {
-            size: 100,
-            cap: 50,
-        };
+        let r = RejectReason::TooLarge { size: 100, cap: 50 };
         let s = r.human();
         for c in ['<', '>', '&', '*', '_'] {
             assert!(!s.contains(c), "human() message contains `{c}`: {s}");
@@ -388,8 +377,8 @@ mod tests {
         let root = PathBuf::from("/tmp/team");
         let descendant = PathBuf::from("/tmp/team/sub/file.md");
         let elsewhere = PathBuf::from("/tmp/other/file.md");
-        assert!(is_within_any_root(&descendant, &[root.clone()]));
-        assert!(is_within_any_root(&root, &[root.clone()]));
+        assert!(is_within_any_root(&descendant, std::slice::from_ref(&root)));
+        assert!(is_within_any_root(&root, std::slice::from_ref(&root)));
         assert!(!is_within_any_root(&elsewhere, &[root]));
     }
 }

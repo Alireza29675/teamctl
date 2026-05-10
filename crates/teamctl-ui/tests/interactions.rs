@@ -1421,7 +1421,8 @@ fn enter_in_attach_overlay_appends_marker_and_closes_overlay() {
     );
     // Marker is on its own line, not concatenated with body text.
     assert!(
-        body.lines().any(|l| l.trim() == "📎 attachment: /home/alice/notes.md"),
+        body.lines()
+            .any(|l| l.trim() == "📎 attachment: /home/alice/notes.md"),
         "marker on its own line: {body:?}"
     );
 }
@@ -1443,11 +1444,7 @@ fn esc_in_attach_overlay_cancels_back_to_editor() {
 
     assert!(!h.app.compose_attach_input_open, "overlay dismissed");
     assert_eq!(h.app.compose_attach_buffer, "", "buffer cleared on cancel");
-    assert_eq!(
-        h.app.stage,
-        Stage::ComposeModal,
-        "compose modal still open"
-    );
+    assert_eq!(h.app.stage, Stage::ComposeModal, "compose modal still open");
     assert!(
         !h.app.compose_editor.body().contains("📎"),
         "no marker appended on cancel"

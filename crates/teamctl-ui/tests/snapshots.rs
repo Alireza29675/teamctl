@@ -343,10 +343,7 @@ fn compose_modal_renders_target_body_and_attach_footer() {
         s.contains("line one") && s.contains("line two"),
         "body missing"
     );
-    assert!(
-        s.contains("Tab attach"),
-        "footer attach hint missing: {s}"
-    );
+    assert!(s.contains("Tab attach"), "footer attach hint missing: {s}");
     assert!(
         !s.contains("TODO #32"),
         "footer should not carry the TODO once the affordance ships: {s}"
