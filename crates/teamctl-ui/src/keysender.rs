@@ -78,13 +78,24 @@ pub fn encode_key(ev: KeyEvent) -> Option<EncodedKey> {
     match ev.code {
         // Printable chars. Ctrl+letter / Alt+letter take the named
         // form (`C-c`); everything else goes through `-l` literal so
-        // tmux doesn't reinterpret tokens like `~`, `;`, `:`.
+        // tmux doesn't reinterpret tokens like `~`, `:`.
         KeyCode::Char(c) => {
             if ctrl || alt {
                 // tmux wants Ctrl+letter chords lowercased: `C-c`,
                 // not `C-C`. Same convention for Alt.
                 let normalised = c.to_ascii_lowercase();
                 Some(EncodedKey::named(format!("{prefix}{normalised}")))
+            } else if c == ';' {
+                // tmux's command-list parser treats a bare `;` arg
+                // as the command separator, not as data — even
+                // under `-l` the arg is tokenised first, so a
+                // literal-mode `;` keystroke is silently dropped
+                // before it ever reaches the pane. Escape it as
+                // `\;` so the parser passes `;` through to the
+                // `-l` handler as data. (Reported by qa on PR
+                // #114 with a live repro: typing "off); buy" lost
+                // the `;`.)
+                Some(EncodedKey::literal("\\;".to_string()))
             } else {
                 Some(EncodedKey::literal(c.to_string()))
             }
@@ -203,10 +214,28 @@ mod tests {
 
     #[test]
     fn punctuation_uses_literal_form() {
-        // Tokens like `;` are tmux key-names; literal mode dodges
-        // the collision.
+        // `~` is the canonical example: tmux would read it as a
+        // key-name (`~`), literal mode forwards it as the typed
+        // character. Doesn't trigger the `;` escape path.
+        let enc = encode_key(k(KeyCode::Char('~'), KeyModifiers::NONE)).unwrap();
+        assert_eq!(enc.args, vec!["-l".to_string(), "~".to_string()]);
+    }
+
+    #[test]
+    fn semicolon_is_backslash_escaped_in_literal_form() {
+        // qa-found regression on PR #114: a bare `;` arg is consumed
+        // by tmux's own command-list parser as the command separator
+        // and never reaches the pane. Escaping it as `\;` survives
+        // the parse and lands in the pane as `;`. Pin both the
+        // exact arg shape and the path-of-arrival so a future
+        // refactor can't quietly drop the escape.
         let enc = encode_key(k(KeyCode::Char(';'), KeyModifiers::NONE)).unwrap();
-        assert_eq!(enc.args, vec!["-l".to_string(), ";".to_string()]);
+        assert_eq!(
+            enc.args,
+            vec!["-l".to_string(), "\\;".to_string()],
+            "bare `;` must be sent as `\\;` so tmux's command parser \
+             doesn't eat it as a separator"
+        );
     }
 
     #[test]
