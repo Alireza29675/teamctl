@@ -31,4 +31,4 @@ expression: buffer_to_string(&buf)
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
-Tab cycle panes  ·  [ / ] tabs · ⏎ open · ! broadcast · q quit                                       ? help · t tutorial
+Tab cycle panes  ·  ← / → tabs · ⏎ open · ! broadcast · q quit                                       ? help · t tutorial

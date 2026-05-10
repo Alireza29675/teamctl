@@ -109,10 +109,12 @@ pub struct App {
     /// only reads the flag; nothing routes off it yet.
     pub tutorial_completed: bool,
     /// Active tab inside the mailbox pane (PR-UI-3). Walked with
-    /// `[` / `]` when `focused_pane == Mailbox` (T-074 bug 6).
-    /// `Tab` always cycles pane focus, never mailbox tabs — the
-    /// previous "Tab cycles tabs when mailbox is focused" shape
-    /// stranded operators inside the mailbox.
+    /// `←` / `→` when `focused_pane == Mailbox` (T-124 hard-swapped
+    /// the prior `[` / `]` chord for arrow keys; T-074 bug 6 is
+    /// the gating-on-focus invariant). `Tab` always cycles pane
+    /// focus, never mailbox tabs — the previous "Tab cycles tabs
+    /// when mailbox is focused" shape stranded operators inside
+    /// the mailbox.
     pub mailbox_tab: MailboxTab,
     /// Per-tab buffers + cursors for the focused agent's mailbox
     /// view. Reset whenever the focused agent changes — switching
@@ -1366,16 +1368,14 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
                 // vim/tmux convention is "Tab moves between panes";
                 // honour it across every pane uniformly.
                 KeyCode::Tab => app.cycle_focus(),
-                // T-074 bug 6: mailbox sub-navigation moved to a
-                // dedicated chord pair (`[`/`]`) gated on the
-                // mailbox pane being focused. Vim's [t/]t mental
-                // model — `]` walks forward, `[` walks back. Keys
-                // do nothing when other panes are focused, so the
-                // chord stays unsurprising in every other context.
-                KeyCode::Char(']') if app.focused_pane == Pane::Mailbox => app.cycle_mailbox_tab(),
-                KeyCode::Char('[') if app.focused_pane == Pane::Mailbox => {
-                    app.cycle_mailbox_tab_back()
-                }
+                // T-124: mailbox sub-navigation uses Left/Right
+                // arrows (more discoverable than the prior `[`/`]`
+                // chord). Gated on the mailbox pane being focused
+                // so the keys stay unsurprising elsewhere — Up/Down
+                // remain free to scroll layout-specific lists, and
+                // Left/Right have no other binding today.
+                KeyCode::Right if app.focused_pane == Pane::Mailbox => app.cycle_mailbox_tab(),
+                KeyCode::Left if app.focused_pane == Pane::Mailbox => app.cycle_mailbox_tab_back(),
                 // PR-UI-6: in Wall layout, `j`/`k` (and arrows)
                 // scroll the tile grid — same vim shape, different
                 // surface. In Triptych roster focus they still
@@ -1734,11 +1734,11 @@ mod tests {
     }
 
     #[test]
-    fn bracket_chords_walk_mailbox_tabs_when_mailbox_focused() {
-        // T-074 bug 6: `[` / `]` is the new mailbox-tab walker
-        // (vim-style [t/]t mental model). Gated on mailbox being
-        // the focused pane so the chord stays unsurprising in
-        // every other context.
+    fn arrow_keys_walk_mailbox_tabs_when_mailbox_focused() {
+        // T-124: Right/Left arrows are the mailbox-tab walker
+        // (more discoverable than the prior `[`/`]` chord). Gated
+        // on mailbox being the focused pane so the arrows stay
+        // unsurprising in every other context.
         let mut app = App::new();
         app.dismiss_splash();
         // Walk into mailbox via Tab.
@@ -1747,30 +1747,51 @@ mod tests {
         assert_eq!(app.focused_pane, Pane::Mailbox);
         assert_eq!(app.mailbox_tab, MailboxTab::Inbox);
 
-        dispatch(&mut app, key(KeyCode::Char(']')));
+        dispatch(&mut app, key(KeyCode::Right));
         assert_eq!(app.mailbox_tab, MailboxTab::Channel);
-        dispatch(&mut app, key(KeyCode::Char(']')));
+        dispatch(&mut app, key(KeyCode::Right));
         assert_eq!(app.mailbox_tab, MailboxTab::Wire);
-        dispatch(&mut app, key(KeyCode::Char(']')));
-        assert_eq!(app.mailbox_tab, MailboxTab::Inbox, "] wraps");
+        dispatch(&mut app, key(KeyCode::Right));
+        assert_eq!(app.mailbox_tab, MailboxTab::Inbox, "→ wraps");
 
-        dispatch(&mut app, key(KeyCode::Char('[')));
-        assert_eq!(app.mailbox_tab, MailboxTab::Wire, "[ walks back");
+        dispatch(&mut app, key(KeyCode::Left));
+        assert_eq!(app.mailbox_tab, MailboxTab::Wire, "← walks back");
     }
 
     #[test]
-    fn bracket_chords_no_op_when_mailbox_not_focused() {
-        // The chord should not surprise an operator scrolling the
+    fn arrow_keys_no_op_when_mailbox_not_focused() {
+        // The arrows must not surprise an operator scrolling the
         // roster — gate is load-bearing.
         let mut app = App::new();
         app.dismiss_splash();
         assert_eq!(app.focused_pane, Pane::Roster);
         let initial = app.mailbox_tab;
+        dispatch(&mut app, key(KeyCode::Right));
+        dispatch(&mut app, key(KeyCode::Left));
+        assert_eq!(
+            app.mailbox_tab, initial,
+            "←/→ from non-mailbox panes must not flip the active tab"
+        );
+    }
+
+    #[test]
+    fn brackets_no_longer_cycle_mailbox_tabs() {
+        // T-124 regression: `[` / `]` were the previous binding;
+        // hard-swap means they are now fully inert in the mailbox
+        // pane. Pin the no-op so a future binding can't quietly
+        // re-introduce the old chord.
+        let mut app = App::new();
+        app.dismiss_splash();
+        dispatch(&mut app, key(KeyCode::Tab));
+        dispatch(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.focused_pane, Pane::Mailbox);
+        let initial = app.mailbox_tab;
+
         dispatch(&mut app, key(KeyCode::Char(']')));
         dispatch(&mut app, key(KeyCode::Char('[')));
         assert_eq!(
             app.mailbox_tab, initial,
-            "[/] from non-mailbox panes must not flip the active tab"
+            "`[` / `]` must no longer cycle mailbox tabs (T-124 hard-swap)",
         );
     }
 

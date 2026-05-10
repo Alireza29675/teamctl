@@ -966,9 +966,9 @@ fn mb_row(id: i64, sender: &str, recipient: &str, text: &str) -> MessageRow {
 }
 
 #[test]
-fn bracket_chord_cycles_mailbox_tabs_forward_when_mailbox_focused() {
-    // `]` cycles Inbox → Channel → Wire → Inbox once the mailbox
-    // pane has focus. The forward walker must wrap.
+fn arrow_right_cycles_mailbox_tabs_forward_when_mailbox_focused() {
+    // T-124: `→` cycles Inbox → Channel → Wire → Inbox once the
+    // mailbox pane has focus. The forward walker must wrap.
     let mut h = Harness::new();
     h.app.dismiss_splash();
     // Walk Tab focus to Mailbox.
@@ -977,59 +977,81 @@ fn bracket_chord_cycles_mailbox_tabs_forward_when_mailbox_focused() {
     assert_eq!(h.app.focused_pane, Pane::Mailbox);
     assert_eq!(h.app.mailbox_tab, MailboxTab::Inbox);
 
-    h.dispatch_key(KeyCode::Char(']'));
+    h.dispatch_key(KeyCode::Right);
     assert_eq!(h.app.mailbox_tab, MailboxTab::Channel);
 
-    h.dispatch_key(KeyCode::Char(']'));
+    h.dispatch_key(KeyCode::Right);
     assert_eq!(h.app.mailbox_tab, MailboxTab::Wire);
 
-    h.dispatch_key(KeyCode::Char(']'));
+    h.dispatch_key(KeyCode::Right);
     assert_eq!(
         h.app.mailbox_tab,
         MailboxTab::Inbox,
-        "`]` from Wire wraps to Inbox"
+        "`→` from Wire wraps to Inbox"
     );
 }
 
 #[test]
-fn bracket_chord_cycles_mailbox_tabs_backward_when_mailbox_focused() {
-    // `[` walks the other direction: Inbox → Wire → Channel → Inbox.
+fn arrow_left_cycles_mailbox_tabs_backward_when_mailbox_focused() {
+    // T-124: `←` walks the other direction: Inbox → Wire → Channel → Inbox.
     let mut h = Harness::new();
     h.app.dismiss_splash();
     h.dispatch_key(KeyCode::Tab);
     h.dispatch_key(KeyCode::Tab);
     assert_eq!(h.app.focused_pane, Pane::Mailbox);
 
-    h.dispatch_key(KeyCode::Char('['));
+    h.dispatch_key(KeyCode::Left);
     assert_eq!(h.app.mailbox_tab, MailboxTab::Wire);
 
-    h.dispatch_key(KeyCode::Char('['));
+    h.dispatch_key(KeyCode::Left);
     assert_eq!(h.app.mailbox_tab, MailboxTab::Channel);
 
-    h.dispatch_key(KeyCode::Char('['));
+    h.dispatch_key(KeyCode::Left);
     assert_eq!(
         h.app.mailbox_tab,
         MailboxTab::Inbox,
-        "`[` from Channel wraps back to Inbox"
+        "`←` from Channel wraps back to Inbox"
     );
 }
 
 #[test]
-fn bracket_chord_is_no_op_when_mailbox_not_focused() {
+fn arrow_keys_are_no_op_when_mailbox_not_focused() {
     // Gating on `focused_pane == Mailbox` is load-bearing — without
-    // it, an operator hammering bracket keys while scrolling the
+    // it, an operator hammering arrow keys while scrolling the
     // roster would see surprise tab switches. Pin the no-op.
     let mut h = Harness::new();
     h.app.dismiss_splash();
     assert_eq!(h.app.focused_pane, Pane::Roster);
 
-    h.dispatch_key(KeyCode::Char(']'));
-    h.dispatch_key(KeyCode::Char('['));
+    h.dispatch_key(KeyCode::Right);
+    h.dispatch_key(KeyCode::Left);
 
     assert_eq!(
         h.app.mailbox_tab,
         MailboxTab::Inbox,
-        "bracket chords must not cycle tabs from Roster focus"
+        "←/→ must not cycle tabs from Roster focus"
+    );
+}
+
+#[test]
+fn brackets_no_longer_cycle_mailbox_tabs_after_t124() {
+    // T-124 regression: `[` / `]` were the previous mailbox-tab
+    // walker. Hard-swap means they're fully inert in the mailbox
+    // pane now. Pin the no-op so the prior chord can't get
+    // quietly re-introduced.
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    h.dispatch_key(KeyCode::Tab);
+    h.dispatch_key(KeyCode::Tab);
+    assert_eq!(h.app.focused_pane, Pane::Mailbox);
+    let initial = h.app.mailbox_tab;
+
+    h.dispatch_key(KeyCode::Char(']'));
+    h.dispatch_key(KeyCode::Char('['));
+
+    assert_eq!(
+        h.app.mailbox_tab, initial,
+        "`[` / `]` must no longer cycle mailbox tabs (T-124 hard-swap)",
     );
 }
 
@@ -1044,7 +1066,7 @@ fn tab_into_mailbox_preserves_active_tab() {
     // Walk into Mailbox, advance to Channel, walk back out.
     h.dispatch_key(KeyCode::Tab);
     h.dispatch_key(KeyCode::Tab);
-    h.dispatch_key(KeyCode::Char(']'));
+    h.dispatch_key(KeyCode::Right);
     assert_eq!(h.app.focused_pane, Pane::Mailbox);
     assert_eq!(h.app.mailbox_tab, MailboxTab::Channel);
     h.dispatch_key(KeyCode::Tab); // back to Roster
