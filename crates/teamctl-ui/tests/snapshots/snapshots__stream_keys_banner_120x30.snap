@@ -1,9 +1,9 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-expression: buffer_to_string(&buf)
+expression: rendered
 ---
-┌AGENTS────────────────────┐┌DETAIL────────────────────────────────────────────────────────────────────────────────────┐
-│        (no agents)       ││                    (select an agent on the left to follow its session)                   │
+┌AGENTS────────────────────┐┌DETAIL · writing:manager  [STREAM-KEYS]───────────────────────────────────────────────────┐
+│ *  manager               ││                      (no scrollback yet — agent may be starting up)                      │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
@@ -21,7 +21,7 @@ expression: buffer_to_string(&buf)
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
 │                          ││ Inbox    Channel    Wire                                                                 │
-│                          ││                                     (select an agent)                                    │
+│                          ││                                         (no DMs)                                         │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
@@ -31,4 +31,4 @@ expression: buffer_to_string(&buf)
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
-Tab cycle panes  ·  Ctrl+E stream keys · / filter · w wall · @ send · q quit                         ? help · t tutorial
+● STREAM-KEYS → writing:manager   keystrokes forwarding to tmux pane   ·   Esc to exit

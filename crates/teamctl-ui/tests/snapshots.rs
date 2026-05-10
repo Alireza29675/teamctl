@@ -554,3 +554,37 @@ fn mailbox_pane_renders_wire_tab_with_rows() {
     let buf = render_to_buffer(&app, 120, 30);
     insta::assert_snapshot!("mailbox_wire_with_rows_120x30", buffer_to_string(&buf));
 }
+
+#[test]
+fn stream_keys_mode_renders_banner_and_pane_marker() {
+    // T-108: when stream-mode is active the operator must see two
+    // unambiguous indicators — the full-width statusline banner and
+    // the `[STREAM-KEYS]` tag in the detail pane title. Pin both so
+    // a future statusline / triptych refactor can't silently drop
+    // the affordance the operator relies on to know "I'm typing
+    // into the agent right now."
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    app.cycle_focus(); // Roster → Detail
+    app.enter_stream_keys();
+    assert_eq!(app.stage, Stage::StreamKeys);
+    let buf = render_to_buffer(&app, 120, 30);
+    let rendered = buffer_to_string(&buf);
+    assert!(
+        rendered.contains("STREAM-KEYS → writing:manager"),
+        "statusline banner missing the target id"
+    );
+    assert!(
+        rendered.contains("Esc to exit"),
+        "statusline banner missing the exit hint"
+    );
+    assert!(
+        rendered.contains("[STREAM-KEYS]"),
+        "detail pane title missing the stream-mode tag"
+    );
+    insta::assert_snapshot!("stream_keys_banner_120x30", rendered);
+}

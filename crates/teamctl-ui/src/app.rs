@@ -24,6 +24,7 @@ use crate::approvals::{
 };
 use crate::compose::{CliMessageSender, ComposeTarget, Editor, EditorAction, MessageSender};
 use crate::data::TeamSnapshot;
+use crate::keysender::{encode_key, KeySender, TmuxKeySender};
 use crate::layouts;
 use crate::mailbox::{BrokerMailboxSource, MailboxBuffers, MailboxSource, MailboxTab};
 use crate::pane::{PaneSource, TmuxPaneSource};
@@ -63,6 +64,14 @@ pub enum Stage {
     /// `.team/state/ui-tutorial-completed`); reopenable via `t`
     /// from any non-modal state.
     Tutorial,
+    /// Stream-keys mode (T-108). Activated by `Ctrl+E` while the
+    /// detail pane is focused; every subsequent keystroke (except
+    /// `Esc`, the exit chord) is forwarded to the focused agent's
+    /// tmux pane via `tmux send-keys`. The Triptych keeps rendering
+    /// underneath — the 1s refresh tick still captures whatever the
+    /// agent prints in response — so the operator interacts with
+    /// the agent in real time without leaving the UI.
+    StreamKeys,
 }
 
 /// Splitscreen orientation per detail-pane split (PR-UI-7 lift
@@ -690,6 +699,44 @@ impl App {
             .map(|a| a.tmux_session.as_str())
     }
 
+    /// Tmux session that stream-keys mode should target. Cell 0 of
+    /// the detail-pane split layout is always the focused agent;
+    /// cells 1..N are the entries in `detail_splits`. When the
+    /// operator has focused a non-zero split, route stream-keys to
+    /// that split's agent — that's the cell visually showing as the
+    /// focus ring, so it's the one the operator expects to type into.
+    pub fn stream_target_session(&self) -> Option<String> {
+        if self.detail_splits.is_empty() || self.selected_split == 0 {
+            return self.focused_session().map(|s| s.to_string());
+        }
+        let split_idx = self.selected_split - 1;
+        let agent_id = self.detail_splits.get(split_idx).map(|(id, _)| id)?;
+        self.team
+            .agents
+            .iter()
+            .find(|a| &a.id == agent_id)
+            .map(|a| a.tmux_session.clone())
+    }
+
+    /// Enter stream-keys mode. No-op unless an agent is selected —
+    /// without a target session there's nothing to forward to.
+    /// Caller is responsible for the focused-pane gate (entry chord
+    /// only fires from `focused_pane == Pane::Detail`).
+    pub fn enter_stream_keys(&mut self) {
+        if self.stream_target_session().is_none() {
+            return;
+        }
+        self.previous_stage = self.stage;
+        self.stage = Stage::StreamKeys;
+    }
+
+    /// Exit stream-keys mode and return to whichever stage opened it.
+    /// `Esc` is the only exit chord per the issue's recommendation —
+    /// every other key (including `Ctrl+C`) forwards to the agent.
+    pub fn exit_stream_keys(&mut self) {
+        self.stage = self.previous_stage;
+    }
+
     /// Replace the detail buffer, clipped at the recent-line cap.
     pub fn set_detail_buffer(&mut self, lines: Vec<String>) {
         let len = lines.len();
@@ -770,6 +817,7 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
     let pane_source = TmuxPaneSource;
     let decider = CliApprovalDecider;
     let sender = CliMessageSender;
+    let key_sender = TmuxKeySender;
     // First refresh resolves the team root; only then can we
     // bring up the file-watcher, which keys on `<root>/state/`.
     refresh_with_default_sources(&mut app, &pane_source);
@@ -782,7 +830,14 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
             // between read + write fanout.
             let db_path = app.team.root.join("state/mailbox.db");
             let mailbox_source = BrokerMailboxSource::new(db_path);
-            handle_event(&mut app, event::read()?, &decider, &sender, &mailbox_source);
+            handle_event(
+                &mut app,
+                event::read()?,
+                &decider,
+                &sender,
+                &mailbox_source,
+                &key_sender,
+            );
         }
         if matches!(app.stage, Stage::Splash) && app.splash_started.elapsed() >= SPLASH_AUTO_DISMISS
         {
@@ -836,6 +891,11 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
     match app.stage {
         Stage::Splash => splash::draw(f, app),
         Stage::Triptych => draw_main(f, area, app),
+        // T-108: stream-keys reuses the Triptych render path — the
+        // detail pane carries the visual indicator (border + title +
+        // statusline shift) via the `app.stage == StreamKeys` branch
+        // in those widgets. No separate modal draw.
+        Stage::StreamKeys => draw_main(f, area, app),
         Stage::QuitConfirm => {
             draw_main(f, area, app);
             draw_quit_confirm(f, area);
@@ -1158,12 +1218,13 @@ fn centered_rect(w: u16, h: u16, area: Rect) -> Rect {
     }
 }
 
-pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
+pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: KeySender>(
     app: &mut App,
     ev: Event,
     decider: &D,
     sender: &S,
     mailbox_source: &M,
+    key_sender: &K,
 ) {
     use crossterm::event::KeyModifiers;
     match ev {
@@ -1265,6 +1326,19 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                     if k.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
                     app.close_focused_split()
+                }
+                // T-108: `Ctrl+E` activates stream-keys mode when the
+                // detail pane is focused — every subsequent keystroke
+                // forwards to the agent's tmux pane. Gated on detail
+                // focus so operators in the roster / mailbox don't
+                // get pulled into stream-mode by a stray chord. Both
+                // casings accepted for the CapsLock/Shift+Ctrl case
+                // (same rationale as Ctrl+W/M arms above).
+                KeyCode::Char('e') | KeyCode::Char('E')
+                    if k.modifiers.contains(KeyModifiers::CONTROL)
+                        && app.focused_pane == Pane::Detail =>
+                {
+                    app.enter_stream_keys()
                 }
                 // (chord-prefix follow-ups handled at top of arm
                 // before unguarded letter-arms — see top of
@@ -1400,6 +1474,32 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource>(
                 KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('p') => app.tutorial_back(),
                 _ => app.tutorial_advance(),
             },
+            // T-108 stream-keys mode. Esc is the only chord we
+            // intercept — every other key (including `Ctrl+C`,
+            // `Ctrl+E`, arrow keys, `Enter`) forwards to the agent's
+            // tmux pane. The pass-through behaviour is intentional:
+            // the operator is "effectively attached," and a shell-
+            // user's Ctrl+C should send SIGINT to the agent, not
+            // bail them out of the mode they just entered.
+            Stage::StreamKeys => {
+                if matches!(k.code, KeyCode::Esc) {
+                    app.exit_stream_keys();
+                } else if let Some(session) = app.stream_target_session() {
+                    if let Some(encoded) = encode_key(k) {
+                        // Best-effort: a tmux failure (session
+                        // vanished, target pane gone) is silent in
+                        // v1; the next refresh tick reflects whatever
+                        // the agent's pane actually shows.
+                        let _ = key_sender.send(&session, &encoded);
+                    }
+                } else {
+                    // Target session disappeared mid-stream (agent
+                    // restarted, team reloaded). Drop back to
+                    // Triptych so the operator isn't typing into the
+                    // void with no feedback.
+                    app.exit_stream_keys();
+                }
+            }
         },
         Event::Resize(_, _) => {
             // ratatui redraws on the next loop iteration; nothing to do.
@@ -1417,6 +1517,7 @@ pub fn render_to_buffer(app: &App, width: u16, height: u16) -> Buffer {
     match app.stage {
         Stage::Splash => splash::Splash { app }.render(area, &mut buf),
         Stage::Triptych => render_main(app, area, &mut buf),
+        Stage::StreamKeys => render_main(app, area, &mut buf),
         Stage::QuitConfirm => {
             render_main(app, area, &mut buf);
             render_quit_confirm(area, &mut buf);
@@ -1553,7 +1654,14 @@ mod tests {
     /// Boilerplate-free dispatcher for tests not exercising the
     /// decision / send paths.
     fn dispatch(app: &mut App, ev: Event) {
-        super::handle_event(app, ev, &NoopDecider, &NoopSender, &EmptyMailbox);
+        super::handle_event(
+            app,
+            ev,
+            &NoopDecider,
+            &NoopSender,
+            &EmptyMailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
+        );
     }
 
     fn agent(id: &str, state: AgentState) -> AgentInfo {
@@ -1943,6 +2051,7 @@ mod tests {
             &dec,
             &NoopSender,
             &EmptyMailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
         );
         let calls = dec.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
@@ -1967,6 +2076,7 @@ mod tests {
             &dec,
             &NoopSender,
             &EmptyMailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
         );
         let calls = dec.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
@@ -2002,6 +2112,7 @@ mod tests {
             &dec,
             &NoopSender,
             &EmptyMailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
         );
         let calls = dec.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
@@ -2026,6 +2137,7 @@ mod tests {
             &dec,
             &NoopSender,
             &EmptyMailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
         );
         assert!(
             dec.calls.lock().unwrap().is_empty(),
@@ -2109,6 +2221,7 @@ mod tests {
                 &NoopDecider,
                 &sender,
                 &mailbox,
+                &crate::keysender::test_support::MockKeySender::default(),
             );
         }
         super::handle_event(
@@ -2117,6 +2230,7 @@ mod tests {
             &NoopDecider,
             &sender,
             &mailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
         );
         let calls = sender.dm_calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
@@ -2144,10 +2258,25 @@ mod tests {
                 &NoopDecider,
                 &sender,
                 &mailbox,
+                &crate::keysender::test_support::MockKeySender::default(),
             );
         }
-        super::handle_event(&mut app, key(KeyCode::Esc), &NoopDecider, &sender, &mailbox);
-        super::handle_event(&mut app, key(KeyCode::Esc), &NoopDecider, &sender, &mailbox);
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Esc),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
+        );
+        super::handle_event(
+            &mut app,
+            key(KeyCode::Esc),
+            &NoopDecider,
+            &sender,
+            &mailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
+        );
         assert_eq!(app.stage, Stage::Triptych);
         assert!(sender.dm_calls.lock().unwrap().is_empty());
     }
@@ -2171,6 +2300,7 @@ mod tests {
             &NoopDecider,
             &sender,
             &mailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
         );
         super::handle_event(
             &mut app,
@@ -2178,6 +2308,7 @@ mod tests {
             &NoopDecider,
             &sender,
             &mailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
         );
         assert_eq!(app.stage, Stage::ComposeModal, "modal stays open on err");
         assert!(app
@@ -2426,6 +2557,7 @@ mod tests {
             &NoopDecider,
             &sender,
             &mailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
         );
         super::handle_event(
             &mut app,
@@ -2433,6 +2565,7 @@ mod tests {
             &NoopDecider,
             &sender,
             &mailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
         );
         super::handle_event(
             &mut app,
@@ -2440,6 +2573,7 @@ mod tests {
             &NoopDecider,
             &sender,
             &mailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
         );
         for c in "ship docs".chars() {
             super::handle_event(
@@ -2448,6 +2582,7 @@ mod tests {
                 &NoopDecider,
                 &sender,
                 &mailbox,
+                &crate::keysender::test_support::MockKeySender::default(),
             );
         }
         super::handle_event(
@@ -2456,6 +2591,7 @@ mod tests {
             &NoopDecider,
             &sender,
             &mailbox,
+            &crate::keysender::test_support::MockKeySender::default(),
         );
         let dm_calls = sender.dm_calls.lock().unwrap().clone();
         let bcast_calls = sender.broadcast_calls.lock().unwrap().clone();
@@ -2679,5 +2815,204 @@ mod tests {
             Some(1),
             "non-roster focus ignores arrows"
         );
+    }
+
+    // ---- T-108 stream-keys mode -------------------------------------------
+
+    /// Spin up a Triptych-stage app with one agent selected and the
+    /// detail pane focused — the standard precondition for entering
+    /// stream-keys mode.
+    fn stream_keys_fixture() -> App {
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        app.cycle_focus(); // Roster → Detail
+        assert_eq!(app.focused_pane, Pane::Detail);
+        assert_eq!(app.selected_agent, Some(0));
+        app
+    }
+
+    fn stream_dispatch(
+        app: &mut App,
+        ev: Event,
+        key_sender: &crate::keysender::test_support::MockKeySender,
+    ) {
+        super::handle_event(
+            app,
+            ev,
+            &NoopDecider,
+            &NoopSender,
+            &EmptyMailbox,
+            key_sender,
+        );
+    }
+
+    #[test]
+    fn ctrl_e_enters_stream_keys_when_detail_focused() {
+        use crate::keysender::test_support::MockKeySender;
+        use crossterm::event::KeyModifiers;
+        let mut app = stream_keys_fixture();
+        let ks = MockKeySender::default();
+        stream_dispatch(
+            &mut app,
+            key_with(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &ks,
+        );
+        assert_eq!(app.stage, Stage::StreamKeys);
+        assert!(
+            ks.calls.lock().unwrap().is_empty(),
+            "the activation chord itself never forwards a keystroke"
+        );
+    }
+
+    #[test]
+    fn ctrl_e_no_op_when_detail_not_focused() {
+        // Activation gate: stream-mode never triggers from Roster /
+        // Mailbox focus, so a stray `Ctrl+E` while scrolling the
+        // roster doesn't yank the operator into a modal they didn't
+        // ask for.
+        use crate::keysender::test_support::MockKeySender;
+        use crossterm::event::KeyModifiers;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        assert_eq!(app.focused_pane, Pane::Roster);
+        let ks = MockKeySender::default();
+        stream_dispatch(
+            &mut app,
+            key_with(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &ks,
+        );
+        assert_eq!(app.stage, Stage::Triptych);
+    }
+
+    #[test]
+    fn ctrl_e_no_op_when_no_agent_selected() {
+        // No target session → entering stream-mode would type into
+        // the void. The guard short-circuits.
+        use crate::keysender::test_support::MockKeySender;
+        use crossterm::event::KeyModifiers;
+        let mut app = App::new();
+        app.dismiss_splash();
+        app.cycle_focus(); // Detail
+        assert_eq!(app.selected_agent, None);
+        let ks = MockKeySender::default();
+        stream_dispatch(
+            &mut app,
+            key_with(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &ks,
+        );
+        assert_eq!(app.stage, Stage::Triptych);
+    }
+
+    #[test]
+    fn esc_exits_stream_keys() {
+        use crate::keysender::test_support::MockKeySender;
+        let mut app = stream_keys_fixture();
+        app.enter_stream_keys();
+        assert_eq!(app.stage, Stage::StreamKeys);
+        let ks = MockKeySender::default();
+        stream_dispatch(&mut app, key(KeyCode::Esc), &ks);
+        assert_eq!(app.stage, Stage::Triptych);
+        assert!(
+            ks.calls.lock().unwrap().is_empty(),
+            "Esc is the exit chord — it must not forward as a keystroke"
+        );
+    }
+
+    #[test]
+    fn stream_mode_forwards_printable_chars_to_target_session() {
+        use crate::keysender::test_support::MockKeySender;
+        let mut app = stream_keys_fixture();
+        app.enter_stream_keys();
+        let ks = MockKeySender::default();
+        for c in "hi".chars() {
+            stream_dispatch(&mut app, key(KeyCode::Char(c)), &ks);
+        }
+        let calls = ks.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "one tmux send-keys per keystroke");
+        // Target session = the focused agent's tmux_session (set by
+        // the fixture to `t-p-a`).
+        assert_eq!(calls[0].0, "t-p-a");
+        assert_eq!(calls[0].1.args, vec!["-l".to_string(), "h".to_string()]);
+        assert_eq!(calls[1].1.args, vec!["-l".to_string(), "i".to_string()]);
+    }
+
+    #[test]
+    fn stream_mode_passes_ctrl_c_through_to_agent() {
+        // Issue #108 design point: Ctrl+C is shell-SIGINT semantics,
+        // not a stream-mode escape. Pin the contract so a future
+        // "intercept Ctrl+C as bail" refactor doesn't regress it.
+        use crate::keysender::test_support::MockKeySender;
+        use crossterm::event::KeyModifiers;
+        let mut app = stream_keys_fixture();
+        app.enter_stream_keys();
+        let ks = MockKeySender::default();
+        stream_dispatch(
+            &mut app,
+            key_with(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &ks,
+        );
+        assert_eq!(app.stage, Stage::StreamKeys, "Ctrl+C does NOT exit");
+        let calls = ks.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1.args, vec!["C-c".to_string()]);
+    }
+
+    #[test]
+    fn stream_mode_forwards_enter_and_arrows() {
+        use crate::keysender::test_support::MockKeySender;
+        let mut app = stream_keys_fixture();
+        app.enter_stream_keys();
+        let ks = MockKeySender::default();
+        stream_dispatch(&mut app, key(KeyCode::Enter), &ks);
+        stream_dispatch(&mut app, key(KeyCode::Up), &ks);
+        let calls = ks.calls.lock().unwrap();
+        assert_eq!(calls[0].1.args, vec!["Enter".to_string()]);
+        assert_eq!(calls[1].1.args, vec!["Up".to_string()]);
+    }
+
+    #[test]
+    fn stream_target_session_uses_focused_split_when_present() {
+        // Splits change which agent the operator is "looking at."
+        // The selected_split index drives the focus ring in
+        // render_detail_splits; stream_target_session must mirror
+        // that so typing lands in the right pane.
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![
+            agent("p:a", AgentState::Running),
+            agent("p:b", AgentState::Running),
+        ]));
+        app.dismiss_splash();
+        app.cycle_focus(); // Detail
+        app.selected_agent = Some(0);
+        // Manually push a split for `p:b` and focus it.
+        app.detail_splits
+            .push(("p:b".into(), crate::app::SplitOrientation::Vertical));
+        app.selected_split = 1; // cell index 0 = focused agent, 1 = first split
+        let target = app.stream_target_session();
+        assert_eq!(
+            target.as_deref(),
+            Some("t-p-b"),
+            "selected split's agent drives the target"
+        );
+    }
+
+    #[test]
+    fn stream_mode_drops_back_when_target_session_disappears() {
+        // If the team gets reloaded mid-stream and the focused
+        // agent's index points off the end, the next keystroke
+        // can't resolve a session. Drop back to Triptych so the
+        // operator isn't silently typing into the void.
+        use crate::keysender::test_support::MockKeySender;
+        let mut app = stream_keys_fixture();
+        app.enter_stream_keys();
+        // Simulate the agent disappearing.
+        app.selected_agent = None;
+        app.team.agents.clear();
+        let ks = MockKeySender::default();
+        stream_dispatch(&mut app, key(KeyCode::Char('a')), &ks);
+        assert_eq!(app.stage, Stage::Triptych);
+        assert!(ks.calls.lock().unwrap().is_empty());
     }
 }

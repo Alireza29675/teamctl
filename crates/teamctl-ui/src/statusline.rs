@@ -23,6 +23,30 @@ pub struct Statusline<'a> {
 impl Widget for Statusline<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let muted = Style::default().fg(self.app.capabilities.muted());
+        // T-108 stream-keys: when stream-mode is active the
+        // statusline becomes the load-bearing visual indicator —
+        // bright reversed banner across the whole row, "STREAM-KEYS
+        // → <agent>  ·  Esc to exit". The bright reversed style
+        // matches the approvals stripe affordance so the operator
+        // reads it as a sticky modal warning even in monochrome
+        // terminals where colour alone wouldn't carry.
+        if matches!(self.app.stage, crate::app::Stage::StreamKeys) {
+            let target = self
+                .app
+                .selected_agent_id()
+                .unwrap_or_else(|| "<no agent>".into());
+            let banner = format!(
+                "● STREAM-KEYS → {target}   keystrokes forwarding to tmux pane   ·   Esc to exit"
+            );
+            let style = Style::default()
+                .fg(self.app.capabilities.accent())
+                .add_modifier(Modifier::REVERSED | Modifier::BOLD);
+            Paragraph::new(banner)
+                .style(style)
+                .alignment(Alignment::Left)
+                .render(area, buf);
+            return;
+        }
         // T-074 bug 7: the Tab pane-cycle chord is the load-bearing
         // navigation primitive — operators who don't discover it get
         // stranded in whichever pane Tab dropped them into. Pin it
@@ -39,7 +63,10 @@ impl Widget for Statusline<'_> {
 
         let contextual = match self.app.focused_pane {
             Pane::Roster => "/ search · ⏎ open · @ send · q quit",
-            Pane::Detail => "/ filter · w wall · @ send · esc back · q quit",
+            // T-108: surface the Ctrl+E entry chord when detail is
+            // focused so stream-keys is discoverable without
+            // opening the help overlay.
+            Pane::Detail => "Ctrl+E stream keys · / filter · w wall · @ send · q quit",
             Pane::Mailbox => "[ / ] tabs · ⏎ open · ! broadcast · q quit",
         };
 

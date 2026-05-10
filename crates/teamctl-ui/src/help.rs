@@ -103,6 +103,17 @@ pub const COMPOSE: &[Binding] = &[
     },
 ];
 
+pub const STREAM_KEYS: &[Binding] = &[
+    Binding {
+        chord: "Ctrl+E",
+        description: "stream keys to focused agent's tmux pane (when detail focused)",
+    },
+    Binding {
+        chord: "Esc",
+        description: "exit stream-keys mode",
+    },
+];
+
 pub const APPROVALS: &[Binding] = &[
     Binding {
         chord: "a",
@@ -155,6 +166,10 @@ pub const ALL_GROUPS: &[BindingGroup] = &[
         bindings: COMPOSE,
     },
     BindingGroup {
+        title: "Stream keys",
+        bindings: STREAM_KEYS,
+    },
+    BindingGroup {
         title: "Approvals",
         bindings: APPROVALS,
     },
@@ -169,8 +184,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_covers_five_groups() {
-        assert_eq!(ALL_GROUPS.len(), 5);
+    fn registry_covers_six_groups() {
+        // T-108 added a Stream-keys group between Compose and
+        // Approvals. Update this count when groups change.
+        assert_eq!(ALL_GROUPS.len(), 6);
     }
 
     #[test]
@@ -182,6 +199,7 @@ mod tests {
         for must_have in [
             "Tab",
             "Ctrl+W",
+            "Ctrl+E",
             "@",
             "!",
             "a",
