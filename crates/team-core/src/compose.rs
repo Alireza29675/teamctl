@@ -33,6 +33,70 @@ pub struct Global {
     /// Relative paths from the compose root.
     #[serde(default)]
     pub projects: Vec<ProjectRef>,
+
+    /// T-32 file attachments. Optional — omit the entire block to get
+    /// default behavior (enabled, 5MB cap, `$HOME` allowed root, no
+    /// scanner, no audit log). Each field is also optional.
+    #[serde(default)]
+    pub attachments: Attachments,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Attachments {
+    #[serde(default = "default_attachments_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_attachments_max_size_bytes")]
+    pub max_size_bytes: u64,
+    /// Roots the attachment path must be a descendant of after
+    /// canonicalization. Default is the operator's `$HOME` (resolved
+    /// at policy-check time, not at deserialize time, so a snapshot
+    /// taken on machine A still resolves correctly on machine B).
+    #[serde(default = "default_attachments_allowed_roots")]
+    pub allowed_roots: Vec<String>,
+    #[serde(default)]
+    pub scanner: Option<AttachmentScanner>,
+    /// When set, every attempt is appended to this file (path,
+    /// sha256, size, accept/reject, scanner stderr). Relative paths
+    /// resolve against the compose root.
+    #[serde(default)]
+    pub audit_log_path: Option<PathBuf>,
+}
+
+impl Default for Attachments {
+    fn default() -> Self {
+        Self {
+            enabled: default_attachments_enabled(),
+            max_size_bytes: default_attachments_max_size_bytes(),
+            allowed_roots: default_attachments_allowed_roots(),
+            scanner: None,
+            audit_log_path: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AttachmentScanner {
+    /// Operator-provided executable. Spawned per attempt with the
+    /// resolved path as a single argument; non-zero exit → reject.
+    pub command: String,
+    #[serde(default = "default_scanner_timeout_seconds")]
+    pub timeout_seconds: u64,
+}
+
+fn default_attachments_enabled() -> bool {
+    true
+}
+
+fn default_attachments_max_size_bytes() -> u64 {
+    5 * 1024 * 1024
+}
+
+fn default_attachments_allowed_roots() -> Vec<String> {
+    vec!["$HOME".to_string()]
+}
+
+fn default_scanner_timeout_seconds() -> u64 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

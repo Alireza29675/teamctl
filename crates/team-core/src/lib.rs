@@ -6,6 +6,7 @@
 //! (with a portable `TmuxSupervisor` back-end), and the SQLite mailbox
 //! schema used by `team-mcp`.
 
+pub mod attachments;
 pub mod compose;
 pub mod mailbox;
 pub mod render;
