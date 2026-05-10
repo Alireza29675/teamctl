@@ -639,8 +639,10 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
                 InlineKeyboardButton::callback("Deny", format!("deny:{id}")),
             ]]);
             let text = format!(
-                "🔐 #{id}  {agent}\naction: {action}\n{}",
-                render_html(&summary)
+                "🔐 #{id}  {}\naction: {}\n{}",
+                html_escape_str(&agent),
+                html_escape_str(&action),
+                render_html(&summary),
             );
             let send_ok = bot
                 .send_message(chat, text)
@@ -946,10 +948,11 @@ fn parse_reaction_payload(payload: &str) -> Option<ReactionPayload> {
 
 async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
     let kind = classify_kind(row.kind.as_deref());
-    // Attribution is plain prose with a single em-dash — no `<>&` to escape,
-    // but we still concat it AFTER the rendered body so any HTML tags emitted
-    // for the agent text close before this line.
-    let attribution = format!("\n\n— replied by {}", row.sender);
+    // T-140: html-escape `row.sender` so the renderer doesn't lean on
+    // today's agent-id schema (`[a-z0-9_-]:[a-z0-9_-]`). The em-dash and
+    // literal "replied by" carry no `<>&`, so escaping the whole format
+    // result would be redundant — escape just the interpolated field.
+    let attribution = format!("\n\n— replied by {}", html_escape_str(&row.sender));
     let reply = reply_parameters_for(row.telegram_msg_id);
     match kind {
         DispatchKind::Text => {
@@ -1545,11 +1548,13 @@ fn render_html(s: &str) -> String {
 
 /// Return `Some(lang)` (possibly empty) if `line` is a fence marker
 /// (`` ``` `` optionally followed by a language tag). Leading whitespace
-/// is permitted; trailing whitespace around the language tag is trimmed.
+/// is permitted; the language tag is the first whitespace-separated
+/// token after the fence — anything past that (e.g. a trailing comment)
+/// is dropped so we don't emit `class="language-rust // comment"` (T-140).
 fn fence_marker(line: &str) -> Option<String> {
     let trimmed = line.trim_start();
     let after = trimmed.strip_prefix("```")?;
-    Some(after.trim().to_string())
+    Some(after.split_whitespace().next().unwrap_or("").to_string())
 }
 
 fn render_normal_line(line: &str, out: &mut String) {
@@ -2246,6 +2251,55 @@ mod tests {
         // ``` becomes a `<code>` opener with no close, which itself
         // falls through → literal. Result is the input verbatim.
         assert_eq!(render_html(input), "```\nstray");
+    }
+
+    #[test]
+    fn html_escape_str_escapes_the_three_html_specials_only() {
+        // Pin the exact escape table — T-140 leans on this for the HITL
+        // approval card (`agent`/`action`), the `forward_row`
+        // attribution suffix (`row.sender`), and the fence-marker
+        // language tag. Quote chars are intentionally NOT escaped
+        // because they only matter inside attributes, and the only
+        // attribute we emit (`class="language-…"`) substitutes a tag
+        // that's already been through this escape.
+        assert_eq!(
+            html_escape_str("<channel> & friends"),
+            "&lt;channel&gt; &amp; friends",
+        );
+        assert_eq!(
+            html_escape_str("safe-text_with.no.specials"),
+            "safe-text_with.no.specials",
+        );
+        // Quotes pass through verbatim — DiD relies on this NOT being
+        // escaped so the renderer doesn't double-encode operator-typed
+        // quotes inside otherwise-plain agent text.
+        assert_eq!(html_escape_str("she said \"hi\""), "she said \"hi\"");
+    }
+
+    #[test]
+    fn fence_marker_takes_only_the_first_whitespace_token_as_lang() {
+        // T-140: a fence like ```` ```rust // example ```` previously
+        // produced `class="language-rust // example"`. Tighten to the
+        // first whitespace-separated token so the class attribute stays
+        // clean for syntax highlighters (and so a trailing comment
+        // doesn't bleed into the rendered HTML).
+        assert_eq!(fence_marker("```").as_deref(), Some(""));
+        assert_eq!(fence_marker("```rust").as_deref(), Some("rust"));
+        assert_eq!(fence_marker("```rust // example").as_deref(), Some("rust"));
+        assert_eq!(
+            fence_marker("    ```python   extra junk").as_deref(),
+            Some("python"),
+        );
+        assert_eq!(fence_marker("not a fence").as_deref(), None);
+    }
+
+    #[test]
+    fn render_html_fenced_block_strips_trailing_lang_garbage() {
+        // T-140 round-trip: a fence with `lang + comment` reaches the
+        // operator with a clean `class="language-lang"` attribute.
+        let input = "```rust // example\nfn main() {}\n```";
+        let expected = "<pre><code class=\"language-rust\">fn main() {}</code></pre>";
+        assert_eq!(render_html(input), expected);
     }
 
     #[test]
