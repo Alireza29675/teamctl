@@ -174,6 +174,12 @@ fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> Stri
                     // from `teamctl bot up`; this keeps the two MCP-side
                     // and bot-side resolvers in sync.
                     "--tmux-prefix", compose.global.supervisor.tmux_prefix.clone(),
+                    // T-32b: compose root used by `read_attachment`
+                    // for `attachments:` policy + tempfile staging.
+                    // Always passed so the per-agent team-mcp can
+                    // serve attachment reads; the staging dir is
+                    // computed under this root.
+                    "--compose-root", compose.root.display().to_string(),
                 ],
                 "env": {}
             }

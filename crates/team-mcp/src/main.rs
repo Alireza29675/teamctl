@@ -55,6 +55,15 @@ struct Cli {
     /// stock team.
     #[arg(long, env = "TEAMCTL_TMUX_PREFIX", default_value = "t-")]
     tmux_prefix: String,
+
+    /// T-32b: compose root used to load `attachments:` config and
+    /// stage tempfiles under `<root>/state/attachments-staging/`.
+    /// Populated by `team-core::render` when an agent's MCP config
+    /// is rendered. When unset (hand-launched servers, older
+    /// renderer), the `read_attachment` tool returns a "disabled"-
+    /// style reject so the agent never silently sees raw bytes.
+    #[arg(long, env = "TEAMCTL_COMPOSE_ROOT")]
+    compose_root: Option<PathBuf>,
 }
 
 /// Poll cadence for the channel watcher. SQLite SELECT against a WAL-mode
@@ -74,7 +83,43 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let store = store::Store::open(&cli.mailbox)?;
-    let ctx = tools::Ctx::new(cli.agent_id.clone(), store, cli.tmux_prefix.clone());
+    let mut ctx = tools::Ctx::new(cli.agent_id.clone(), store, cli.tmux_prefix.clone());
+
+    // T-32b: load attachment policy from compose, build the scanner
+    // wrapper if configured, sweep stale tempfiles. All best-effort:
+    // a missing/unparseable compose drops the team-mcp into the
+    // "attachments unavailable" mode rather than failing boot, so
+    // the rest of the MCP surface remains live.
+    if let Some(compose_root) = cli.compose_root.as_ref() {
+        match team_core::compose::Compose::load(compose_root) {
+            Ok(compose) => {
+                let cfg = compose.global.attachments.clone();
+                let scanner = cfg
+                    .scanner
+                    .as_ref()
+                    .map(team_core::attachments::RealScanner::for_spec);
+                let dir = team_core::attachments::staging_dir(compose_root);
+                let ttl = std::time::Duration::from_secs(cfg.tempfile_ttl_seconds);
+                match team_core::attachments::sweep_expired(&dir, ttl) {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!(reaped = n, "attachments staging sweep"),
+                    Err(e) => tracing::warn!(error = %e, "attachments staging sweep failed"),
+                }
+                ctx = ctx.with_attachments(tools::AttachmentsCtx {
+                    cfg,
+                    compose_root: compose_root.clone(),
+                    scanner,
+                });
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    compose_root = %compose_root.display(),
+                    "attachment config: compose load failed; read_attachment will return disabled",
+                );
+            }
+        }
+    }
 
     tracing::info!(
         agent_id = %cli.agent_id,
