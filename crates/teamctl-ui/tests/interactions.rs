@@ -54,6 +54,7 @@ use teamctl_ui::approvals::test_support::MockApprovalDecider;
 use teamctl_ui::approvals::{Approval, Decision};
 use teamctl_ui::compose::test_support::MockMessageSender;
 use teamctl_ui::data::{AgentInfo, TeamSnapshot};
+use teamctl_ui::keysender::test_support::MockKeySender;
 use teamctl_ui::mailbox::test_support::MockMailboxSource;
 use teamctl_ui::triptych::{MainLayout, Pane};
 
@@ -71,6 +72,7 @@ pub struct Harness {
     pub sender: MockMessageSender,
     pub decider: MockApprovalDecider,
     pub mailbox: MockMailboxSource,
+    pub key_sender: MockKeySender,
 }
 
 impl Harness {
@@ -84,6 +86,7 @@ impl Harness {
             sender: MockMessageSender::default(),
             decider: MockApprovalDecider::default(),
             mailbox: MockMailboxSource::default(),
+            key_sender: MockKeySender::default(),
         }
     }
 
@@ -108,6 +111,7 @@ impl Harness {
             &self.decider,
             &self.sender,
             &self.mailbox,
+            &self.key_sender,
         );
     }
 }

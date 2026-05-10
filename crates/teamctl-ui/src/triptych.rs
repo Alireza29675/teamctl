@@ -197,15 +197,26 @@ fn agent_line<'a>(info: &'a AgentInfo, selected: bool, ascii: bool, app: &App) -
 
 fn render_detail(buf: &mut Buffer, area: Rect, app: &App) {
     let focused_pane = app.focused_pane == Pane::Detail;
+    // T-108: when stream-mode is active, mark the border title with a
+    // bright `[STREAM-KEYS]` tag so the pane the operator's typing
+    // into is unambiguous even at a glance away from the statusline.
+    let stream = matches!(app.stage, crate::app::Stage::StreamKeys);
     let title = match app
         .selected_agent
         .and_then(|i| app.team.agents.get(i))
         .map(|a| a.id.as_str())
     {
+        Some(id) if stream => format!("DETAIL · {id}  [STREAM-KEYS]"),
         Some(id) => format!("DETAIL · {id}"),
+        None if stream => "DETAIL  [STREAM-KEYS]".to_string(),
         None => "DETAIL".to_string(),
     };
-    let outer_block = pane_block(&title, focused_pane, app);
+    // While stream-mode is active, force the focus-ring style on the
+    // detail pane regardless of `focused_pane`. Pane focus and stream-
+    // mode are aligned in practice (entry is gated on detail focus),
+    // but a future refactor that lets focus drift mid-mode shouldn't
+    // visually downgrade the active stream pane.
+    let outer_block = pane_block(&title, focused_pane || stream, app);
     let inner = outer_block.inner(area);
     outer_block.render(area, buf);
 
