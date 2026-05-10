@@ -47,6 +47,24 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   form is `bash -c "$(curl -fsSL https://teamctl.run/install)"`. No
   behavior change for non-Claude-Code users.
 
+### Fixed
+
+- **`agent-wrapper.sh` no longer strands agents at Claude Code's
+  one-shot dialogs** (T-094, T-107). The auto-confirm watcher in
+  the wrapper now matches the bypass-permissions warning (shown on
+  first launch under `--dangerously-skip-permissions` when the
+  acceptance marker isn't on disk — fresh `$HOME`, fresh user, new
+  VM) and the usage-limit prompt (`What do you want to do? · 1.
+  Stop and wait for limit to reset · 2. Switch to extra usage · 3.
+  Upgrade your plan`) in addition to the existing
+  `Loading development channels` dialog. Default option is taken
+  in each case (Enter); for the limit prompt this means the agent
+  waits until the window resets and resumes naturally. The watcher
+  now runs for the full lifetime of the runtime instead of a
+  60-second boot window, since the limit prompt can fire at any
+  point during a session. Thanks to Hamed Fathi for surfacing
+  the bypass-permissions deadlock.
+
 ### Changed
 
 - **`teamctl ui` Triptych default layout reshaped + Roster column

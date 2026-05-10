@@ -308,3 +308,27 @@ fn source_dotenv_into_process(root: &std::path::Path) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DEFAULT_WRAPPER;
+
+    /// The wrapper's `auto_confirm_known_dialogs` watcher relies on a
+    /// fixed set of dialog-header substrings. A silent edit that drops
+    /// one of them would re-strand agents at boot or mid-shift, so
+    /// pin them here.
+    #[test]
+    fn wrapper_auto_confirm_patterns_present() {
+        for marker in [
+            "Loading development channels",
+            "Bypass Permissions mode",
+            "Stop and wait for limit to reset",
+            "auto_confirm_known_dialogs",
+        ] {
+            assert!(
+                DEFAULT_WRAPPER.contains(marker),
+                "DEFAULT_WRAPPER missing marker: {marker}",
+            );
+        }
+    }
+}
