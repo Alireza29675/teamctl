@@ -32,6 +32,10 @@ A sub-agent is what you reach for when you need a context bubble — work that h
 
 A teamctl agent is what you reach for when work needs to *keep going* — when there's a thing with state and history that someone needs to own across days, weeks, restarts. The harness can't hold that on its own; the moment the conversation ends, the context is gone.
 
+*"Can't you just orchestrate sub-agents and skills cleverly enough to feel like a team?"* You can get partway. But each persistent identity you simulate that way — a "researcher" the harness re-instantiates with the same prompt every time, a long-running planner you keep loaded — runs into the same wall: the harness wasn't designed to hold long-lived identities. The moment you grow past three or four of them, the operational cost (saving state, restoring state, naming them, routing between them, introducing new tools, defining their relationships) starts to look a lot like reinventing this tool.
+
+teamctl doesn't replace your sub-agent workflows — it sits a layer above them. Each teamctl agent is a real Claude Code (or Codex, or Gemini) session, free to fire off its own sub-agents for parallel work the same way you already do. What teamctl adds is the *durable identity* the harness can't keep on its own: a name, a role, accrued memory, a place in the org chart.
+
 Here's the consequence: **persistent agents are scarce. Spend them on what earns persistence** — domain ownership — not on work that sub-agents already handle. Function-cut wastes persistence. A "QA agent" or a "code-review agent" is doing work a sub-agent is already perfectly suited for; persistence buys you nothing.
 
 The gateway question matters because most reflexes about "AI agents" point in the function-cut direction. The rest of this page is what we've found pragmatic for going the other way.
@@ -47,8 +51,6 @@ Beyond the sub-agent comparison above, here's how teamctl maps in the broader ca
 [ Claude Code, Gemini CLI, Codex ] ← harness manages LLM calls + tools
 [ LLMs ]                           ← the model itself
 ```
-
-**Not an autonomous platform that runs without you.** Human-in-the-loop is built in. Managers pause on what matters; Telegram approvals exist by design. teamctl is a power tool you stay close to, not a pipeline you walk away from.
 
 **Not a chat client.** Telegram is one interface adapter. The mailbox is durable async — agents talk to each other and to you through it, but it isn't realtime chat. The shape underneath is closer to email than to Slack.
 
@@ -100,7 +102,9 @@ Both gates required. Skipping either lands you in territory sub-agents already c
 
 Suppose you're shipping a SaaS. The obvious move is one PM, one QA, one engineer, one designer. Don't.
 
-Those are functions. The domains in your work are *auth*, *billing*, *dashboards*, the *docs site*. Give the auth domain an owner. Let it do its own QA. The agent owning auth has a state — sessions, tokens, the user model, the OAuth provider quirks — that compounds. The agent owning the docs site has a state — cookbook coverage, broken links, version drift, examples that need re-running on each release — that compounds. Functional roles don't have that kind of state. They have tasks.
+Those are functions. The domains in your work are *auth*, *billing*, *dashboards*, the *docs site*. Give each domain an owner — and put a vision agent on top who holds the roadmap, breaks scope into work, and assigns across domains. You talk to the vision agent; it talks to the domain owners; each domain owner does its own QA, writes its own docs, ships its own code. That's the `reports_to` pattern: a manager who holds the vision, workers who own domains. Talk to the manager, and enjoy the ride.
+
+The agent owning auth has a state — sessions, tokens, the user model, the OAuth provider quirks — that compounds. The agent owning the docs site has a state — cookbook coverage, broken links, version drift, examples that need re-running on each release — that compounds. Functional roles don't have that kind of state. They have tasks.
 
 The methodology generalises; the domain names change. Building an OSS tool? Candidate domains are the binary, the docs, package integrations, the community. Running a content site? Posts, the publishing pipeline, SEO, analytics. The cut stays the same — find the things with state, give each one an owner.
 
