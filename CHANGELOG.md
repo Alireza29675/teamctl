@@ -6,6 +6,18 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ### Added
 
+- **Daily update-availability nudge on `teamctl status` and
+  `teamctl up`** (T-129). When a newer release is published on
+  GitHub, both commands surface a single line on stderr:
+  `update available: <current> → <latest> · run \`teamctl update\``.
+  The check hits the GitHub releases API at most once per day per
+  host — results cache to `state/update-check.json` keyed on local
+  date plus the running binary's version, so a fresh `teamctl
+  update` invalidates the cache and the banner disappears
+  immediately rather than waiting for tomorrow. Network failures,
+  API rate-limits, parse errors, and IO errors are all silent so
+  the banner can't break a script piping `teamctl status`.
+
 - **`role_prompt` accepts a list of paths** (T-103). The compose
   schema's `role_prompt` field now accepts either a single path
   (current behavior, unchanged) or a list of paths concatenated in

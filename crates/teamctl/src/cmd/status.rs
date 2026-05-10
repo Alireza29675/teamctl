@@ -5,6 +5,7 @@ use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
 pub fn run(root: &Path) -> Result<()> {
     let compose = super::load(root)?;
+    super::update_check::maybe_print_banner(&compose.root);
     let sup = TmuxSupervisor;
     let depth = inbox_depths(&compose)?;
 
