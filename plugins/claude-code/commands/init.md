@@ -109,12 +109,19 @@ For candidates that survive sharpening and stress tests, confirm both gates expl
 - **Time management.** Does the work have its own rhythm? Will the agent decide when to act, not just what to do when called?
 - **Persistent memory.** Will context accrue — decisions today informing decisions next month?
 
-**Gate (b) — at least one situational trigger.** Confirm at least one of:
+**Gate (b) — at least one situational trigger.** Two parallel families. The user only needs one trigger total, but the families are categorically different — keep them separate.
+
+*Work-shape triggers — about the work itself (apply to any candidate):*
 
 - **Domain separation** (state, history, decisions that compound)
 - **Focus separation** (continuous attention, not a fired-off task)
-- **Multiple opinions** (you want pushback from a peer with their own perspective)
+
+*Team-shape triggers — about a team of persistent agents (only meaningful when the user has 2+ candidates):*
+
+- **Multiple opinions** (pushback from a peer with their own perspective and memory)
 - **Synergy** (agents riff and improve each other's output over time)
+
+If the user has surfaced only one candidate so far, **skip the team-shape triggers** — they're cross-agent properties, nonsensical for a one-agent team. The work-shape triggers alone are enough to validate a single-candidate gate.
 
 If both gates pass, the candidate earns a persistent agent. If either gate fails, gently surface that to the user — "that one feels more sub-agent-shaped, let's set it aside" — and continue with the remaining candidates.
 
@@ -152,7 +159,7 @@ If the user says yes, surface the link: [docs/src/content/docs/concepts/teams.md
 
 If the user names things but every candidate fails the gates (most often because the candidates are tasks, not domains), the honest surface is verbatim:
 
-> The things you named are real, but they read more like tasks than domains. Tasks are sub-agent territory in Claude Code — they're already handled, no persistence needed. Want to keep going and see if a domain surfaces, or pause here and read the docs page first?
+> The things you named are real, but they read more like tasks than domains. Tasks are sub-agent territory — they're already handled by the runtime, no persistence needed. Want to keep going and see if a domain surfaces, or pause here and read the docs page first?
 
 Offer the docs link as an exit. If the user wants to keep going, return to **2a** with the second primary question (re-explanation cost) — different angle, different surface area.
 
