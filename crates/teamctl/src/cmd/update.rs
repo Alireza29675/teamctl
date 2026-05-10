@@ -14,10 +14,16 @@ use std::path::Path;
 use std::process::{Command, ExitStatus};
 
 use anyhow::{anyhow, bail, Context, Result};
+use serde_json::Value;
 
 const INSTALL_URL: &str = "https://teamctl.run/install";
 const RELEASES_API: &str = "https://api.github.com/repos/Alireza29675/teamctl/releases/latest";
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// T-146: Claude Code plugin id `teamctl@teamctl` (marketplace-qualified).
+/// Hardcoded — the plugin lives at a fixed marketplace path the README
+/// already documents; v1 doesn't grow a config knob for this.
+const PLUGIN_ID: &str = "teamctl@teamctl";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallMethod {
@@ -66,6 +72,13 @@ pub fn run(method_override: Option<String>, check_only: bool, yes: bool) -> Resu
     match cmp {
         VersionOrder::Equal => {
             println!("✓ already on the latest version ({latest}).");
+            // T-146: even a no-op binary update keeps the plugin paired
+            // with the binary — flip a marketplace-side bump in the same
+            // command. `--check` skips because it is the version-probe
+            // mode, not an update path.
+            if !check_only {
+                try_update_claude_plugin(&RealClaudeRunner);
+            }
             return Ok(());
         }
         VersionOrder::Newer => {
@@ -73,6 +86,9 @@ pub fn run(method_override: Option<String>, check_only: bool, yes: bool) -> Resu
                 "Local version {CURRENT_VERSION} is ahead of the latest published \
                  release ({latest}) — nothing to update."
             );
+            // Local-ahead is a dev-machine state, not a successful
+            // update; skip the plugin step to avoid surprising a
+            // contributor running an unreleased build.
             return Ok(());
         }
         VersionOrder::Older => {
@@ -94,6 +110,7 @@ pub fn run(method_override: Option<String>, check_only: bool, yes: bool) -> Resu
 
     plan.execute()?;
     println!("✓ update complete. Run `teamctl --version` to confirm.");
+    try_update_claude_plugin(&RealClaudeRunner);
     Ok(())
 }
 
@@ -319,6 +336,121 @@ fn confirm(msg: &str, default_yes: bool) -> Result<bool> {
     Ok(matches!(raw.as_str(), "y" | "yes"))
 }
 
+// ── Claude Code plugin sync (T-146) ────────────────────────────────
+
+/// External-`claude` abstraction. Production impl shells out via
+/// `Command::new("claude")`; tests inject a mock that returns canned
+/// stdout without spawning a subprocess. Two methods so the
+/// PATH-probe stays cheap (no spawn) and the JSON-list/update calls
+/// share a single shape.
+trait ClaudeRunner {
+    /// `true` when `claude` is on PATH. Lets the post-update hook
+    /// short-circuit silently for users who haven't installed Claude
+    /// Code — they're not on the recommended path; no warning needed.
+    fn is_claude_on_path(&self) -> bool;
+
+    /// Run `claude <args...>`. Returns `Ok(stdout)` on exit 0, `Err`
+    /// on spawn-failure or non-zero exit. Note: `claude plugin update`
+    /// can print failures to stdout while still exiting 0 — callers
+    /// must inspect stdout for the `✘` glyph or "Failed to update"
+    /// substring.
+    fn run(&self, args: &[&str]) -> Result<String>;
+}
+
+struct RealClaudeRunner;
+
+impl ClaudeRunner for RealClaudeRunner {
+    fn is_claude_on_path(&self) -> bool {
+        which("claude").is_some()
+    }
+
+    fn run(&self, args: &[&str]) -> Result<String> {
+        let out = Command::new("claude")
+            .args(args)
+            .output()
+            .with_context(|| format!("run `claude {}`", args.join(" ")))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            bail!(
+                "claude {} exited with status {} ({})",
+                args.join(" "),
+                out.status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "(killed by signal)".into()),
+                stderr.trim(),
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+}
+
+/// Try to update the teamctl Claude Code plugin after a successful
+/// binary update. Skip-silent when `claude` is not on PATH or the
+/// plugin isn't installed (recommended-path opt-out shapes — no
+/// warning). On a real plugin-update failure, print a quiet one-liner
+/// with the manual-fix hint and return — the binary update is never
+/// rolled back, per the ticket's explicit contract.
+fn try_update_claude_plugin(runner: &dyn ClaudeRunner) {
+    if !runner.is_claude_on_path() {
+        return;
+    }
+    let listed = match runner.run(&["plugin", "list", "--json"]) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    if !plugin_installed(&listed, PLUGIN_ID) {
+        return;
+    }
+    match runner.run(&["plugin", "update", PLUGIN_ID]) {
+        Ok(stdout) => println!("{}", summarize_plugin_update(&stdout, PLUGIN_ID)),
+        Err(e) => println!(
+            "! claude plugin update failed: {e} — run `claude plugin update {PLUGIN_ID}` manually."
+        ),
+    }
+}
+
+/// Returns `true` when `id` appears as the `id` field of any object in
+/// the JSON array `claude plugin list --json` produces. Tolerant of
+/// unparseable JSON — returns `false` rather than erroring so the
+/// post-update hook stays silent on malformed output (operator's
+/// claude version may have a different output shape we don't yet
+/// know about).
+fn plugin_installed(list_json: &str, id: &str) -> bool {
+    let v: Value = match serde_json::from_str(list_json) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    v.as_array()
+        .map(|arr| {
+            arr.iter()
+                .any(|p| p.get("id").and_then(|s| s.as_str()) == Some(id))
+        })
+        .unwrap_or(false)
+}
+
+/// Convert the multi-line stdout of `claude plugin update` into a
+/// single line in teamctl-style. Three shapes claude can print:
+/// - `✔ teamctl is already at the latest version (0.1.0).` — no-op.
+/// - `✔ Updated teamctl to <ver>.` (or similar) — real update.
+/// - `✘ Failed to update plugin "<id>": <reason>` — failure (claude
+///   exits 0 in this case, so the glyph is the only signal).
+fn summarize_plugin_update(stdout: &str, id: &str) -> String {
+    let body = stdout.trim();
+    if body.contains('✘') || body.contains("Failed to update") {
+        let reason = body
+            .lines()
+            .find(|l| l.contains('✘') || l.contains("Failed to update"))
+            .unwrap_or(body)
+            .trim();
+        return format!("! {reason} — run `claude plugin update {id}` manually.");
+    }
+    if body.contains("already at the latest version") {
+        return format!("✓ claude plugin {id} already current.");
+    }
+    format!("✓ claude plugin {id} updated.")
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -433,5 +565,166 @@ mod tests {
         assert_eq!(compare_versions("1.0.0", "0.99.99"), VersionOrder::Newer);
         // Pre-release suffix is stripped → equal to its base version.
         assert_eq!(compare_versions("0.6.0-rc.1", "0.6.0"), VersionOrder::Equal);
+    }
+
+    // ── T-146 plugin sync ─────────────────────────────────────────
+
+    use std::cell::RefCell;
+
+    /// Test mock — records every `run()` arg vector and returns canned
+    /// outputs in order. Lets each test pin both the call sequence and
+    /// what was returned for it without spawning a real `claude`.
+    struct MockRunner {
+        on_path: bool,
+        calls: RefCell<Vec<Vec<String>>>,
+        responses: RefCell<Vec<Result<String>>>,
+    }
+
+    impl MockRunner {
+        fn new(on_path: bool, responses: Vec<Result<String>>) -> Self {
+            Self {
+                on_path,
+                calls: RefCell::new(Vec::new()),
+                responses: RefCell::new(responses),
+            }
+        }
+        fn calls(&self) -> Vec<Vec<String>> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl ClaudeRunner for MockRunner {
+        fn is_claude_on_path(&self) -> bool {
+            self.on_path
+        }
+        fn run(&self, args: &[&str]) -> Result<String> {
+            self.calls
+                .borrow_mut()
+                .push(args.iter().map(|s| s.to_string()).collect());
+            self.responses
+                .borrow_mut()
+                .pop()
+                .unwrap_or_else(|| Err(anyhow!("mock exhausted")))
+        }
+    }
+
+    #[test]
+    fn plugin_step_skips_silent_when_claude_not_on_path() {
+        // Recommended-path opt-out: user hasn't installed Claude Code.
+        // The hook must not call `run()` at all — no spawn, no log.
+        let runner = MockRunner::new(false, vec![]);
+        try_update_claude_plugin(&runner);
+        assert!(runner.calls().is_empty(), "expected zero claude calls");
+    }
+
+    #[test]
+    fn plugin_step_skips_silent_when_plugin_not_installed() {
+        // Claude is on PATH but the user runs the rust-analyzer plugin
+        // only — the teamctl plugin id must not appear in the JSON
+        // array. After the list call, no update call should fire.
+        let other_plugin_only = r#"[
+            {"id":"rust-analyzer-lsp@claude-plugins-official","version":"1.0.0"}
+        ]"#;
+        let runner = MockRunner::new(true, vec![Ok(other_plugin_only.to_string())]);
+        try_update_claude_plugin(&runner);
+        let calls = runner.calls();
+        assert_eq!(calls.len(), 1, "only the list call should fire");
+        assert_eq!(calls[0], vec!["plugin", "list", "--json"]);
+    }
+
+    #[test]
+    fn plugin_step_runs_update_when_plugin_installed() {
+        // Happy path: detection finds teamctl@teamctl, update fires.
+        // Stack the responses LIFO since MockRunner pops; first
+        // element popped is the LAST in the vec.
+        let installed_json = r#"[
+            {"id":"teamctl@teamctl","version":"0.1.0"}
+        ]"#;
+        let update_stdout = "Checking for updates for plugin \"teamctl@teamctl\" at user scope…\n\
+             ✔ teamctl is already at the latest version (0.1.0).\n";
+        let runner = MockRunner::new(
+            true,
+            vec![
+                Ok(update_stdout.to_string()),
+                Ok(installed_json.to_string()),
+            ],
+        );
+        try_update_claude_plugin(&runner);
+        let calls = runner.calls();
+        assert_eq!(calls.len(), 2, "list + update fired");
+        assert_eq!(calls[1], vec!["plugin", "update", "teamctl@teamctl"]);
+    }
+
+    #[test]
+    fn plugin_installed_finds_id_in_list() {
+        let json = r#"[
+            {"id":"rust-analyzer-lsp@claude-plugins-official","version":"1.0.0"},
+            {"id":"teamctl@teamctl","version":"0.1.0"}
+        ]"#;
+        assert!(plugin_installed(json, "teamctl@teamctl"));
+        assert!(!plugin_installed(json, "absent@somewhere"));
+    }
+
+    #[test]
+    fn plugin_installed_handles_empty_list() {
+        assert!(!plugin_installed("[]", "teamctl@teamctl"));
+    }
+
+    #[test]
+    fn plugin_installed_returns_false_on_malformed_json() {
+        // Tolerant: a future claude version that changes output shape
+        // (top-level object, paged response) must not crash teamctl —
+        // the post-update hook stays silent and the binary update
+        // is unaffected.
+        assert!(!plugin_installed("{not json", "teamctl@teamctl"));
+        assert!(!plugin_installed(r#"{"plugins":[]}"#, "teamctl@teamctl"));
+    }
+
+    #[test]
+    fn summarize_plugin_update_already_current() {
+        let stdout = "Checking for updates…\n✔ teamctl is already at the latest version (0.1.0).\n";
+        let line = summarize_plugin_update(stdout, "teamctl@teamctl");
+        assert!(line.starts_with("✓"), "success glyph: {line}");
+        assert!(line.contains("already current"), "{line}");
+    }
+
+    #[test]
+    fn summarize_plugin_update_real_update() {
+        // Simulate a hypothetical "Updated to" success line — claude's
+        // exact wording isn't guaranteed across versions, so the
+        // detector is "doesn't contain failure markers AND doesn't say
+        // already-current → updated".
+        let stdout = "✔ Updated teamctl to 0.1.1.";
+        let line = summarize_plugin_update(stdout, "teamctl@teamctl");
+        assert!(line.starts_with("✓"));
+        assert!(line.contains("updated"), "{line}");
+        assert!(!line.contains("already"), "{line}");
+    }
+
+    #[test]
+    fn summarize_plugin_update_failure_glyph() {
+        // claude exits 0 even on "Failed to update" — the glyph is
+        // the only reliable signal. Fallback hint must include the
+        // manual command so the user has a recovery path without
+        // running `claude plugin --help`.
+        let stdout =
+            "Checking for updates…\n✘ Failed to update plugin \"teamctl@teamctl\": Plugin offline";
+        let line = summarize_plugin_update(stdout, "teamctl@teamctl");
+        assert!(line.starts_with("!"), "warn glyph: {line}");
+        assert!(line.contains("offline") || line.contains("Failed"));
+        assert!(
+            line.contains("claude plugin update teamctl@teamctl"),
+            "manual-fix hint missing: {line}"
+        );
+    }
+
+    #[test]
+    fn summarize_plugin_update_failure_text_without_glyph() {
+        // Defensive: a future claude version may stop using the glyph
+        // and just print the "Failed to update" text. Still detect.
+        let stdout = "Failed to update plugin \"teamctl@teamctl\": network error";
+        let line = summarize_plugin_update(stdout, "teamctl@teamctl");
+        assert!(line.starts_with("!"));
+        assert!(line.contains("network error"));
     }
 }
