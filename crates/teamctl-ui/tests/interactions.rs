@@ -1487,6 +1487,49 @@ fn backspace_in_attach_overlay_pops_buffer() {
 }
 
 #[test]
+fn multiple_attach_confirms_append_separate_marker_lines() {
+    // Tab → confirm → Tab → confirm produces two `📎 attachment:`
+    // lines on their own rows. Pinning current behaviour so a
+    // future refactor can't accidentally clobber the first marker.
+    // T-32b's broker parser will key on the per-line prefix; the
+    // wire format must support multiple attachments per body.
+    let mut h = dm_compose_setup();
+    h.dispatch_key(KeyCode::Char('@'));
+    type_body(&mut h, "two files");
+
+    h.dispatch_key(KeyCode::Tab);
+    for c in "/home/alice/a.md".chars() {
+        h.dispatch_key(KeyCode::Char(c));
+    }
+    h.dispatch_key(KeyCode::Enter);
+
+    h.dispatch_key(KeyCode::Tab);
+    for c in "/home/alice/b.md".chars() {
+        h.dispatch_key(KeyCode::Char(c));
+    }
+    h.dispatch_key(KeyCode::Enter);
+
+    let body = h.app.compose_editor.body();
+    let marker_lines: Vec<&str> = body
+        .lines()
+        .filter(|l| l.trim_start().starts_with("📎 attachment: "))
+        .collect();
+    assert_eq!(
+        marker_lines.len(),
+        2,
+        "two confirms produce two markers: {body:?}"
+    );
+    assert!(
+        marker_lines.iter().any(|l| l.contains("a.md")),
+        "first marker present: {body:?}"
+    );
+    assert!(
+        marker_lines.iter().any(|l| l.contains("b.md")),
+        "second marker present: {body:?}"
+    );
+}
+
+#[test]
 fn closing_compose_modal_clears_attach_overlay_state() {
     // A cancelled draft must not survive a close-and-reopen of the
     // modal — leftover state would surprise the operator on the

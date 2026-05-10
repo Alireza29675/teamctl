@@ -19,9 +19,8 @@
 //! "treat as data" framing — those are prompt-injection mitigations
 //! and live in the hook layer per owner ratify.
 //!
-//! `enabled = false` short-circuits with `RejectReason::Disabled`;
-//! the policy guards still run so behaviour stays predictable for an
-//! operator who flips the flag mid-session.
+//! `enabled = false` short-circuits with `RejectReason::Disabled` —
+//! no filesystem cost when the operator has flipped the flag.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,6 +52,12 @@ pub enum RejectReason {
     /// be spawned. `detail` carries the scanner's stderr (truncated)
     /// or a wrapper-level error.
     ScannerRejected { detail: String },
+    /// Compose configured a scanner but the caller passed
+    /// `scanner: None` to `check_and_read`. Tighter than silently
+    /// skipping the scan: a refactor that drops the scanner arg
+    /// anywhere upstream surfaces here instead of disabling
+    /// malware checking with no test failure.
+    ScannerNotProvided,
     /// Read raced with deletion or another `fs::read` failure surfaced
     /// after the size check passed.
     ReadFailed(String),
@@ -78,6 +83,10 @@ impl RejectReason {
                 format!("file size {size} bytes exceeds the {cap}-byte cap")
             }
             Self::ScannerRejected { detail } => format!("scanner rejected: {detail}"),
+            Self::ScannerNotProvided => {
+                "scanner is configured but the broker did not run it (internal misconfiguration)"
+                    .into()
+            }
             Self::ReadFailed(e) => format!("read failed: {e}"),
         }
     }
@@ -156,7 +165,16 @@ pub fn check_and_read(
             cap: cfg.max_size_bytes,
         });
     }
-    if let (Some(s), Some(spec)) = (scanner, cfg.scanner.as_ref()) {
+    // Tight scanner contract: if the operator configured a scanner,
+    // the caller MUST hand one to `check_and_read`. A `None` here
+    // surfaces as `ScannerNotProvided` rather than silently skipping
+    // the scan — caught by the unit test below, so a refactor that
+    // drops the arg upstream fails loudly instead of disabling
+    // malware checking.
+    if let Some(spec) = cfg.scanner.as_ref() {
+        let Some(s) = scanner else {
+            return Err(RejectReason::ScannerNotProvided);
+        };
         let outcome = s.scan(&resolved, Duration::from_secs(spec.timeout_seconds));
         if let ScanOutcome::Rejected { detail } = outcome {
             return Err(RejectReason::ScannerRejected { detail });
@@ -370,6 +388,25 @@ mod tests {
         cfg.allowed_roots = vec![];
         let err = check_and_read(&cfg, &p, None).unwrap_err();
         assert_eq!(err, RejectReason::NoAllowedRoots);
+    }
+
+    #[test]
+    fn scanner_configured_but_caller_passes_none_returns_scanner_not_provided() {
+        // Tight contract per peer review: a caller path that drops
+        // the scanner argument while the compose still configures
+        // one must surface as ScannerNotProvided. The previous shape
+        // silently skipped the scan, which would let a refactor
+        // disable malware checking with zero test failure.
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join("ok.md");
+        fs::write(&p, b"hi").unwrap();
+        let mut cfg = cfg_with_root(dir.path(), 1024);
+        cfg.scanner = Some(crate::compose::AttachmentScanner {
+            command: "true".into(),
+            timeout_seconds: 30,
+        });
+        let err = check_and_read(&cfg, &p, None).unwrap_err();
+        assert_eq!(err, RejectReason::ScannerNotProvided);
     }
 
     #[test]
