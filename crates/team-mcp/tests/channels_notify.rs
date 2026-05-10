@@ -331,12 +331,10 @@ fn row_written_before_initialized_still_emits_notification() {
     let mailbox = tmp.path().join("mailbox.db");
     let bin = team_mcp_bin();
 
-    // Pre-create the mailbox + insert a row BEFORE spawning team-mcp,
-    // so the row predates the watcher's high-water capture. The fix
-    // captures `last_seen` synchronously at spawn-time, so this row's
-    // id ≤ `last_seen` and we'd expect it skipped — but a row that
-    // arrives *after* spawn but *before* `notifications/initialized`
-    // is the actual race window. We exercise that next.
+    // Pre-create the schema so the post-spawn INSERT below doesn't
+    // hit a missing-table error. No row is inserted yet — the race
+    // window we exercise is "row arrives after spawn but before
+    // `notifications/initialized`", written further down.
     let conn = Connection::open(&mailbox).unwrap();
     team_core::mailbox::ensure(&conn).unwrap();
     drop(conn);
