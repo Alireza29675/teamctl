@@ -862,25 +862,29 @@ mod tests {
 
     #[test]
     fn real_scanner_for_spec_timeout_returns_rejected() {
-        // Sleep-script against a sub-second timeout — the
+        // `/bin/sleep 5` against a sub-second timeout — the
         // `recv_timeout` path. Detail mentions the timeout so
         // operators can tune `scanner.timeout_seconds` from log
         // output alone.
-        if !Path::new("/bin/sh").exists() {
+        //
+        // The previous shape wrote a `#!/bin/sh\nsleep 5` script
+        // into a TempDir, chmod'd it +x, and pointed the scanner
+        // at it. That hit a flake on otis's #151 CI run: the
+        // chmod/exec-bit visibility race on a forked subprocess
+        // surfaced as a "scanner spawn failed: permission denied"
+        // result instead of a timeout. Using `/bin/sleep` directly
+        // — present on every linux runner — eliminates the FS
+        // race entirely. The `path` arg passed to scan() is
+        // ceremonial here (the trait forwards it as a process
+        // arg; sleep treats it as a duration, which is exactly
+        // what we want).
+        if !Path::new("/bin/sleep").exists() {
             return;
         }
-        let script = TempDir::new().unwrap();
-        let script_path = script.path().join("slow.sh");
-        fs::write(&script_path, "#!/bin/sh\nsleep 5\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
-        }
         let scanner: Box<dyn Scanner> = Box::new(RealScannerForSpec {
-            command: script_path.display().to_string(),
+            command: "/bin/sleep".into(),
         });
-        let outcome = scanner.scan(&script_path, Duration::from_millis(500));
+        let outcome = scanner.scan(Path::new("5"), Duration::from_millis(500));
         match outcome {
             ScanOutcome::Rejected { detail } => {
                 assert!(
