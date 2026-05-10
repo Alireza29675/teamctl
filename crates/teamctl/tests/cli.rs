@@ -449,6 +449,180 @@ fn reload_dry_run_with_no_prior_lists_added_and_does_not_apply() {
     );
 }
 
+// ── T-133: scoped <project-name> arg on up/down/reload ──────────────────
+
+fn seed_two_projects(root: &std::path::Path) {
+    fs::write(
+        root.join("team-compose.yaml"),
+        r#"
+version: 2
+broker:
+  type: sqlite
+  path: state/mailbox.db
+supervisor:
+  type: tmux
+  tmux_prefix: a-
+projects:
+  - file: projects/alpha.yaml
+  - file: projects/beta.yaml
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("projects")).unwrap();
+    fs::write(
+        root.join("projects/alpha.yaml"),
+        r#"
+version: 2
+project:
+  id: alpha
+  name: Alpha
+  cwd: .
+managers:
+  manager:
+    runtime: claude-code
+    model: claude-opus-4-7
+    can_dm: [dev]
+workers:
+  dev:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    reports_to: manager
+    can_dm: [manager]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("projects/beta.yaml"),
+        r#"
+version: 2
+project:
+  id: beta
+  name: Beta
+  cwd: .
+managers:
+  manager:
+    runtime: claude-code
+    model: claude-opus-4-7
+    can_dm: [dev]
+workers:
+  dev:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    reports_to: manager
+    can_dm: [manager]
+"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn reload_dry_run_with_unknown_project_lists_known_and_exits_nonzero() {
+    // Resolution miss: error names the rejected input AND lists every
+    // available project.id so the operator can copy-paste a fix.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+            "ghost",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "expected nonzero exit");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("ghost"), "names rejected input: {stderr}");
+    assert!(stderr.contains("alpha"), "lists alpha: {stderr}");
+    assert!(stderr.contains("beta"), "lists beta: {stderr}");
+}
+
+#[test]
+fn reload_dry_run_scoped_to_project_lists_only_that_project() {
+    // The plan covers the whole compose, but the scoped run filters
+    // it down to the named project. alpha's two agents land as
+    // `added`; beta's never appear in the output.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+            "alpha",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("alpha:manager"), "got: {stdout}");
+    assert!(stdout.contains("alpha:dev"), "got: {stdout}");
+    assert!(
+        !stdout.contains("beta:manager"),
+        "scoped plan must omit beta: {stdout}"
+    );
+    assert!(
+        !stdout.contains("beta:dev"),
+        "scoped plan must omit beta: {stdout}"
+    );
+}
+
+#[test]
+fn reload_dry_run_resolves_project_by_filename_stem() {
+    // Filename fallback: operator types `alpha` (matches both file
+    // stem and project.id here, but the filename path is exercised
+    // when project.id differs from the stem — covered in unit
+    // tests). Pinning the integration round-trip so the resolver is
+    // wired into the reload subcommand.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+            "beta",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("beta:manager"), "got: {stdout}");
+    assert!(!stdout.contains("alpha:"), "got: {stdout}");
+}
+
+#[test]
+fn reload_no_arg_unchanged_lists_every_project() {
+    // Back-compat pin: omitting the arg keeps the original behavior
+    // — every agent across every project shows in the plan.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("alpha:manager"), "got: {stdout}");
+    assert!(stdout.contains("beta:manager"), "got: {stdout}");
+}
+
 // ── T-010: source-aware override warning ─────────────────────────────────
 
 /// Run `teamctl validate` against `cwd` with a clean env, returning stderr.

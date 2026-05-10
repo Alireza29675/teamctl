@@ -62,9 +62,20 @@ enum Command {
     /// Parse the compose tree and check invariants.
     Validate,
     /// Render artifacts and start every agent's tmux session.
-    Up,
+    Up {
+        /// Optional project to scope the operation to (matches
+        /// `project.id` or the project filename without `.yaml`). When
+        /// omitted, operates on every project. Scoped runs skip
+        /// cross-project DB and snapshot rewrites, leaving other
+        /// projects' state untouched.
+        #[arg(value_name = "PROJECT")]
+        project: Option<String>,
+    },
     /// Stop every agent's tmux session. State is preserved.
-    Down,
+    Down {
+        #[arg(value_name = "PROJECT")]
+        project: Option<String>,
+    },
     /// Apply compose changes. Restarts changed agents only.
     Reload {
         /// Print the reload plan without rendering, registering, or
@@ -72,6 +83,8 @@ enum Command {
         /// annotated with `(dry run)`.
         #[arg(long)]
         dry_run: bool,
+        #[arg(value_name = "PROJECT")]
+        project: Option<String>,
     },
 
     // ── Inspection ───────────────────────────────────────────────────
@@ -352,9 +365,11 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Validate => cmd::validate::run(&root),
-        Command::Up => cmd::up::run(&root),
-        Command::Down => cmd::down::run(&root),
-        Command::Reload { dry_run } => cmd::reload::run(&root, dry_run),
+        Command::Up { project } => cmd::up::run(&root, project.as_deref()),
+        Command::Down { project } => cmd::down::run(&root, project.as_deref()),
+        Command::Reload { dry_run, project } => {
+            cmd::reload::run(&root, dry_run, project.as_deref())
+        }
         Command::Ps => cmd::status::run(&root),
         Command::Logs { target } => cmd::logs::run(&root, &target),
         Command::Tail { target, follow } => cmd::tail::run(&root, &target, follow),

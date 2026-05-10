@@ -7,7 +7,7 @@ use team_core::compose::Compose;
 use team_core::render::{env_path, mcp_path, render_agent};
 use team_core::supervisor::{AgentSpec, Supervisor, TmuxSupervisor};
 
-pub fn run(root: &Path) -> Result<()> {
+pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
     let compose = super::load(root)?;
     let errs = team_core::validate::validate(&compose);
     if !errs.is_empty() {
@@ -16,16 +16,38 @@ pub fn run(root: &Path) -> Result<()> {
         }
         bail!("{} validation error(s) — fix before up", errs.len());
     }
-    ensure_wrapper_and_dirs(&compose)?;
-    render_all_public(&compose)?;
-    register_all_public(&compose)?;
-    ensure_claude_trust(&compose)?;
+    let scoped = project
+        .map(|name| super::project_filter::resolve(&compose, name))
+        .transpose()?;
 
+    // Per T-133: scoped runs skip cross-project work — wrapper write,
+    // DB-side projects/agents/acls/channels rewrite, snapshot rewrite
+    // — because each of those clobbers state owned by *other*
+    // projects. The unscoped path is unchanged.
+    if scoped.is_none() {
+        ensure_wrapper_and_dirs(&compose)?;
+        render_all_public(&compose)?;
+        register_all_public(&compose)?;
+        ensure_claude_trust(&compose)?;
+    } else {
+        // Per-project work: re-render the named project's env+mcp
+        // (operator may have edited them) and pre-accept Claude trust
+        // for that project's cwds. Both are idempotent and project-
+        // scoped on disk.
+        render_project_public(&compose, scoped.as_deref().unwrap())?;
+        ensure_claude_trust_for_project(&compose, scoped.as_deref().unwrap())?;
+    }
+
+    let mut touched = 0usize;
     let sup = TmuxSupervisor;
     for h in compose.agents() {
+        if scoped.as_deref().is_some_and(|id| id != h.project) {
+            continue;
+        }
         let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
         sup.up(&spec)?;
         println!("up · {}", h.id());
+        touched += 1;
     }
 
     // Spawn one team-bot per manager that carries a `telegram:` block.
@@ -34,20 +56,55 @@ pub fn run(root: &Path) -> Result<()> {
     let team_bot = super::bot::team_bot_bin();
     source_dotenv_into_process(&compose.root);
     for spec in super::bot::bot_specs(&compose) {
+        if scoped
+            .as_deref()
+            .is_some_and(|id| spec.manager.split_once(':').map(|(p, _)| p) != Some(id))
+        {
+            continue;
+        }
         match super::bot::up_one(&spec, &team_bot, &compose.root) {
-            Ok(true) => println!("up · bot {} → {}", spec.session, spec.manager),
+            Ok(true) => {
+                println!("up · bot {} → {}", spec.session, spec.manager);
+                touched += 1;
+            }
             Ok(false) => {}
             Err(e) => eprintln!("warn · bot {}: {e:#}", spec.session),
         }
     }
 
+    if let (Some(id), 0) = (scoped.as_deref(), touched) {
+        println!("no agents in project {id}.");
+    }
+
     // Persist the applied-state snapshot so a reload immediately
-    // afterwards correctly sees zero diff. Before this, `up` left
-    // `state/applied.json` absent, and the first reload misreported
-    // every agent as `added`.
+    // afterwards correctly sees zero diff. Scoped runs skip the
+    // snapshot rewrite — applied.json is a whole-tree document, and
+    // overwriting it from a scoped run would clobber unscoped projects'
+    // entries. Operators running scoped commands accept that the next
+    // unscoped `reload` will re-diff against the older snapshot.
+    if scoped.is_none() {
+        let bin = super::team_mcp_bin().display().to_string();
+        let snap = super::snapshot::compute(&compose, &bin);
+        super::snapshot::write(&compose.root, &snap)?;
+    }
+    Ok(())
+}
+
+/// Render env + MCP for the named project's agents only. Mirrors
+/// `render_all_public` but only iterates that project's agents. The
+/// unscoped path remains the canonical "ensure dirs and render every
+/// project" call.
+pub fn render_project_public(compose: &Compose, project_id: &str) -> Result<()> {
+    let envs_dir = compose.root.join("state/envs");
+    let mcp_dir = compose.root.join("state/mcp");
+    fs::create_dir_all(&envs_dir)?;
+    fs::create_dir_all(&mcp_dir)?;
     let bin = super::team_mcp_bin().display().to_string();
-    let snap = super::snapshot::compute(&compose, &bin);
-    super::snapshot::write(&compose.root, &snap)?;
+    for h in compose.agents().filter(|h| h.project == project_id) {
+        let (env, mcp) = render_agent(compose, h, &bin);
+        fs::write(env_path(&compose.root, h.project, h.agent), env)?;
+        fs::write(mcp_path(&compose.root, h.project, h.agent), mcp)?;
+    }
     Ok(())
 }
 
@@ -61,8 +118,17 @@ pub fn run(root: &Path) -> Result<()> {
 /// it -- so we record that consent in `~/.claude.json` once instead of
 /// making them click through the dialog every restart.
 fn ensure_claude_trust(compose: &Compose) -> Result<()> {
+    ensure_claude_trust_inner(compose, None)
+}
+
+fn ensure_claude_trust_for_project(compose: &Compose, project_id: &str) -> Result<()> {
+    ensure_claude_trust_inner(compose, Some(project_id))
+}
+
+fn ensure_claude_trust_inner(compose: &Compose, project_id: Option<&str>) -> Result<()> {
     let cwds: BTreeSet<PathBuf> = compose
         .agents()
+        .filter(|h| project_id.map_or(true, |id| h.project == id))
         .filter(|h| h.spec.runtime == "claude-code")
         .filter_map(|h| {
             let project = compose
