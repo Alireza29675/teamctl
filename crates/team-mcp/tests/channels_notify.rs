@@ -74,6 +74,30 @@ impl Lines {
             }
         }
     }
+
+    /// Drain frames until a JSON-RPC response with `id == want` arrives.
+    /// Skips notifications / unrelated responses. Panics on timeout — used
+    /// in tests where the response is expected.
+    fn wait_for_response(&self, want: i64, budget: Duration) -> Value {
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for response id={want}"
+            );
+            match self.rx.recv_timeout(remaining) {
+                Ok(line) => {
+                    if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                        if v.get("id").and_then(|i| i.as_i64()) == Some(want) {
+                            return v;
+                        }
+                    }
+                }
+                Err(_) => panic!("disconnected waiting for response id={want}"),
+            }
+        }
+    }
 }
 
 struct Peer {
@@ -84,18 +108,31 @@ struct Peer {
 
 impl Peer {
     fn spawn(bin: &std::path::Path, agent_id: &str, mailbox: &std::path::Path) -> Self {
-        let mut child = Command::new(bin)
-            .args([
-                "--agent-id",
-                agent_id,
-                "--mailbox",
-                mailbox.to_str().unwrap(),
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn team-mcp");
+        Self::spawn_with_env(bin, agent_id, mailbox, &[])
+    }
+
+    fn spawn_with_env(
+        bin: &std::path::Path,
+        agent_id: &str,
+        mailbox: &std::path::Path,
+        env: &[(&str, &str)],
+    ) -> Self {
+        let mut cmd = Command::new(bin);
+        cmd.args([
+            "--agent-id",
+            agent_id,
+            "--mailbox",
+            mailbox.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+        // T-104: tests that exercise the lazy-inbox flag plumb env vars
+        // through here. Default empty = inherit from runner.
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn().expect("spawn team-mcp");
         let stdin = child.stdin.take().unwrap();
         let lines = Lines::spawn(child.stdout.take().unwrap());
         Self {
@@ -182,19 +219,27 @@ fn new_inbox_row_pushes_channel_notification_to_subscribed_agent() {
         .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
         .expect("expected notifications/claude/channel within 5s");
 
-    // Per the Channels wire format, `params.meta` is `Record<string, string>`.
-    // Numbers / nulls cause Claude Code to silently drop the notification, so
-    // every value must be a string and absent fields must be omitted (not null).
-    assert_eq!(notif["params"]["content"], "ping via channels");
+    // T-104: lazy inbox is the default — the wire `content` is a short
+    // stub and `meta.lazy` is set so the agent knows to drill in via
+    // `inbox_read`. The full body stays in the store; the stub carries
+    // only sender + an 80-char preview.
+    assert_eq!(
+        notif["params"]["content"],
+        "📬 1 new message from hello:mgr: \"ping via channels\"",
+    );
     let meta = &notif["params"]["meta"];
     assert_eq!(meta["sender"], "hello:mgr");
     assert_eq!(meta["recipient"], "hello:dev");
     assert_eq!(meta["id"], msg_id.to_string());
+    assert_eq!(meta["lazy"], "1", "lazy stub must mark itself with lazy=1");
     assert!(meta["sent_at"].is_string(), "sent_at must be a string");
     assert!(
         meta.get("thread_id").is_none() || meta["thread_id"].is_string(),
         "thread_id must be absent or a string, never null"
     );
+    // Per the Channels wire format, `params.meta` is `Record<string, string>`.
+    // Numbers / nulls cause Claude Code to silently drop the notification, so
+    // every value must be a string and absent fields must be omitted (not null).
     for (k, v) in meta.as_object().expect("meta is an object") {
         assert!(v.is_string(), "meta.{k} must be a string, got {v}");
     }
@@ -245,4 +290,353 @@ fn watcher_skips_pre_existing_unacked_messages_at_startup() {
     );
 
     dev.shutdown();
+}
+
+/// T-104: a row inserted with `delivery_mode='immediate'` (the path the
+/// bot takes when an operator prefixes the message with `/readnow `)
+/// must land inline as the full body, with no `meta.lazy` flag.
+#[test]
+fn immediate_message_delivers_full_body_inline() {
+    use rusqlite::Connection;
+
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let bin = team_mcp_bin();
+
+    let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
+    dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    thread::sleep(Duration::from_millis(150));
+
+    // Write directly with `delivery_mode='immediate'` to mimic the
+    // bot's `/readnow` path without dragging the bot crate into this test.
+    let conn = Connection::open(&mailbox).unwrap();
+    team_core::mailbox::ensure(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO messages
+            (project_id, sender, recipient, text, sent_at, delivery_mode)
+         VALUES ('hello', 'user:telegram', 'hello:dev',
+                 'the build just broke, can you investigate', strftime('%s','now'),
+                 'immediate')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let notif = dev
+        .lines
+        .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
+        .expect("expected notifications/claude/channel within 5s");
+    assert_eq!(
+        notif["params"]["content"], "the build just broke, can you investigate",
+        "immediate rows must deliver the full body inline"
+    );
+    assert!(
+        notif["params"]["meta"].get("lazy").is_none(),
+        "immediate rows must not carry the lazy stub flag"
+    );
+
+    dev.shutdown();
+}
+
+/// T-104: `TEAM_LAZY_INBOX=0` is the global escape hatch. With it set,
+/// every row delivers full-body, regardless of `delivery_mode`.
+#[test]
+fn lazy_inbox_disabled_by_env_delivers_full_body() {
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let bin = team_mcp_bin();
+
+    let mut dev = Peer::spawn_with_env(&bin, "hello:dev", &mailbox, &[("TEAM_LAZY_INBOX", "0")]);
+    dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+
+    let mut mgr = Peer::spawn(&bin, "hello:mgr", &mailbox);
+    mgr.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(150));
+
+    mgr.write(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "dm",
+            "arguments": { "to": "dev", "text": "full inline because env opted out" }
+        }
+    }));
+    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+
+    let notif = dev
+        .lines
+        .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
+        .expect("expected notifications/claude/channel within 5s");
+    assert_eq!(
+        notif["params"]["content"], "full inline because env opted out",
+        "TEAM_LAZY_INBOX=0 must restore full-body inline delivery"
+    );
+    assert!(
+        notif["params"]["meta"].get("lazy").is_none(),
+        "with lazy disabled, no lazy=1 marker"
+    );
+
+    dev.shutdown();
+    mgr.shutdown();
+}
+
+/// T-104: stubs for messages addressed to a channel show the channel
+/// name so the agent can tell DM vs channel context at a glance.
+#[test]
+fn channel_stub_includes_channel_name_in_preview() {
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let bin = team_mcp_bin();
+
+    // Seed schema + a channel `hello:dev` with `hello:dev-agent` as a member.
+    let conn = rusqlite::Connection::open(&mailbox).unwrap();
+    team_core::mailbox::ensure(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO projects (id, name) VALUES ('hello', 'hello')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO agents (id, project_id, role, runtime, is_manager)
+         VALUES ('hello:dev-agent', 'hello', 'dev', 'claude', 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO channels (id, project_id, name, wildcard) VALUES ('hello:dev', 'hello', 'dev', 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO channel_members (channel_id, agent_id) VALUES ('hello:dev', 'hello:dev-agent')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let mut dev = Peer::spawn(&bin, "hello:dev-agent", &mailbox);
+    dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    thread::sleep(Duration::from_millis(150));
+
+    let conn = rusqlite::Connection::open(&mailbox).unwrap();
+    conn.execute(
+        "INSERT INTO messages (project_id, sender, recipient, text, sent_at)
+         VALUES ('hello', 'hello:mgr', 'channel:hello:dev', 'standup in 5', strftime('%s','now'))",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let notif = dev
+        .lines
+        .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
+        .expect("expected notifications/claude/channel within 5s");
+    assert_eq!(
+        notif["params"]["content"],
+        "📬 1 new message in dev from hello:mgr: \"standup in 5\"",
+    );
+    assert_eq!(notif["params"]["meta"]["lazy"], "1");
+
+    dev.shutdown();
+}
+
+/// T-104: bodies longer than the 80-char preview window get truncated
+/// with a trailing ellipsis. The full body remains intact in the store
+/// (verified via `inbox_read`).
+#[test]
+fn long_body_preview_truncates_at_80_with_ellipsis() {
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let bin = team_mcp_bin();
+
+    let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
+    dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = dev.lines.recv_json(Duration::from_secs(2));
+    dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+
+    let mut mgr = Peer::spawn(&bin, "hello:mgr", &mailbox);
+    mgr.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(150));
+
+    let body = "x".repeat(200);
+    mgr.write(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "dm",
+            "arguments": { "to": "dev", "text": body }
+        }
+    }));
+    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+
+    let notif = dev
+        .lines
+        .wait_for_method("notifications/claude/channel", Duration::from_secs(5))
+        .expect("expected notifications/claude/channel within 5s");
+    let content = notif["params"]["content"].as_str().unwrap().to_string();
+    assert!(
+        content.contains(&"x".repeat(80)),
+        "stub must include the 80-char preview prefix: {content}"
+    );
+    assert!(
+        content.ends_with("…\""),
+        "stub must end with ellipsis-quote: {content}"
+    );
+    assert!(
+        !content.contains(&"x".repeat(81)),
+        "stub must NOT contain 81 copies — preview is 80-char hard cap: {content}",
+    );
+
+    dev.shutdown();
+    mgr.shutdown();
+}
+
+/// T-104: `inbox_read` returns full bodies AND auto-acks. Subsequent
+/// `inbox_peek` calls must not see those rows again.
+#[test]
+fn inbox_read_returns_bodies_and_auto_acks() {
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let bin = team_mcp_bin();
+
+    let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
+    dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = dev.lines.recv_json(Duration::from_secs(2));
+
+    let mut mgr = Peer::spawn(&bin, "hello:mgr", &mailbox);
+    mgr.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+
+    mgr.write(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "dm", "arguments": { "to": "dev", "text": "first" } }
+    }));
+    let dm1 = mgr.lines.recv_json(Duration::from_secs(2));
+    let id1 = dm1["result"]["structuredContent"]["id"].as_i64().unwrap();
+
+    mgr.write(&json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": { "name": "dm", "arguments": { "to": "dev", "text": "second" } }
+    }));
+    let dm2 = mgr.lines.recv_json(Duration::from_secs(2));
+    let id2 = dm2["result"]["structuredContent"]["id"].as_i64().unwrap();
+
+    // Read both — should get full bodies back AND ack them.
+    dev.write(&json!({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": { "name": "inbox_read", "arguments": { "ids": [id1, id2] } }
+    }));
+    let read_resp = dev.lines.wait_for_response(10, Duration::from_secs(2));
+    let msgs = read_resp["result"]["structuredContent"]["messages"]
+        .as_array()
+        .expect("inbox_read returns messages array");
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0]["text"], "first");
+    assert_eq!(msgs[1]["text"], "second");
+
+    // Now peek — no remaining unacked rows.
+    dev.write(&json!({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": { "name": "inbox_peek", "arguments": {} }
+    }));
+    let peek_resp = dev.lines.wait_for_response(11, Duration::from_secs(2));
+    let remaining = peek_resp["result"]["structuredContent"]["messages"]
+        .as_array()
+        .expect("inbox_peek returns messages array");
+    assert!(
+        remaining.is_empty(),
+        "inbox_read must auto-ack — peek should be empty, got {remaining:?}"
+    );
+
+    dev.shutdown();
+    mgr.shutdown();
+}
+
+/// T-104: `inbox_read` must not let one agent fetch + ack messages
+/// addressed to another agent. Same-process callers always pass through
+/// the ACL filter in the SQL.
+#[test]
+fn inbox_read_rejects_ids_addressed_to_other_agents() {
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let bin = team_mcp_bin();
+
+    let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
+    dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = dev.lines.recv_json(Duration::from_secs(2));
+
+    let mut mgr = Peer::spawn(&bin, "hello:mgr", &mailbox);
+    mgr.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = mgr.lines.recv_json(Duration::from_secs(2));
+
+    let mut other = Peer::spawn(&bin, "hello:other", &mailbox);
+    other.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = other.lines.recv_json(Duration::from_secs(2));
+
+    // mgr DMs `other`, not `dev`.
+    mgr.write(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "dm", "arguments": { "to": "other", "text": "private to other" } }
+    }));
+    let dm_resp = mgr.lines.recv_json(Duration::from_secs(2));
+    let id_for_other = dm_resp["result"]["structuredContent"]["id"]
+        .as_i64()
+        .unwrap();
+
+    // dev tries to read it — must come back empty, and the row must
+    // remain unacked (`other` can still see it).
+    dev.write(&json!({
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": { "name": "inbox_read", "arguments": { "ids": [id_for_other] } }
+    }));
+    let read_resp = dev.lines.wait_for_response(10, Duration::from_secs(2));
+    let msgs = read_resp["result"]["structuredContent"]["messages"]
+        .as_array()
+        .unwrap();
+    assert!(
+        msgs.is_empty(),
+        "dev must not fetch messages addressed to other: {msgs:?}"
+    );
+
+    other.write(&json!({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": { "name": "inbox_peek", "arguments": {} }
+    }));
+    let peek_resp = other.lines.wait_for_response(11, Duration::from_secs(2));
+    let remaining = peek_resp["result"]["structuredContent"]["messages"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        remaining.len(),
+        1,
+        "row must remain visible to its true recipient: {remaining:?}"
+    );
+
+    dev.shutdown();
+    mgr.shutdown();
+    other.shutdown();
 }

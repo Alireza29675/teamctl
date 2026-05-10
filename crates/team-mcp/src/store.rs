@@ -48,6 +48,13 @@ pub struct Message {
     /// demand — text-only callers see `None` and ignore it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_payload: Option<String>,
+    /// Per-message delivery mode (T-104 lazy inbox). `None` (the default)
+    /// means the channel watcher emits a stub notification; the agent drills
+    /// in via `inbox_read`. `Some("immediate")` means the full body is
+    /// delivered inline, bypassing the stub — set by the bot when an
+    /// operator prefixes a message with `/readnow `.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<String>,
 }
 
 impl Store {
@@ -169,7 +176,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT m.id, m.project_id, m.sender, m.recipient, m.text, m.thread_id, m.sent_at,
-                    m.telegram_msg_id, m.kind, m.structured_payload
+                    m.telegram_msg_id, m.kind, m.structured_payload, m.delivery_mode
              FROM messages m
              WHERE m.acked_at IS NULL
                AND m.sender != ?1
@@ -197,6 +204,7 @@ impl Store {
                     telegram_msg_id: r.get(7)?,
                     kind: r.get(8)?,
                     structured_payload: r.get(9)?,
+                    delivery_mode: r.get(10)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -305,6 +313,87 @@ impl Store {
             params![project, sender, recipient, text, Self::now()],
         )?;
         Ok(conn.last_insert_rowid())
+    }
+
+    /// Fetch full bodies for the listed ids (filtered to messages the caller
+    /// is allowed to see — i.e. addressed to `agent_id` directly or to a
+    /// channel they subscribe to) and auto-ack them in the same transaction
+    /// (T-104). Returns the rows in the order requested. Ids the caller
+    /// can't see, or already-acked ids, are silently skipped — the caller's
+    /// response is whatever they were entitled to read.
+    pub fn inbox_read(&self, agent_id: &str, ids: &[i64]) -> Result<Vec<Message>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        // Pull rows the caller is allowed to read AND that are still unacked.
+        let select_sql = format!(
+            "SELECT m.id, m.project_id, m.sender, m.recipient, m.text, m.thread_id, m.sent_at,
+                    m.telegram_msg_id, m.kind, m.structured_payload, m.delivery_mode
+             FROM messages m
+             WHERE m.id IN ({placeholders})
+               AND m.acked_at IS NULL
+               AND m.sender != ?
+               AND (
+                     m.recipient = ?
+                  OR m.recipient IN (
+                        SELECT 'channel:' || cm.channel_id
+                        FROM channel_members cm
+                        WHERE cm.agent_id = ?
+                     )
+                 )"
+        );
+        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(ids.len() + 3);
+        for id in ids {
+            params_vec.push(Box::new(*id));
+        }
+        params_vec.push(Box::new(agent_id.to_string()));
+        params_vec.push(Box::new(agent_id.to_string()));
+        params_vec.push(Box::new(agent_id.to_string()));
+        let refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|b| &**b).collect();
+        let rows: Vec<Message> = {
+            let mut stmt = tx.prepare(&select_sql)?;
+            let collected = stmt
+                .query_map(refs.as_slice(), |r| {
+                    Ok(Message {
+                        id: r.get(0)?,
+                        project_id: r.get(1)?,
+                        sender: r.get(2)?,
+                        recipient: r.get(3)?,
+                        text: r.get(4)?,
+                        thread_id: r.get(5)?,
+                        sent_at: r.get(6)?,
+                        telegram_msg_id: r.get(7)?,
+                        kind: r.get(8)?,
+                        structured_payload: r.get(9)?,
+                        delivery_mode: r.get(10)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            collected
+        };
+        if !rows.is_empty() {
+            let ack_ids: Vec<i64> = rows.iter().map(|m| m.id).collect();
+            let ack_placeholders = ack_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let ack_sql =
+                format!("UPDATE messages SET acked_at = ? WHERE id IN ({ack_placeholders})");
+            let mut ack_params: Vec<Box<dyn rusqlite::ToSql>> =
+                Vec::with_capacity(ack_ids.len() + 1);
+            ack_params.push(Box::new(Self::now()));
+            for id in &ack_ids {
+                ack_params.push(Box::new(*id));
+            }
+            let ack_refs: Vec<&dyn rusqlite::ToSql> = ack_params.iter().map(|b| &**b).collect();
+            tx.execute(&ack_sql, ack_refs.as_slice())?;
+        }
+        tx.commit()?;
+        // Preserve caller-supplied id order for predictability.
+        let mut by_id: std::collections::HashMap<i64, Message> =
+            rows.into_iter().map(|m| (m.id, m)).collect();
+        let ordered = ids.iter().filter_map(|id| by_id.remove(id)).collect();
+        Ok(ordered)
     }
 
     /// Mark messages as acked.

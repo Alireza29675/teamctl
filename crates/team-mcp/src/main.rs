@@ -80,11 +80,20 @@ async fn main() -> Result<()> {
     // on this gate; the request loop trips it.
     let initialized = Arc::new(Notify::new());
 
+    // T-104: lazy inbox delivery is the default. Operators can disable it
+    // globally via `TEAM_LAZY_INBOX=0`, which restores the pre-T-104
+    // full-body channel notifications. Per-message override stays available
+    // through the `/readnow` prefix on bot-routed messages.
+    let lazy_inbox = std::env::var("TEAM_LAZY_INBOX")
+        .map(|v| !matches!(v.trim(), "0" | "false" | "off" | "no"))
+        .unwrap_or(true);
+
     spawn_channel_watcher(
         ctx.store.clone(),
         ctx.agent_id.clone(),
         stdout.clone(),
         initialized.clone(),
+        lazy_inbox,
     );
 
     let stdin = tokio::io::stdin();
@@ -129,6 +138,7 @@ fn spawn_channel_watcher(
     agent_id: String,
     stdout: Arc<Mutex<Stdout>>,
     initialized: Arc<Notify>,
+    lazy_inbox: bool,
 ) {
     tokio::spawn(async move {
         initialized.notified().await;
@@ -156,7 +166,7 @@ fn spawn_channel_watcher(
             };
             let mut max_id = last_seen;
             for m in msgs.iter().filter(|m| m.id > last_seen) {
-                let payload = format_channel_event(m);
+                let payload = format_channel_event(m, lazy_inbox);
                 let buf = match serde_json::to_vec(&payload) {
                     Ok(b) => b,
                     Err(e) => {
@@ -186,7 +196,14 @@ fn spawn_channel_watcher(
 /// dropped (or, worse, drop the whole notification), so we serialise
 /// `id` / `sent_at` as strings and omit `thread_id` entirely when it is
 /// not set.
-fn format_channel_event(m: &store::Message) -> Value {
+///
+/// T-104: when `lazy_inbox` is true (default) and the row's
+/// `delivery_mode` is not `'immediate'`, `params.content` carries a
+/// short notification stub instead of the full body. The agent then
+/// drills in via `inbox_read(ids)` to fetch + auto-resolve. When
+/// `lazy_inbox` is false OR the row was marked immediate (operator used
+/// `/readnow `), the full body lands inline as before.
+fn format_channel_event(m: &store::Message, lazy_inbox: bool) -> Value {
     let mut meta = serde_json::Map::new();
     meta.insert("id".into(), Value::String(m.id.to_string()));
     meta.insert("sender".into(), Value::String(m.sender.clone()));
@@ -195,12 +212,62 @@ fn format_channel_event(m: &store::Message) -> Value {
     if let Some(t) = m.thread_id.as_ref() {
         meta.insert("thread_id".into(), Value::String(t.clone()));
     }
+    let immediate = m.delivery_mode.as_deref() == Some("immediate");
+    let content = if !lazy_inbox || immediate {
+        m.text.clone()
+    } else {
+        meta.insert("lazy".into(), Value::String("1".into()));
+        notification_stub(m)
+    };
     json!({
         "jsonrpc": "2.0",
         "method": "notifications/claude/channel",
         "params": {
-            "content": m.text,
+            "content": content,
             "meta": meta,
         }
     })
+}
+
+/// Render the lazy-delivery notification stub for `m`. The agent sees
+/// this in its input stream and decides whether to drill in (via
+/// `inbox_read`) or ignore.
+///
+/// Format:
+///   DM:      `📬 1 new message from <sender>: "<preview>"`
+///   Channel: `📬 1 new message in <channel> from <sender>: "<preview>"`
+///
+/// Preview is the first 80 characters of `text`; longer text is
+/// truncated with a trailing `…`. Non-text rows (`kind` set, empty text)
+/// fall back to a kind-aware label so the stub is never an empty quote.
+fn notification_stub(m: &store::Message) -> String {
+    const PREVIEW_CHARS: usize = 80;
+    let trimmed = m.text.trim();
+    let kind_label = m.kind.as_deref();
+    if trimmed.is_empty() {
+        let label = kind_label.unwrap_or("message");
+        let location = stub_location(m);
+        return format!("📬 1 new {label}{location} from {}", m.sender);
+    }
+    let mut preview: String = trimmed.chars().take(PREVIEW_CHARS).collect();
+    if trimmed.chars().count() > PREVIEW_CHARS {
+        preview.push('…');
+    }
+    let location = stub_location(m);
+    format!(
+        "📬 1 new message{location} from {sender}: \"{preview}\"",
+        sender = m.sender,
+    )
+}
+
+/// `" in <channel>"` for channel rows, empty string for DMs. Channels
+/// land at `recipient = "channel:<project>:<name>"` — we surface the
+/// `<name>` segment to the agent (project is implicit from `meta.sender`).
+fn stub_location(m: &store::Message) -> String {
+    if let Some(rest) = m.recipient.strip_prefix("channel:") {
+        let name = rest.split_once(':').map(|(_, n)| n).unwrap_or(rest);
+        format!(" in {name}")
+    } else {
+        String::new()
+    }
 }

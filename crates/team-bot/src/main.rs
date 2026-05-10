@@ -238,6 +238,20 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// T-104: detect a leading `/readnow ` prefix on a Telegram body and split
+/// it from the routable text. Returns `(text, delivery_mode)` where
+/// `delivery_mode` is `Some("immediate")` iff the prefix matched (case-
+/// sensitive, single-space separator) and `None` otherwise. Empty body
+/// after the prefix still returns `Some("immediate")` so the caller can
+/// decide how to handle the empty-payload case.
+fn peel_readnow(body: &str) -> (&str, Option<&'static str>) {
+    if let Some(rest) = body.strip_prefix("/readnow ") {
+        (rest, Some("immediate"))
+    } else {
+        (body, None)
+    }
+}
+
 fn open_mailbox(path: &std::path::Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
@@ -298,12 +312,17 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
     if let Some(rest) = trimmed.strip_prefix("/dm ") {
         if let Some((target, body)) = rest.split_once(' ') {
             if let Some((project, _)) = target.split_once(':') {
+                // T-104: `/readnow ` on the body bypasses lazy delivery so
+                // the message lands inline in the agent's input stream
+                // instead of as a stub. Single-space-separated, case-
+                // sensitive prefix; stripped before insert.
+                let (body, delivery_mode) = peel_readnow(body);
                 let c = state.conn.lock().await;
                 let _ = c.execute(
                     "INSERT INTO messages
-                        (project_id, sender, recipient, text, sent_at, telegram_msg_id)
-                     VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4)",
-                    params![project, target, body, inbound_msg_id],
+                        (project_id, sender, recipient, text, sent_at, telegram_msg_id, delivery_mode)
+                     VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4, ?5)",
+                    params![project, target, body, inbound_msg_id, delivery_mode],
                 );
                 drop(c);
                 bot.send_message(msg.chat.id, format!("→ {target}")).await?;
@@ -325,6 +344,29 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
             );
             drop(c);
             bot.send_message(msg.chat.id, format!("→ {target}")).await?;
+        }
+    } else if trimmed.starts_with("/readnow ") && state.manager.is_some() {
+        // T-104: plain-text `/readnow ` on a manager-scoped bot. Strip the
+        // prefix and route to the manager with `delivery_mode='immediate'`
+        // so the body lands inline in the agent's context rather than as a
+        // stub. Sits as its own arm (not folded into the plain-text arm
+        // above) because Telegram's command parser treats anything starting
+        // with `/` as a slash command.
+        let target = state.manager.as_deref().unwrap();
+        let (body, delivery_mode) = peel_readnow(trimmed);
+        if !body.is_empty() {
+            if let Some((project, _)) = target.split_once(':') {
+                let c = state.conn.lock().await;
+                let _ = c.execute(
+                    "INSERT INTO messages
+                        (project_id, sender, recipient, text, sent_at, telegram_msg_id, delivery_mode)
+                     VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4, ?5)",
+                    params![project, target, body, inbound_msg_id, delivery_mode],
+                );
+                drop(c);
+                bot.send_message(msg.chat.id, format!("→ {target} (now)"))
+                    .await?;
+            }
         }
     } else if trimmed == "/pending" {
         let c = state.conn.lock().await;
@@ -1516,6 +1558,46 @@ async fn transcribe_groq(audio: &[u8], stt: &SttRuntime) -> SttOutcome {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    /// T-104: `/readnow ` is the case-sensitive, single-space-separated
+    /// prefix that flips a Telegram-routed message to immediate
+    /// (full-body inline) delivery. Anything else is a regular lazy row.
+    #[test]
+    fn peel_readnow_strips_prefix_when_present() {
+        assert_eq!(
+            peel_readnow("/readnow build broke"),
+            ("build broke", Some("immediate")),
+        );
+    }
+
+    #[test]
+    fn peel_readnow_passes_through_when_prefix_absent() {
+        assert_eq!(peel_readnow("regular message"), ("regular message", None));
+    }
+
+    #[test]
+    fn peel_readnow_is_case_sensitive() {
+        // `/ReadNow` and `/READNOW` are not the literal prefix — pass
+        // through. Avoids surprising lowercase-vs-mixed-case false hits.
+        assert_eq!(peel_readnow("/ReadNow x"), ("/ReadNow x", None));
+        assert_eq!(peel_readnow("/READNOW x"), ("/READNOW x", None));
+    }
+
+    #[test]
+    fn peel_readnow_requires_single_space_separator() {
+        // `/readnowfoo` is not the prefix; `/readnow  x` (double space)
+        // strips only the first space and the second space stays in body.
+        assert_eq!(peel_readnow("/readnowfoo"), ("/readnowfoo", None));
+        assert_eq!(peel_readnow("/readnow  x"), (" x", Some("immediate")));
+    }
+
+    #[test]
+    fn peel_readnow_with_empty_body_after_prefix() {
+        // Operator typed only `/readnow ` — preserve the empty body so
+        // the caller can reject (sending an empty immediate row would be
+        // useless). Caller is responsible for the empty-body guard.
+        assert_eq!(peel_readnow("/readnow "), ("", Some("immediate")));
+    }
 
     fn seed(conn: &Connection) {
         team_core::mailbox::ensure(conn).unwrap();
