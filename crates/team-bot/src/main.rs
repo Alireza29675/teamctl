@@ -20,8 +20,8 @@ use rusqlite::{params, Connection};
 use teloxide::net::Download;
 use teloxide::prelude::*;
 use teloxide::types::{
-    BotCommand, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, MessageId,
-    ReactionType, ReplyParameters,
+    BotCommand, ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
+    MessageId, ReactionType, ReplyParameters,
 };
 use tokio::sync::Mutex;
 
@@ -58,6 +58,26 @@ struct Cli {
     /// launched bot still works on a stock team.
     #[arg(long, env = "TEAMCTL_TMUX_PREFIX", default_value = "t-")]
     tmux_prefix: String,
+
+    /// T-101 voice STT: provider arm. Currently only `groq` is supported.
+    /// All four `--stt-*` flags are populated by `teamctl bot up` from
+    /// `interfaces.telegram.speech_to_text` after the api_key_env var is
+    /// resolved at spawn time. When any are absent, voice messages stay
+    /// unhandled (preserves prior behavior).
+    #[arg(long, env = "TEAMCTL_STT_PROVIDER")]
+    stt_provider: Option<String>,
+
+    /// T-101 voice STT: provider API key (already resolved from env).
+    #[arg(long, env = "TEAMCTL_STT_API_KEY")]
+    stt_api_key: Option<String>,
+
+    /// T-101 voice STT: provider model id (e.g. `whisper-large-v3`).
+    #[arg(long, env = "TEAMCTL_STT_MODEL")]
+    stt_model: Option<String>,
+
+    /// T-101 voice STT: optional language hint forwarded to the provider.
+    #[arg(long, env = "TEAMCTL_STT_LANGUAGE")]
+    stt_language: Option<String>,
 }
 
 struct State {
@@ -74,7 +94,29 @@ struct State {
     /// at startup so the bot stays self-contained — no extra CLI flag, no
     /// config sync.
     media_root: PathBuf,
+    /// T-101 voice STT: when present, inbound voice notes get transcribed
+    /// and forwarded to the manager prefixed with `VOICE_INBOX_PREFIX`.
+    /// `None` means voice messages stay unhandled (the bot was started
+    /// without `speech_to_text` configured, or the API key was unset at
+    /// spawn time).
+    stt: Option<SttRuntime>,
 }
+
+/// T-101: resolved STT settings the voice handler needs at request time.
+/// Constructed once at startup from the four `--stt-*` flags.
+struct SttRuntime {
+    provider: String,
+    api_key: String,
+    model: String,
+    language: Option<String>,
+    http: reqwest::Client,
+}
+
+/// T-101: model-facing prefix on the inbox row carrying a transcribed
+/// voice message. The constant lives next to the handler so the format
+/// stays discoverable and consistent — operators reading agent inboxes
+/// learn to recognize this exact string as "this came from audio."
+const VOICE_INBOX_PREFIX: &str = "🎙 (transcribed voice, may have misspellings):";
 
 impl State {
     fn manager_project(&self) -> Option<&str> {
@@ -116,12 +158,27 @@ async fn main() -> Result<()> {
         .parent()
         .map(|p| p.join("inbound-media"))
         .unwrap_or_else(|| PathBuf::from("inbound-media"));
+    // T-101: build the STT runtime only when all three required flags
+    // (provider, key, model) are present. Partial config is treated as
+    // "no voice" rather than an error — `teamctl bot up` already prints a
+    // skip line when the API key env var is unset.
+    let stt = match (cli.stt_provider, cli.stt_api_key, cli.stt_model) {
+        (Some(provider), Some(api_key), Some(model)) => Some(SttRuntime {
+            provider,
+            api_key,
+            model,
+            language: cli.stt_language,
+            http: reqwest::Client::new(),
+        }),
+        _ => None,
+    };
     let state = Arc::new(State {
         conn: Mutex::new(conn),
         allow,
         manager: cli.manager,
         tmux_prefix: cli.tmux_prefix,
         media_root,
+        stt,
     });
 
     // T-086-H: register the manager's runtime-appropriate slash commands
@@ -223,6 +280,15 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
     // through every arm and the operator would see no acknowledgement.
     if msg.photo().is_some() || msg.document().is_some() {
         return handle_inbound_media(&bot, &msg, &state).await;
+    }
+    // T-101: inbound voice note. Detect before the text-routing chain since
+    // `msg.text()` is empty on a voice message — without this, voice would
+    // silently fall through every arm. Voice handling requires both an STT
+    // runtime and a manager-scoped bot (we need someone to route the
+    // transcript to). Either missing → fall through (preserves prior
+    // behavior: voice messages stay unhandled).
+    if msg.voice().is_some() && state.stt.is_some() && state.manager.is_some() {
+        return handle_voice(&bot, &msg, &state).await;
     }
     // T-086-B: capture the inbound Telegram message id on every mailbox
     // row we write so agents (via `inbox_peek`) can read it back as
@@ -1267,6 +1333,185 @@ fn strip_inline_markdown(s: &str) -> String {
     out
 }
 
+// ── T-101 voice STT ────────────────────────────────────────────────────
+
+/// Outcome of a transcription attempt. Three branches stay distinct in
+/// code per the issue: a clean transcript, a "nothing recognizable"
+/// signal (silence / music / noise — agent must not be disturbed), and
+/// a hard failure (network, auth, provider down — surface verbatim).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SttOutcome {
+    Ok(String),
+    Skipped,
+    Failed(String),
+}
+
+/// What the voice handler does next, derived purely from an `SttOutcome`.
+/// Pulled out as data so the mapping is unit-testable without a real Bot.
+#[derive(Debug, PartialEq, Eq)]
+struct VoiceDecision {
+    /// The Telegram reply (sent threaded under the voice message).
+    user_reply: String,
+    /// The mailbox row text. `None` means no inbox row — used for both
+    /// `Skipped` (don't disturb the agent) and `Failed` (no garbage
+    /// transcript reaching the model).
+    inbox_text: Option<String>,
+}
+
+fn map_voice_outcome(outcome: &SttOutcome) -> VoiceDecision {
+    match outcome {
+        SttOutcome::Ok(transcript) => VoiceDecision {
+            user_reply: format!("🎙 \"{transcript}\""),
+            inbox_text: Some(format!("{VOICE_INBOX_PREFIX} {transcript}")),
+        },
+        SttOutcome::Skipped => VoiceDecision {
+            user_reply: "🎙 (couldn't capture anything. did you say something? — skipping)"
+                .to_string(),
+            inbox_text: None,
+        },
+        SttOutcome::Failed(err) => VoiceDecision {
+            user_reply: format!("🎙 transcription failed: {err}"),
+            inbox_text: None,
+        },
+    }
+}
+
+/// Inbound voice handler. Caller has already verified `msg.voice()` is
+/// `Some`, the bot is manager-scoped, and an `SttRuntime` is configured.
+/// Mirrors `handle_inbound_media`'s shape: download → provider call →
+/// branch on outcome → optionally insert mailbox row → reply (threaded).
+async fn handle_voice(bot: &Bot, msg: &Message, state: &State) -> ResponseResult<()> {
+    let manager = state.manager.as_deref().expect("checked by caller");
+    let stt = state.stt.as_ref().expect("checked by caller");
+    let Some((project, _)) = manager.split_once(':') else {
+        return Ok(());
+    };
+    let Some(voice) = msg.voice() else {
+        return Ok(());
+    };
+    let file_id = voice.file.id.clone();
+    let inbound_msg_id: i64 = msg.id.0 as i64;
+    let reply_to = ReplyParameters::new(msg.id);
+
+    // Soft cue while the provider call is in flight. Best-effort — a
+    // typing-action failure should not cancel the actual transcription.
+    let _ = bot.send_chat_action(msg.chat.id, ChatAction::Typing).await;
+
+    let audio = match download_voice_bytes(bot, &file_id).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let decision = map_voice_outcome(&SttOutcome::Failed(err));
+            bot.send_message(msg.chat.id, decision.user_reply)
+                .reply_parameters(reply_to)
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let outcome = transcribe(&audio, stt).await;
+    let decision = map_voice_outcome(&outcome);
+
+    if let Some(inbox_text) = decision.inbox_text.as_deref() {
+        let c = state.conn.lock().await;
+        // The verify-reply is about to tell the operator what was heard,
+        // which raises their expectation that the agent got it. If the
+        // INSERT fails we still send the reply (matches the existing
+        // text/dm paths) but log loudly so the drop is diagnosable —
+        // mirrors the `tracing::error!` in `handle_inbound_media`.
+        if let Err(e) = c.execute(
+            "INSERT INTO messages
+                (project_id, sender, recipient, text, sent_at, telegram_msg_id)
+             VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4)",
+            params![project, manager, inbox_text, inbound_msg_id],
+        ) {
+            tracing::error!(
+                "voice transcript INSERT failed for {manager}: {e} (operator was \
+                 told what was heard but the agent will not receive it)"
+            );
+        }
+    }
+
+    bot.send_message(msg.chat.id, decision.user_reply)
+        .reply_parameters(reply_to)
+        .await?;
+    Ok(())
+}
+
+/// Stream a Telegram-hosted voice file into memory. Audio is ~tens of KB
+/// per voice note (Telegram caps voice at 60s OGG OPUS), so we collect
+/// into a `Vec<u8>` rather than touching disk — the bytes hit the Groq
+/// multipart body and are dropped, no on-disk artifact survives.
+async fn download_voice_bytes(bot: &Bot, file_id: &str) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncWriteExt;
+    let file = bot
+        .get_file(file_id)
+        .await
+        .map_err(|e| format!("get_file: {e}"))?;
+    let mut buf: Vec<u8> = Vec::with_capacity(file.size as usize);
+    bot.download_file(&file.path, &mut buf)
+        .await
+        .map_err(|e| format!("download_file: {e}"))?;
+    buf.flush().await.ok();
+    Ok(buf)
+}
+
+/// Provider dispatch. v1 has one arm (`groq`); adding OpenAI Whisper or
+/// whisper.cpp later is one match arm here, no plugin framework needed.
+async fn transcribe(audio: &[u8], stt: &SttRuntime) -> SttOutcome {
+    match stt.provider.as_str() {
+        "groq" => transcribe_groq(audio, stt).await,
+        other => SttOutcome::Failed(format!("unknown stt provider `{other}`")),
+    }
+}
+
+/// Groq Whisper transcription. The OpenAI-compatible endpoint accepts a
+/// multipart form with `file`, `model`, optional `language`, and
+/// `response_format=text` for a plain-text body. An empty/whitespace
+/// response is treated as `Skipped` (silence, music, noise) — non-empty
+/// transcripts are `Ok`.
+async fn transcribe_groq(audio: &[u8], stt: &SttRuntime) -> SttOutcome {
+    let part = match reqwest::multipart::Part::bytes(audio.to_vec())
+        .file_name("voice.ogg")
+        .mime_str("audio/ogg")
+    {
+        Ok(p) => p,
+        Err(e) => return SttOutcome::Failed(format!("multipart: {e}")),
+    };
+    let mut form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("model", stt.model.clone())
+        .text("response_format", "text");
+    if let Some(lang) = &stt.language {
+        form = form.text("language", lang.clone());
+    }
+
+    let resp = stt
+        .http
+        .post("https://api.groq.com/openai/v1/audio/transcriptions")
+        .bearer_auth(&stt.api_key)
+        .multipart(form)
+        .send()
+        .await;
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => return SttOutcome::Failed(format!("groq request: {e}")),
+    };
+    let status = resp.status();
+    let body = match resp.text().await {
+        Ok(b) => b,
+        Err(e) => return SttOutcome::Failed(format!("groq read body: {e}")),
+    };
+    if !status.is_success() {
+        return SttOutcome::Failed(format!("groq {status}: {}", body.trim()));
+    }
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        SttOutcome::Skipped
+    } else {
+        SttOutcome::Ok(trimmed.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2243,5 +2488,55 @@ mod tests {
             .unwrap();
         assert_eq!(kind.as_deref(), Some("media_error"));
         assert!(sp.unwrap().contains("502 bad gateway"));
+    }
+
+    // ── T-101 voice STT mapping ────────────────────────────────
+
+    #[test]
+    fn map_voice_outcome_ok_yields_quoted_reply_and_prefixed_inbox_row() {
+        let d = map_voice_outcome(&SttOutcome::Ok("hello team".into()));
+        assert_eq!(d.user_reply, "🎙 \"hello team\"");
+        assert_eq!(
+            d.inbox_text.as_deref(),
+            Some("🎙 (transcribed voice, may have misspellings): hello team")
+        );
+        // Pin the prefix constant so future renames flag through this test.
+        assert!(d
+            .inbox_text
+            .as_deref()
+            .unwrap()
+            .starts_with(VOICE_INBOX_PREFIX));
+    }
+
+    #[test]
+    fn map_voice_outcome_skipped_yields_no_inbox_row() {
+        let d = map_voice_outcome(&SttOutcome::Skipped);
+        assert!(d.inbox_text.is_none());
+        // Skipped vs Failed must stay distinct (per issue, conflating
+        // them is a UX bug). The skipped phrasing asks if the operator
+        // said something — failed messages name the failure.
+        assert!(d.user_reply.contains("couldn't capture anything"));
+        assert!(!d.user_reply.contains("failed"));
+    }
+
+    #[test]
+    fn map_voice_outcome_failed_yields_no_inbox_row_and_surfaces_error() {
+        let d = map_voice_outcome(&SttOutcome::Failed("network down".into()));
+        assert!(d.inbox_text.is_none());
+        assert!(d.user_reply.contains("failed"));
+        assert!(d.user_reply.contains("network down"));
+        // And the failure shape must NOT match the skipped phrasing —
+        // the operator needs to know whether they were heard or not.
+        assert!(!d.user_reply.contains("couldn't capture"));
+    }
+
+    #[test]
+    fn voice_inbox_prefix_matches_issue_spec() {
+        // Pin the exact string the issue spec calls for, so a future
+        // rename can't silently drift the model-facing contract.
+        assert_eq!(
+            VOICE_INBOX_PREFIX,
+            "🎙 (transcribed voice, may have misspellings):"
+        );
     }
 }

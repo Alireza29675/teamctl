@@ -364,6 +364,31 @@ pub struct TelegramConfig {
     /// Env var holding a comma-separated list of authorized chat ids.
     /// Default: `TEAMCTL_TG_<MANAGER>_CHATS`.
     pub chat_ids_env: String,
+    /// Optional speech-to-text provider for voice messages. When set,
+    /// inbound Telegram voice notes are transcribed and forwarded to the
+    /// agent prefixed so the model knows the input came from audio.
+    /// Absent → voice messages stay unhandled (default).
+    #[serde(default)]
+    pub speech_to_text: Option<SttConfig>,
+}
+
+/// Speech-to-text settings for the per-manager Telegram bot. The provider
+/// arm is the only switch v1 needs (`groq`); adding OpenAI Whisper or
+/// whisper.cpp later is one match arm in `team-bot`'s transcribe function.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SttConfig {
+    /// Provider arm. v1: `groq`.
+    pub provider: String,
+    /// Env var holding the provider's API key (mirrors `bot_token_env`).
+    /// The actual secret lives in `.team/.env` and is resolved by
+    /// `teamctl bot up` at spawn time before being passed to `team-bot`.
+    pub api_key_env: String,
+    /// Provider model id (e.g. `whisper-large-v3` for Groq).
+    pub model: String,
+    /// Optional ISO-639 language hint forwarded verbatim to the provider
+    /// (e.g. `en`, `fa`). When unset, the provider auto-detects.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 impl Agent {
@@ -546,6 +571,51 @@ mod tests {
         let tg = a.telegram().expect("telegram parsed");
         assert_eq!(tg.bot_token_env, "T");
         assert_eq!(tg.chat_ids_env, "C");
+        assert!(tg.speech_to_text.is_none());
+    }
+
+    #[test]
+    fn agent_telegram_block_parses_speech_to_text() {
+        let yaml = "\
+interfaces:
+  telegram:
+    bot_token_env: T
+    chat_ids_env: C
+    speech_to_text:
+      provider: groq
+      api_key_env: GROQ_API_KEY
+      model: whisper-large-v3
+      language: en
+";
+        let a: Agent = serde_yaml::from_str(yaml).unwrap();
+        let stt = a
+            .telegram()
+            .and_then(|t| t.speech_to_text.as_ref())
+            .expect("speech_to_text parsed");
+        assert_eq!(stt.provider, "groq");
+        assert_eq!(stt.api_key_env, "GROQ_API_KEY");
+        assert_eq!(stt.model, "whisper-large-v3");
+        assert_eq!(stt.language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn agent_telegram_block_parses_speech_to_text_without_language() {
+        let yaml = "\
+interfaces:
+  telegram:
+    bot_token_env: T
+    chat_ids_env: C
+    speech_to_text:
+      provider: groq
+      api_key_env: K
+      model: whisper-large-v3
+";
+        let a: Agent = serde_yaml::from_str(yaml).unwrap();
+        let stt = a
+            .telegram()
+            .and_then(|t| t.speech_to_text.as_ref())
+            .expect("speech_to_text parsed");
+        assert!(stt.language.is_none());
     }
 
     #[test]

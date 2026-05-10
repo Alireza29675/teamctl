@@ -6,6 +6,18 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ### Added
 
+- **Telegram voice messages via Groq Whisper** (T-101). When
+  `interfaces.telegram.speech_to_text` is set on a manager, voice
+  notes sent to that bot are transcribed via the Groq STT API and
+  forwarded to the manager prefixed `🎙 (transcribed voice, may have
+  misspellings):` so the model knows the input came from audio. The
+  bot replies with `🎙 "<transcript>"` so the operator can verify what
+  was heard. Silence / unrecognizable audio yields a "couldn't capture
+  anything" reply with no inbox row (the agent stays undisturbed);
+  provider failures surface a clear error and also skip the inbox.
+  Opt-in per manager — `speech_to_text:` absent preserves existing
+  behavior. The `startup-team` cookbook shows the wiring on its
+  `founder` bot.
 - **`tools/install.sh` bundles `teamctl-ui`** (T-099). The installer's
   binary loop now fetches the `teamctl-ui` tarball alongside `teamctl`,
   `team-mcp`, and `team-bot`. The cargo-dist tarball matrix already

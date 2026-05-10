@@ -27,6 +27,16 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_FOUNDER_TOKEN
         chat_ids_env: TEAMCTL_TG_FOUNDER_CHATS
+        # Voice messages: transcribed via Groq Whisper and forwarded to
+        # the founder agent. Drop the block to disable. The agent
+        # receives the transcript prefixed with
+        # `🎙 (transcribed voice, may have misspellings):` so the model
+        # knows the input came from audio.
+        speech_to_text:
+          provider: groq
+          api_key_env: GROQ_API_KEY
+          model: whisper-large-v3
+          # language: en   # optional ISO-639 hint; auto-detect otherwise.
 
   product_manager:
     runtime: claude-code

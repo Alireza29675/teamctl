@@ -72,6 +72,12 @@ You'll see two Telegram chats — one per bot. DM the founder bot with
 big-picture questions ("what are we really trying to prove?"). DM the
 product bot with execution questions ("when can we ship invite links?").
 
+The founder bot also accepts **voice messages** — they're transcribed
+via Groq Whisper and forwarded to the founder agent. The bot replies
+with the transcript so you can verify what was heard. Drop the
+`speech_to_text:` block from `.team/projects/startup.yaml` (or unset
+`GROQ_API_KEY`) to turn it off.
+
 ## Shape of a typical day
 
 1. Owner DMs founder bot: *"I want to talk about pricing."*
