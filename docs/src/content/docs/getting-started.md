@@ -2,16 +2,16 @@
 title: Getting started
 ---
 
-If you're hand-authoring `team-compose.yaml` and skipping interactive `init`, read [How to think about agent teams](/concepts/teams/) first — it's the cognitive frame the `init` flow would have walked you through.
+If you're hand-authoring `team-compose.yaml` and skipping interactive `init`, read [How to think about agent teams](/concepts/teams/) first: it's the cognitive frame the `init` flow would have walked you through.
 
 ## Prerequisites
 
 - Linux (Ubuntu 22.04+, Debian 12+, Arch) or macOS.
 - `tmux`, `git`.
 - The runtime(s) you plan to use on `$PATH`:
-  - [Claude Code](https://code.claude.com/) — `claude`
-  - [Codex CLI](https://openai.com/codex) — `codex`
-  - [Gemini CLI](https://ai.google.dev/gemini-cli) — `gemini`
+  - [Claude Code](https://code.claude.com/): `claude`
+  - [Codex CLI](https://openai.com/codex): `codex`
+  - [Gemini CLI](https://ai.google.dev/gemini-cli): `gemini`
 
 ## Install
 
@@ -33,7 +33,7 @@ cargo install --path crates/team-bot    # only if you want the Telegram adapter
 
 ## Your first team
 
-The fastest path is the guided one — `/teamctl:init` runs a discovery conversation that surfaces the *domains* in your work and proposes a team shape around them:
+The fastest path is the guided one: `/teamctl:init` runs a discovery conversation that surfaces the *domains* in your work and proposes a team shape around them:
 
 ```bash
 cd /path/to/your/project
@@ -73,8 +73,8 @@ rm -rf state/           # full reset
 
 ## Next
 
-- [How to think about agent teams](/concepts/teams/) — the methodology
-- [Concepts · Projects](/concepts/projects/) — how project isolation works
-- [Concepts · HITL](/concepts/hitl/) — keeping agents from shipping bad content
-- [Reference · team-compose.yaml](/reference/team-compose-yaml/) — the full schema
-- [Guide · Telegram bot](/guides/telegram-bot/) — wiring managers to chat
+- [How to think about agent teams](/concepts/teams/): the methodology
+- [Concepts · Projects](/concepts/projects/): how project isolation works
+- [Concepts · HITL](/concepts/hitl/): keeping agents from shipping bad content
+- [Reference · team-compose.yaml](/reference/team-compose-yaml/): the full schema
+- [Guide · Telegram bot](/guides/telegram-bot/): wiring managers to chat

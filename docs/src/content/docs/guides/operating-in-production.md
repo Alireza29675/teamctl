@@ -41,16 +41,16 @@ Back it up the way you back up any SQLite DB (VACUUM INTO, litestream, or copy w
 
 ## Observability
 
-- `teamctl status` — agent state + inbox depth per agent.
-- `teamctl budget` — 24 h message / approval / USD counts per project.
-- `teamctl bridge list` — open and recently expired inter-project links.
-- `teamctl attach <project>:<agent>` — raw runtime TTY (read-only by default; pass `--rw` to type into the pane). Internally a `tmux attach -t <tmux_prefix><project>-<agent>` where `tmux_prefix` is `a-` by default and configurable in `team-compose.yaml`.
-- `TEAMCTL_LOG=debug teamctl up` — verbose tracing from the control plane.
+- `teamctl status`: agent state + inbox depth per agent.
+- `teamctl budget`: 24 h message / approval / USD counts per project.
+- `teamctl bridge list`: open and recently expired inter-project links.
+- `teamctl attach <project>:<agent>`: raw runtime TTY (read-only by default; pass `--rw` to type into the pane). Internally a `tmux attach -t <tmux_prefix><project>-<agent>` where `tmux_prefix` is `a-` by default and configurable in `team-compose.yaml`.
+- `TEAMCTL_LOG=debug teamctl up`: verbose tracing from the control plane.
 
 ## Security posture
 
-- Give each interface adapter the minimum token scope it needs — Telegram bots can be restricted by `authorized_chat_ids`.
-- The HITL gate denies sensitive actions by default. Don't remove items from `hitl.globally_sensitive_actions` — add `auto_approve_windows` with tight `until:` when you need time-limited automation.
+- Give each interface adapter the minimum token scope it needs: Telegram bots can be restricted by `authorized_chat_ids`.
+- The HITL gate denies sensitive actions by default. Don't remove items from `hitl.globally_sensitive_actions`: add `auto_approve_windows` with tight `until:` when you need time-limited automation.
 - Runtimes (`claude`, `codex`, `gemini`) can do whatever you permit them to do. Use `permission_mode: plan` to make an agent read-only.
 
 ## When something goes wrong

@@ -2,9 +2,9 @@
 title: Your first team
 ---
 
-Two paths into a running team — pick whichever fits how you work.
+Two paths into a running team: pick whichever fits how you work.
 
-## Path 1 — guided (recommended)
+## Path 1: guided (recommended)
 
 If you have Claude Code installed, the plugin walks you through a real discovery conversation:
 
@@ -15,9 +15,9 @@ claude /teamctl:init
 
 It surfaces the *domains* in your work, proposes a team shape around them, scaffolds `.team/` to disk, and brings the team up. Read [How to think about agent teams](/concepts/teams/) for the methodology the conversation is built on.
 
-## Path 2 — start from a real example
+## Path 2: start from a real example
 
-Pick the example closest to your work, copy it, edit. The `personal-research` example is the smallest valid team — one agent, one project, Claude Code:
+Pick the example closest to your work, copy it, edit. The `personal-research` example is the smallest valid team: one agent, one project, Claude Code:
 
 ```bash
 cp -r teamctl/examples/personal-research ~/my-team
@@ -38,13 +38,13 @@ teamctl send research:buddy "what's on my plate?"
 
 Whichever path you took, `teamctl up` renders these under `.team/state/`:
 
-- `envs/<project>-<agent>.env` — environment for the agent wrapper
-- `mcp/<project>-<agent>.json` — MCP config pointing at `team-mcp`
-- `mailbox.db` — SQLite mailbox (WAL mode)
+- `envs/<project>-<agent>.env`: environment for the agent wrapper
+- `mcp/<project>-<agent>.json`: MCP config pointing at `team-mcp`
+- `mailbox.db`: SQLite mailbox (WAL mode)
 
 ## Change something
 
-Edit a role prompt and run `teamctl reload` — only the affected agents restart, others are untouched. Same for the project YAML; `reload` picks up adds, drops, and renames.
+Edit a role prompt and run `teamctl reload`: only the affected agents restart, others are untouched. Same for the project YAML; `reload` picks up adds, drops, and renames.
 
 ## What's next
 
