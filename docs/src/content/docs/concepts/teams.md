@@ -4,7 +4,7 @@ title: How to think about agent teams
 
 We're excited to see what you build with teamctl.
 
-teamctl is opinionated about its building blocks: persistent agents with their own identity and memory, durable mailboxes, supervised processes, named channels with declared membership (so who reads and writes each channel is part of the team-compose file, not negotiated at runtime), and a `reports_to` hierarchy. Those are the primitives. They shape what kind of work you can do with the tool.
+teamctl is opinionated about its building blocks: persistent agents with their own identity and memory, durable mailboxes, supervised processes, Slack-like channels to broadcast messages instead of agents DMing everyone one by one, and a `reports_to` hierarchy. Those are the primitives. They shape what kind of work you can do with the tool.
 
 teamctl is *not* opinionated about the team shape you build with those primitives. How many agents you run, what each one owns, who reports to whom, what channels exist: that's yours.
 
