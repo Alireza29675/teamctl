@@ -334,10 +334,16 @@ fn footer_line() -> String {
 /// Compose the framed single-version "what's new" terminal block.
 /// Non-conforming body (no `# ` headings, or contains `##`/code-fence)
 /// → raw body after the frame, no styling. Footer link at the bottom.
+/// Empty body (or body truncated to empty by cargo-dist stripping)
+/// elides the body+blank-line so the output is `frame + footer` with
+/// exactly one blank line between, not two.
 pub fn render(version: &str, body: &str) -> String {
     let mut out = frame_single(version);
-    out.push_str(&render_body(body));
-    out.push('\n');
+    let body_rendered = render_body(body);
+    if !body_rendered.is_empty() {
+        out.push_str(&body_rendered);
+        out.push('\n');
+    }
     out.push_str(&footer_line());
     out.push('\n');
     out
@@ -345,7 +351,9 @@ pub fn render(version: &str, body: &str) -> String {
 
 /// Compose the aggregate "what's new" block — range frame, then each
 /// release as a `v<X.Y.Z>` subheader followed by its body, footer at
-/// the bottom. Entries should be ordered oldest-first.
+/// the bottom. Entries should be ordered oldest-first. Empty per-entry
+/// bodies (post-truncation) elide their blank-line so we don't ship
+/// double-blank gaps between subheaders.
 pub(crate) fn render_range(from: &str, to: &str, entries: &[ReleaseEntry]) -> String {
     let mut out = frame_range(from, to);
     for (i, e) in entries.iter().enumerate() {
@@ -353,7 +361,10 @@ pub(crate) fn render_range(from: &str, to: &str, entries: &[ReleaseEntry]) -> St
             out.push('\n');
         }
         out.push_str(&format!("v{}\n", e.version.trim_start_matches('v')));
-        out.push_str(&render_body(&e.body));
+        let body_rendered = render_body(&e.body);
+        if !body_rendered.is_empty() {
+            out.push_str(&body_rendered);
+        }
     }
     out.push('\n');
     out.push_str(&footer_line());
@@ -638,6 +649,62 @@ mod tests {
         let rendered = render("0.8.0", "");
         assert!(rendered.starts_with("✨ What's new in v0.8.0\n\n"));
         assert!(rendered.contains("📖 Full changelog"));
+    }
+
+    #[test]
+    fn render_empty_body_has_no_double_blank_before_footer() {
+        // #201: empty body must produce `frame + blank + footer`,
+        // never `frame + blank + blank + footer`.
+        let rendered = render("0.8.0", "");
+        assert_eq!(
+            rendered,
+            "✨ What's new in v0.8.0\n\n📖 Full changelog: https://teamctl.run/changelog\n",
+            "expected exactly one blank line between frame and footer, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn render_install_at_top_truncated_body_has_no_double_blank() {
+        // #201 / #197 interaction: when truncation drops a
+        // cargo-dist-only body down to empty, render() must not emit
+        // a stray extra blank line.
+        let body = "# teamctl 0.8.1\n## Install\n```sh\nnoise\n```\n";
+        let rendered = render("0.8.1", body);
+        assert_eq!(
+            rendered,
+            "✨ What's new in v0.8.1\n\n📖 Full changelog: https://teamctl.run/changelog\n",
+            "truncated-to-empty body must not double-blank, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn render_range_empty_entry_body_has_no_double_blank_between_subheaders() {
+        // #201 in aggregate path: an entry whose body truncates to
+        // empty should NOT leave a stray blank line under its
+        // subheader. Two entries, second has empty body — gap between
+        // subheaders should be exactly one blank line.
+        let entries = vec![
+            ReleaseEntry {
+                version: "0.8.1".into(),
+                body: "# A\nDesc A.".into(),
+            },
+            ReleaseEntry {
+                version: "0.8.2".into(),
+                body: "# teamctl 0.8.2\n## Install\n".into(),
+            },
+        ];
+        let rendered = render_range("0.8.0", "0.8.2", &entries);
+        // Between the styled description of entry-1 and the v0.8.2
+        // subheader, there must be exactly one blank line — i.e. the
+        // pattern `\n\nv0.8.2\n`, and no `\n\n\nv0.8.2\n`.
+        assert!(
+            rendered.contains("\n\nv0.8.2\n"),
+            "expected single blank line before v0.8.2 subheader, got: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("\n\n\nv0.8.2\n"),
+            "expected no double blank line before v0.8.2 subheader, got: {rendered:?}"
+        );
     }
 
     #[test]
