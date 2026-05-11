@@ -4,142 +4,50 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-05-11
+
 ### Added
 
-- **Mouse-wheel routing in `teamctl ui`** (T-158). The TUI now
-  enables mouse capture on startup and routes wheel events by
-  focused pane. With **Detail** focused, each wheel tick walks the
-  agent's tmux pane history — wheel-up enters copy-mode and
-  scrolls back through what's already been printed, wheel-down
-  walks back toward live (same observable behaviour as a regular
-  `tmux attach` + wheel). With **Roster** focused, the wheel steps
-  the agent selection up/down — same step size as `j` / `k`. Modal
-  overlays (compose, approvals, picker, splash) ignore mouse input
-  so a surprise wheel-tick can't route past them. Mouse capture is
-  released on every exit path, including panic. Keyboard scrolling
-  continues to work alongside. Mailbox row-cursor scrolling will
-  land with T-131; the routing scaffold is already in place for
-  that fill-in.
-
-- **Daily update-availability nudge on `teamctl status` and
-  `teamctl up`** (T-129). When a newer release is published on
-  GitHub, both commands surface a single line on stderr:
-  `update available: <current> → <latest> · run \`teamctl update\``.
-  The check hits the GitHub releases API at most once per day per
-  host — results cache to `state/update-check.json` keyed on local
-  date plus the running binary's version, so a fresh `teamctl
-  update` invalidates the cache and the banner disappears
-  immediately rather than waiting for tomorrow. Network failures,
-  API rate-limits, parse errors, and IO errors are all silent so
-  the banner can't break a script piping `teamctl status`.
-
-- **`role_prompt` accepts a list of paths** (T-103). The compose
-  schema's `role_prompt` field now accepts either a single path
-  (current behavior, unchanged) or a list of paths concatenated in
-  declared order at agent boot. Lets a role compose from a shared
-  base plus per-agent specifics without duplicating role copy:
-  ```yaml
-  managers:
-    pm:
-      role_prompt:
-        - roles/_base-engineer.md
-        - roles/pm.md
-  ```
-  The list form materializes
-  `state/role_prompts/<project>-<agent>.md` (em-dash separator
-  between sources) and points the runtime there. The file is
-  re-written unconditionally on every `up` / `reload`, so editing
-  any source flows into the agent's prompt at the next render —
-  no stale concat artifacts. Single-form behavior, fingerprint
-  shape, and `SYSTEM_PROMPT_PATH` are byte-identical to the
-  pre-T-103 path; existing composes upgrade with zero forced
-  agent restarts. Empty `role_prompt: ""` and `role_prompt: []`
-  are now rejected at validate (was a silent hole pre-T-103).
-
-- **`Sent` mailbox tab in the TUI** (T-122). The mailbox pane gains
-  a fourth tab, `Sent`, between `Inbox` and `Channel`. It lists
-  every row whose sender is the focused agent — DMs the agent
-  sent, telegram replies, channel posts, and wire broadcasts —
-  newest first, one row per outgoing message, reusing the
-  existing row renderer. The cycle is now `Inbox → Sent →
-  Channel → Wire` (`→`/`←` to walk when the mailbox pane is
-  focused). Closes the "did this agent actually emit X" debug
-  loop without pivoting to the recipient — load-bearing for
-  Telegram replies, where the operator otherwise has to focus
-  the user-side mailbox to verify a reply went out.
-
-- **Lazy inbox delivery** (T-104, #104). Channel notifications now
-  arrive as short stubs (`📬 1 new message from <sender>: "<first 80
-  chars>"`) instead of full bodies, so a new message no longer evicts
-  the agent's working memory. The agent drills in via the new
-  `inbox_read` MCP tool, which fetches full bodies and auto-resolves
-  the rows in one transaction. Stubs carry `meta.lazy="1"` so the
-  agent can branch its behavior. Two opt-outs: per-message
-  `/readnow ` prefix on Telegram messages routes the body inline;
-  global env var `TEAM_LAZY_INBOX=0` restores pre-T-104 full-body
-  delivery. `inbox_peek` keeps non-destructive semantics for
-  post-restart catch-up.
-- **Telegram voice messages via Groq Whisper** (T-101). When
-  `interfaces.telegram.speech_to_text` is set on a manager, voice
-  notes sent to that bot are transcribed via the Groq STT API and
-  forwarded to the manager prefixed `🎙 (transcribed voice, may have
-  misspellings):` so the model knows the input came from audio. The
-  bot replies with `🎙 "<transcript>"` so the operator can verify what
-  was heard. Silence / unrecognizable audio yields a "couldn't capture
-  anything" reply with no inbox row (the agent stays undisturbed);
-  provider failures surface a clear error and also skip the inbox.
-  Opt-in per manager — `speech_to_text:` absent preserves existing
-  behavior. The `startup-team` cookbook shows the wiring on its
-  `founder` bot.
-- **`tools/install.sh` bundles `teamctl-ui`** (T-099). The installer's
-  binary loop now fetches the `teamctl-ui` tarball alongside `teamctl`,
-  `team-mcp`, and `team-bot`. The cargo-dist tarball matrix already
-  produces these on every release; only the installer needed to start
-  pulling them. `teamctl ui` is now available out of the box after a
-  fresh `curl … | sh` install.
-- **`tools/install.sh` offers Claude Code plugin install/update**
-  (T-099). When `claude` is on PATH and the script runs under a real
-  TTY, `install.sh` prompts once: *install teamctl Claude Code plugin?
-  [y/N]*. Accepting runs `claude plugin marketplace add` (skip-if-
-  already-registered) + `claude plugin install teamctl@teamctl
-  --scope user`. When the plugin is already installed it silently
-  refreshes via `claude plugin marketplace update` + `claude plugin
-  update`. Pipe-style invocations (`curl … | sh`) and CI workers stay
-  silent because there's no `/dev/tty`; the discoverable interactive
-  form is `bash -c "$(curl -fsSL https://teamctl.run/install)"`. No
-  behavior change for non-Claude-Code users.
+- Voice notes on Telegram are transcribed to text via Groq STT and forwarded to the manager (#105).
+- File attachments in compose: path-input overlay in the TUI plus agent reads via the new `read_attachment` MCP tool (#139, #147).
+- Stream-keys (`Ctrl+E`) in the mailbox pane forwards subsequent keystrokes straight to the focused agent's tmux pane (#114).
+- `Sent` tab in the mailbox pane shows the focused agent's outbox alongside `Inbox`, `Channel`, and `Wire` (#127).
+- Mouse-wheel scrolling in `teamctl ui` routes through the focused pane — copy-mode history on `Detail`, agent step on `Roster` (#163).
+- `teamctl sessions` lists every tmux session across projects in one view (#112).
+- `teamctl update` refreshes the Claude Code plugin alongside the binaries (#148).
+- `role_prompt` accepts a list of markdown paths, concatenated in declared order at agent boot (#142).
+- Per-role `ways-of-working.md` convention — gitignored, lazy-created, read at the start of every tick (#136, #143).
+- `compact_self` MCP tool — agents tidy their own context without an external nudge (#128).
+- `show_typing` MCP tool — managers send a "typing…" indicator to Telegram (#123).
+- Lazy inbox delivery: channel notifications arrive as short stubs; `/readnow` prefix bypasses for per-message full-body delivery (#113).
+- Always-on session resume via deterministic per-agent UUID (#151).
+- Daily update-availability nudge on `teamctl status` and `teamctl up` when a newer release is on GitHub (#150).
+- Mailbox tab navigation via arrow keys (#125).
+- Per-project scope for `teamctl up` / `down` / `reload` (#135).
+- `teamctl init` replaces the template picker with a domain-discovery conversation (#157).
+- Telegram bot renders a markdown subset to Telegram HTML parse mode (#137).
+- HITL approver name is derived from the Telegram callback sender (#120).
 
 ### Fixed
 
-- **`agent-wrapper.sh` no longer strands agents at Claude Code's
-  one-shot dialogs** (T-094, T-107). The auto-confirm watcher in
-  the wrapper now matches the bypass-permissions warning (shown on
-  first launch under `--dangerously-skip-permissions` when the
-  acceptance marker isn't on disk — fresh `$HOME`, fresh user, new
-  VM) and the usage-limit prompt (`What do you want to do? · 1.
-  Stop and wait for limit to reset · 2. Switch to extra usage · 3.
-  Upgrade your plan`) in addition to the existing
-  `Loading development channels` dialog. Default option is taken
-  in each case (Enter); for the limit prompt this means the agent
-  waits until the window resets and resumes naturally. The watcher
-  now runs for the full lifetime of the runtime instead of a
-  60-second boot window, since the limit prompt can fire at any
-  point during a session. Thanks to Hamed Fathi for surfacing
-  the bypass-permissions deadlock.
+- HITL approval outcome no longer hardcodes the approver name (#120).
+- Telegram bot html-escapes agent identifiers in HITL cards and attribution lines (#145).
+- `agent-wrapper.sh` auto-confirms the bypass-permissions and usage-limit dialogs so first launches and rate-limit windows don't strand agents (#121). Thanks to Hamed Fathi for surfacing the bypass-permissions deadlock.
+- `claude` TUI renders at the full pane size instead of `80×24` (#99).
+- `teamctl ui` Roster column renamed to Agents; Triptych Detail/Mailbox split tuned to 60/40 (#95, #96).
+- Telegram bot restricts `fence_marker` language tags to `[A-Za-z0-9_-]` (attribute-injection hardening) (#154).
+- Deflake `channels_notify` under loaded CI runners (#119, #144).
+- Deflake `real_scanner_for_spec_timeout_returns_rejected` (#152).
 
 ### Changed
 
-- **`teamctl ui` Triptych default layout reshaped + Roster column
-  renamed to Agents** (T-098). The default Triptych view now renders
-  as a sidebar plus right-stack: the Agents column (previously
-  "Roster") sits on the left at its existing 28-cell width, and the
-  right side stacks Detail (60% of the right-stack height) above
-  Mailbox (40%). The pane focus
-  cycle (`Tab` / `Shift+Tab`) is unchanged — `Agents → Detail →
-  Mailbox → Agents` reads spatially as left → top-right →
-  bottom-right → wrap. The onboarding tutorial and snapshot fixtures
-  are updated for the new geometry. The internal `Pane::Roster`
-  enum variant is preserved (no API churn for downstream callers).
+- `tools/install.sh` is now served as a static asset on `teamctl.run/install` and regenerated on every docs build (#92, #93).
+- `tools/install.sh` bundles `teamctl-ui` and offers the Claude Code plugin install/update on interactive runs (#97).
+- README rewritten with an examples-first flow (#161).
+- Docs site polish sweep: legacy landing retired, modernized guides, ways-of-working page (#162).
+- Six relatable example teams replace the SaaS-only example (#165).
+- New "How to think about agent teams" concept page (#153).
+- Channels-with-ACLs explainer added to the concepts section (#166).
 
 ## [0.7.3] — 2026-05-08
 
