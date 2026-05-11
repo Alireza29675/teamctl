@@ -256,9 +256,16 @@ fn render_participants(buf: &mut Buffer, area: Rect, app: &App) {
             .render(inner, buf);
         return;
     }
+    // T-160: PARTICIPANTS pane shows `display_name` when set, falling
+    // back to the YAML key (`info.agent`) — same short-form shape the
+    // roster uses, since this list is project-scoped and the canonical
+    // id would over-prefix every line with the project name.
     let lines: Vec<Line<'_>> = participants
         .iter()
-        .map(|info| Line::raw(format!("  {}", info.agent)))
+        .map(|info| {
+            let label = info.display_name.as_deref().unwrap_or(&info.agent);
+            Line::raw(format!("  {label}"))
+        })
         .collect();
     Paragraph::new(lines).render(inner, buf);
 }

@@ -557,6 +557,45 @@ fn wall_tile_title_renders_display_name_when_set() {
 }
 
 #[test]
+fn participants_pane_renders_display_name_when_set() {
+    // T-160 follow-up: the MailboxFirst PARTICIPANTS pane shows agents
+    // in the focused channel's project. Display names land for agents
+    // that have one set; the short-form fallback (`info.agent`) is
+    // preserved for agents without.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    let team = TeamSnapshot {
+        root: std::path::PathBuf::from("/fixture"),
+        team_name: "writing-team".into(),
+        agents: vec![
+            agent_with_label("writing:manager", "Manager (Lead)", AgentState::Running),
+            synth_agent("writing:worker-1", AgentState::Running, 0, 0),
+        ],
+        channels: vec![teamctl_ui::data::ChannelInfo {
+            id: "writing:all".into(),
+            name: "all".into(),
+            project_id: "writing".into(),
+        }],
+    };
+    app.replace_team(team);
+    app.toggle_mailbox_first_layout();
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(
+        s.contains("PARTICIPANTS"),
+        "PARTICIPANTS pane not rendered: {s}"
+    );
+    assert!(
+        s.contains("Manager (Lead)"),
+        "participants missing display_name `Manager (Lead)`: {s}"
+    );
+    assert!(
+        s.contains("worker-1"),
+        "participants missing short-form fallback for agent without display_name: {s}"
+    );
+}
+
+#[test]
 fn mailbox_first_layout_renders_channel_focused_at_120x30() {
     // T-079-C snapshot: MailboxFirst layout (Ctrl+M). Channel list
     // / feed / participants split replaces the Triptych panes;

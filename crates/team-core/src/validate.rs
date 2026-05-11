@@ -207,21 +207,23 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
                 }
             }
             if let Some(dn) = &a.display_name {
-                // T-160: trim before checking so `display_name: "   "`
-                // is rejected as blank rather than slipping through
-                // (whitespace-only labels render as a void cell in the
-                // TUI — same operator-confusion shape as empty).
+                // T-160: validate against trimmed content. Leading /
+                // trailing whitespace doesn't render in the TUI, so
+                // the operator-visible label is what we cap. Both
+                // checks + the `got` count in the too-long error all
+                // run on the trimmed length so the error matches the
+                // count the operator sees in their editor.
                 let trimmed_len = dn.trim().chars().count();
                 if trimmed_len == 0 {
                     errs.push(ValidationError::BlankDisplayName {
                         project: p.project.id.clone(),
                         agent: id.into(),
                     });
-                } else if dn.chars().count() > DISPLAY_NAME_MAX_CHARS {
+                } else if trimmed_len > DISPLAY_NAME_MAX_CHARS {
                     errs.push(ValidationError::DisplayNameTooLong {
                         project: p.project.id.clone(),
                         agent: id.into(),
-                        got: dn.chars().count(),
+                        got: trimmed_len,
                         max: DISPLAY_NAME_MAX_CHARS,
                     });
                 }
@@ -445,6 +447,40 @@ mod tests {
             e,
             ValidationError::BlankDisplayName { .. } | ValidationError::DisplayNameTooLong { .. }
         )));
+    }
+
+    #[test]
+    fn too_long_error_reports_trimmed_length() {
+        // T-160 qa follow-up: both the cap check and the `got` count
+        // run on the trimmed length so the operator-facing error
+        // message matches the visible content they typed. Padding a
+        // 64-char label with surrounding whitespace must still
+        // validate (trimmed length = 64).
+        let mut c = toy_compose("dev");
+        let padded = format!("  {}  ", "x".repeat(DISPLAY_NAME_MAX_CHARS));
+        c.projects[0].managers.get_mut("mgr").unwrap().display_name = Some(padded);
+        assert!(!validate(&c).iter().any(|e| matches!(
+            e,
+            ValidationError::BlankDisplayName { .. } | ValidationError::DisplayNameTooLong { .. }
+        )));
+
+        // Untrimmed 70 chars (66 visible "x" + 4 surrounding spaces) —
+        // 66 visible exceeds the 64 cap; error must report 66, not 70.
+        let mut c2 = toy_compose("dev");
+        let over = format!("  {}  ", "x".repeat(DISPLAY_NAME_MAX_CHARS + 2));
+        c2.projects[0].managers.get_mut("mgr").unwrap().display_name = Some(over);
+        let errs = validate(&c2);
+        let too_long = errs
+            .iter()
+            .find_map(|e| match e {
+                ValidationError::DisplayNameTooLong { got, max, .. } => Some((*got, *max)),
+                _ => None,
+            })
+            .expect("expected DisplayNameTooLong");
+        assert_eq!(
+            too_long,
+            (DISPLAY_NAME_MAX_CHARS + 2, DISPLAY_NAME_MAX_CHARS)
+        );
     }
 
     #[test]
