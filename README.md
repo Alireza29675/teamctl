@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/hero.jpg" alt="teamctl" width="880">
+  <img src="docs/assets/hero.png" alt="teamctl" width="880">
 </p>
 
 # teamctl
