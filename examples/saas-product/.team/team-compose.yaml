@@ -10,7 +10,7 @@ supervisor:
 
 budget:
   daily_usd_limit: 40.0
-  message_ttl_hours: 168 # 7 days — product context compounds over weeks
+  message_ttl_hours: 168 # 7 days. product context compounds over weeks
 
 hitl:
   globally_sensitive_actions:

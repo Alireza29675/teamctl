@@ -16,11 +16,23 @@ managers:
     role_prompt: roles/buddy.md
     permission_mode: auto
     autonomy: low_risk_only
+    can_dm: [curator]
+    can_broadcast: [all]
     # Run `teamctl bot setup` to populate.
     interfaces:
       telegram:
         bot_token_env: TEAMCTL_TG_BUDDY_TOKEN
         chat_ids_env: TEAMCTL_TG_BUDDY_CHATS
 
-# No workers. This is a single-agent team — the buddy owns the
-# research domain end-to-end. See README for why this earns persistence.
+workers:
+  # curator runs on a loop, following the news and sources on your
+  # declared interests, and proactively surfaces what matters to buddy.
+  # buddy frames it for you.
+  curator:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/curator.md
+    permission_mode: auto
+    reports_to: buddy
+    can_dm: [buddy]
+    can_broadcast: [all]

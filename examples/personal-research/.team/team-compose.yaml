@@ -10,7 +10,7 @@ supervisor:
 
 budget:
   daily_usd_limit: 5.0
-  message_ttl_hours: 168 # 7 days — research context compounds, give it room
+  message_ttl_hours: 168 # 7 days. research context compounds, give it room
 
 hitl:
   globally_sensitive_actions:

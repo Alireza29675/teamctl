@@ -6,19 +6,19 @@ broker:
 
 supervisor:
   type: tmux
-  tmux_prefix: nl-
+  tmux_prefix: jobs-
 
 budget:
   daily_usd_limit: 8.0
-  message_ttl_hours: 168 # 7 days — voice and curation context compound
+  message_ttl_hours: 168 # 7 days. Application history compounds over weeks.
 
 hitl:
   globally_sensitive_actions:
-    - publish
     - external_email
+    - publish
 
-# Telegram is configured on the editor in projects/newsletter.yaml.
+# Telegram is configured on the lead in projects/jobs.yaml.
 # Run `teamctl bot setup` to wire it up.
 
 projects:
-  - file: projects/newsletter.yaml
+  - file: projects/jobs.yaml
