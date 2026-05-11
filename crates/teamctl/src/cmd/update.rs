@@ -3,7 +3,7 @@
 //! Detects the install method from `current_exe()`:
 //!
 //! - `…/Cellar/teamctl/…` → Homebrew (`brew upgrade teamctl`).
-//! - `…/.cargo/bin/teamctl` → cargo (`cargo install teamctl team-mcp team-bot --force`).
+//! - `…/.cargo/bin/teamctl` → cargo (`cargo install teamctl teamctl-ui team-mcp team-bot --force`).
 //! - Anything else → shell installer (`curl -fsSL https://teamctl.run/install | sh`).
 //!
 //! The user can override autodetect with `--method <name>` and skip the
@@ -24,6 +24,15 @@ pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Hardcoded — the plugin lives at a fixed marketplace path the README
 /// already documents; v1 doesn't grow a config knob for this.
 const PLUGIN_ID: &str = "teamctl@teamctl";
+
+/// T-188: single source of truth for the workspace binaries `teamctl
+/// update` reinstalls on the cargo path. Used by both the displayed
+/// "About to run:" preview and the actual `cargo install` exec call,
+/// so the two can't drift the way they did when `teamctl-ui` was
+/// silently missing from the exec list. Order matches the shape
+/// `tools/install.sh:91` already ships with so user-visible commands
+/// look identical across install paths.
+const CARGO_INSTALL_CRATES: &[&str] = &["teamctl", "teamctl-ui", "team-mcp", "team-bot"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallMethod {
@@ -211,7 +220,9 @@ impl Plan {
         match self.method {
             InstallMethod::Shell => format!("re-run the shell installer (curl {INSTALL_URL} | sh)"),
             InstallMethod::Homebrew => "brew upgrade teamctl".to_string(),
-            InstallMethod::Cargo => "cargo install teamctl team-mcp team-bot --force".to_string(),
+            InstallMethod::Cargo => {
+                format!("cargo install {} --force", CARGO_INSTALL_CRATES.join(" "))
+            }
         }
     }
 
@@ -251,6 +262,11 @@ fn exec_brew_upgrade() -> Result<()> {
         .status()
         .context("run `brew update`")?;
     require_success(status, "brew update")?;
+    // T-188: the homebrew tap is currently disabled (#3); if/when it
+    // re-enables with separate `teamctl-ui` / `team-mcp` / `team-bot`
+    // formulae, this needs to upgrade all of them — mirror the
+    // `CARGO_INSTALL_CRATES` list above — or the brew path will leak
+    // the same staleness bug the cargo path just shed.
     let status = Command::new("brew")
         .args(["upgrade", "teamctl"])
         .status()
@@ -261,7 +277,9 @@ fn exec_brew_upgrade() -> Result<()> {
 fn exec_cargo_install() -> Result<()> {
     require_on_path("cargo")?;
     let status = Command::new("cargo")
-        .args(["install", "teamctl", "team-mcp", "team-bot", "--force"])
+        .arg("install")
+        .args(CARGO_INSTALL_CRATES)
+        .arg("--force")
         .status()
         .context("run cargo install")?;
     require_success(status, "cargo install")
@@ -562,6 +580,38 @@ mod tests {
     fn extract_tag_name_returns_none_for_empty_value() {
         let blob = r#"{"tag_name":""}"#;
         assert!(extract_tag_name(blob).is_none());
+    }
+
+    #[test]
+    fn cargo_install_crates_includes_all_four_binaries() {
+        // T-188: regression pin. The bug was that `teamctl-ui` silently
+        // dropped out of the cargo install list, leaving operators with
+        // a stale TUI binary across upgrades. The fix centralizes the
+        // crate list as a const used by both `describe()` and
+        // `exec_cargo_install()`, so they can't drift apart again.
+        // Anchoring the const directly here catches a re-introduction.
+        assert_eq!(
+            CARGO_INSTALL_CRATES,
+            &["teamctl", "teamctl-ui", "team-mcp", "team-bot"]
+        );
+    }
+
+    #[test]
+    fn cargo_plan_describe_lists_teamctl_ui() {
+        // Belt-and-suspenders pin: the user-facing "About to run:"
+        // string MUST surface `teamctl-ui`. If a future refactor
+        // disconnects `describe()` from `CARGO_INSTALL_CRATES`, this
+        // fails before the docstring/display drift would surface to
+        // operators.
+        let plan = Plan {
+            method: InstallMethod::Cargo,
+        };
+        let line = plan.describe();
+        assert!(
+            line.contains("teamctl-ui"),
+            "describe() must surface teamctl-ui, got: {line}"
+        );
+        assert!(line.contains("--force"));
     }
 
     #[test]
