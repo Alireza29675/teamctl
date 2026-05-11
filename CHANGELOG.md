@@ -4,6 +4,13 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-05-11
+
+### Fixed
+
+- `agent-wrapper.sh` now starts cleanly on macOS (bash 3.2). The previous `${BOOTSTRAP_PROMPT:=...}` parameter-expansion form tripped a parser bug in bash 3.2 (macOS `/bin/sh`) when the default contained escaped backticks, causing agents to abort immediately after `teamctl up`. Rewritten as a plain `if [ -z ... ]` conditional that parses identically on bash 3.2, bash 4+, and dash. Latent since T-104. (#190, #191)
+- `agent-wrapper.sh` now guards `$CLAUDE_SESSION_ID` and `$CLAUDE_SESSION_NAME` under `set -u`. Previously, if either env var failed to render into the agent env file, the wrapper would abort silently. (#190, #191)
+
 ## [0.8.0] — 2026-05-11
 
 ### Added
