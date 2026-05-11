@@ -229,10 +229,17 @@ enum Command {
     /// Print the GitHub release body for a teamctl version (defaults
     /// to the running binary's version). Same renderer as the
     /// post-update display; non-conforming bodies fall through to raw.
+    /// With `--since <ver>`, prints every release body in (ver, current]
+    /// at or above the curated-display floor.
     Whatsnew {
         /// Version to look up (e.g. `0.7.3`). When omitted, uses the
-        /// running binary's version.
+        /// running binary's version. Ignored when `--since` is set.
         version: Option<String>,
+        /// Aggregate mode: print every release body strictly newer than
+        /// `<ver>` up to and including the running binary's version,
+        /// oldest-first, with one framed range header.
+        #[arg(long)]
+        since: Option<String>,
     },
 
     // ── Internal ────────────────────────────────────────────────────
@@ -343,8 +350,8 @@ fn main() -> Result<()> {
     if let Command::Update { method, check, yes } = cli.command {
         return cmd::update::run(method, check, yes);
     }
-    if let Command::Whatsnew { version } = cli.command {
-        return cmd::whatsnew::run(version);
+    if let Command::Whatsnew { version, since } = cli.command {
+        return cmd::whatsnew::run(version, since);
     }
     if let Command::Sessions { action, json } = cli.command {
         return match action {

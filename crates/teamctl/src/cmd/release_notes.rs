@@ -4,19 +4,41 @@
 //! user-facing voice piece; this module turns its markdown into a
 //! framed terminal block.
 //!
-//! Convention parsed: a markdown `# ` heading is the entry headline;
-//! the paragraph underneath is the description. Multiple entries per
-//! release. Anything that doesn't match falls through to raw body
-//! display — never an error.
+//! Two display modes share the parser + renderer:
+//!
+//! - **Single-version** — `teamctl whatsnew [version]` or a post-update
+//!   call where there's only one body to show. Frame: `✨ What's new
+//!   in v<X.Y.Z>`.
+//! - **Aggregate / range** — `teamctl whatsnew --since X` or a
+//!   post-update call that crossed multiple versions. Frame: `✨
+//!   What's new in v<from> → v<to>`. Each version's body rendered
+//!   below its own `v<X.Y.Z>` subheader, oldest-first.
+//!
+//! Floor: pre-`FLOOR_VERSION` releases (cargo-dist auto-generated
+//! noise) are silently excluded from aggregates. Operator can still
+//! ask for them by name with `teamctl whatsnew <ver>`, but the raw
+//! fallback kicks in since their markdown shape isn't the convention.
 
 use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
+use serde_json::Value;
 
-use crate::cmd::update::CURRENT_VERSION;
+use crate::cmd::update::{compare_versions, VersionOrder, CURRENT_VERSION};
 
 const RELEASES_TAG_API: &str = "https://api.github.com/repos/Alireza29675/teamctl/releases/tags/";
+const RELEASES_LIST_API: &str = "https://api.github.com/repos/Alireza29675/teamctl/releases";
+
+/// First version with curated release-body convention. Anything below
+/// this is cargo-dist auto-generated and silently excluded from
+/// aggregate displays.
+const FLOOR_VERSION: &str = "0.8.0";
+
+/// Public changelog URL referenced in the footer of every rendered
+/// "what's new" block. Lives at the Astro Starlight site (ships in
+/// #169 / T-169 alongside this PR).
+const CHANGELOG_URL: &str = "https://teamctl.run/changelog";
 
 /// ANSI escape opening italic + dim. Pairs with [`STYLE_RESET`].
 const STYLE_DIM_ITALIC: &str = "\x1b[2;3m";
@@ -26,6 +48,14 @@ const STYLE_RESET: &str = "\x1b[0m";
 pub(crate) struct Entry {
     pub headline: String,
     pub description: String,
+}
+
+/// One release as returned by the GitHub /releases list endpoint —
+/// just the two fields the renderer needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReleaseEntry {
+    pub version: String,
+    pub body: String,
 }
 
 /// Fetch the GitHub release-body markdown for a tagged version. The
@@ -61,6 +91,80 @@ fn extract_body_field(json: &str) -> Option<String> {
     } else {
         Some(body)
     }
+}
+
+/// Fetch the list of all GitHub releases (newest-first per the API)
+/// and parse the tag + body fields out of each. Used by the aggregate
+/// (`--since` and post-update multi-version) display.
+pub(crate) fn fetch_releases_list() -> Result<Vec<ReleaseEntry>> {
+    let raw = curl_get(RELEASES_LIST_API)?;
+    let list = parse_releases_list(&raw);
+    if list.is_empty() {
+        bail!("no usable releases in GitHub releases response");
+    }
+    Ok(list)
+}
+
+/// Parse the `/releases` JSON array into `(tag, body)` pairs. Returns
+/// empty Vec on malformed JSON (tolerant: a parse failure on the list
+/// endpoint shouldn't break `teamctl update`'s install path).
+fn parse_releases_list(json: &str) -> Vec<ReleaseEntry> {
+    let v: Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let Some(arr) = v.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|item| {
+            let tag = item
+                .get("tag_name")?
+                .as_str()?
+                .trim_start_matches('v')
+                .to_string();
+            if tag.is_empty() {
+                return None;
+            }
+            let body = item
+                .get("body")
+                .and_then(|b| b.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(ReleaseEntry { version: tag, body })
+        })
+        .collect()
+}
+
+/// `true` when `version` is below the curated-display floor. Pre-floor
+/// bodies are excluded from aggregate displays as cargo-dist noise.
+pub(crate) fn is_below_floor(version: &str) -> bool {
+    matches!(
+        compare_versions(version.trim_start_matches('v'), FLOOR_VERSION),
+        VersionOrder::Older
+    )
+}
+
+/// Select all releases in `(from, to]` that sit at or above the floor.
+/// `from` is exclusive (you've already seen it), `to` is inclusive (it's
+/// the new version). Returned oldest-first so the operator reads in
+/// chronological order.
+pub(crate) fn select_range(all: &[ReleaseEntry], from: &str, to: &str) -> Vec<ReleaseEntry> {
+    let from = from.trim_start_matches('v');
+    let to = to.trim_start_matches('v');
+    let mut selected: Vec<ReleaseEntry> = all
+        .iter()
+        .filter(|r| !is_below_floor(&r.version))
+        .filter(|r| matches!(compare_versions(&r.version, from), VersionOrder::Newer))
+        .filter(|r| !matches!(compare_versions(&r.version, to), VersionOrder::Newer))
+        .cloned()
+        .collect();
+    selected.sort_by(|a, b| match compare_versions(&a.version, &b.version) {
+        VersionOrder::Older => std::cmp::Ordering::Less,
+        VersionOrder::Equal => std::cmp::Ordering::Equal,
+        VersionOrder::Newer => std::cmp::Ordering::Greater,
+    });
+    selected
 }
 
 /// Parse `# Headline\nDescription` pairs out of a release-body markdown
@@ -113,24 +217,23 @@ fn has_non_convention_markdown(body: &str) -> bool {
         .any(|l| l.starts_with("## ") || l.starts_with("```"))
 }
 
-/// Compose the framed "what's new" terminal block for a version and a
-/// raw release body. Non-conforming body (no `# ` headings) → raw body
-/// after the frame line, no styling. Each entry: headline at normal
-/// weight, description lines indented two spaces and rendered in
-/// italic + dim. Blank line between entries.
-pub fn render(version: &str, body: &str) -> String {
-    let v = version.trim_start_matches('v');
+/// Render the body of a single release — entries with styled
+/// descriptions, or raw fallback. No top frame, no footer. Use
+/// [`render`] for the single-version display and [`render_range`] for
+/// aggregate.
+fn render_body(body: &str) -> String {
     let entries = parse_release_body(body);
-    let mut out = String::new();
-    out.push_str(&format!("✨ What's new in v{v}\n\n"));
     if entries.is_empty() {
         let trimmed = body.trim_end();
-        if !trimmed.is_empty() {
-            out.push_str(trimmed);
-            out.push('\n');
+        if trimmed.is_empty() {
+            return String::new();
         }
+        let mut out = String::new();
+        out.push_str(trimmed);
+        out.push('\n');
         return out;
     }
+    let mut out = String::new();
     for (i, e) in entries.iter().enumerate() {
         if i > 0 {
             out.push('\n');
@@ -148,6 +251,58 @@ pub fn render(version: &str, body: &str) -> String {
     out
 }
 
+/// Single-version frame line — `✨ What's new in v<X.Y.Z>` followed by
+/// a blank line.
+fn frame_single(version: &str) -> String {
+    let v = version.trim_start_matches('v');
+    format!("✨ What's new in v{v}\n\n")
+}
+
+/// Aggregate frame line — `✨ What's new in v<from> → v<to>` followed
+/// by a blank line. Explicitly shows the range so the operator knows
+/// what they're reading.
+fn frame_range(from: &str, to: &str) -> String {
+    let from = from.trim_start_matches('v');
+    let to = to.trim_start_matches('v');
+    format!("✨ What's new in v{from} → v{to}\n\n")
+}
+
+/// Footer line printed at the bottom of every "what's new" output —
+/// links to the full curated changelog.
+fn footer_line() -> String {
+    format!("📖 Full changelog: {CHANGELOG_URL}")
+}
+
+/// Compose the framed single-version "what's new" terminal block.
+/// Non-conforming body (no `# ` headings, or contains `##`/code-fence)
+/// → raw body after the frame, no styling. Footer link at the bottom.
+pub fn render(version: &str, body: &str) -> String {
+    let mut out = frame_single(version);
+    out.push_str(&render_body(body));
+    out.push('\n');
+    out.push_str(&footer_line());
+    out.push('\n');
+    out
+}
+
+/// Compose the aggregate "what's new" block — range frame, then each
+/// release as a `v<X.Y.Z>` subheader followed by its body, footer at
+/// the bottom. Entries should be ordered oldest-first.
+pub(crate) fn render_range(from: &str, to: &str, entries: &[ReleaseEntry]) -> String {
+    let mut out = frame_range(from, to);
+    for (i, e) in entries.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(&format!("v{}\n", e.version.trim_start_matches('v')));
+        out.push_str(&render_body(&e.body));
+    }
+    out.push('\n');
+    out.push_str(&footer_line());
+    out.push('\n');
+    out
+}
+
 /// Single-line fallback when the release-body fetch fails (network,
 /// `gh` missing, 404, malformed JSON). Always exit 0; never raise.
 pub fn fallback_link(version: &str) -> String {
@@ -157,12 +312,69 @@ pub fn fallback_link(version: &str) -> String {
     )
 }
 
-/// Best-effort "print release notes after a successful update". Used
-/// in [`crate::cmd::update`]'s Older arm after the binary install + the
-/// claude-plugin sync. Never raises — fetch failure prints the
-/// fallback link and returns.
+/// Best-effort single-version print. Used by the `whatsnew` subcommand
+/// when no `--since` is given. Fetch failure → fallback link, exit 0.
+/// Callers that want a leading blank line (post-install visual gap)
+/// should emit it themselves; this function prints the block as-is.
 pub fn print_for(version: &str) {
-    println!();
+    match fetch_release_body(version) {
+        Ok(body) => print!("{}", render(version, &body)),
+        Err(_) => println!("{}", fallback_link(version)),
+    }
+}
+
+/// Effective FROM for the displayed frame. Per owner: the range is
+/// `max(current, FLOOR_VERSION) to updated`. Selection logic already
+/// clamps via `is_below_floor`; this is just the visual side so a
+/// pre-floor `current` doesn't leak into the header.
+fn effective_from(current: &str) -> String {
+    if is_below_floor(current) {
+        FLOOR_VERSION.to_string()
+    } else {
+        current.trim_start_matches('v').to_string()
+    }
+}
+
+/// Best-effort aggregate print of every release body in `(from, to]`
+/// that sits at or above the floor. Used by `teamctl update`'s
+/// post-success display and `whatsnew --since X`. Fetch failure on
+/// the list endpoint → falls back to single-version print of `to`.
+/// Empty range (no intermediates above floor, or only `to` matters)
+/// → single-version print of `to` so the user always sees the target.
+pub fn print_since(from: &str, to: &str) {
+    let display_from = effective_from(from);
+    let to_v = to.trim_start_matches('v');
+    // Degenerate range — effective from equals to (e.g. `whatsnew
+    // --since 0.7.3` from a v0.8.0 binary clamps to 0.8.0 → 0.8.0).
+    // Drop to the single-version frame so the operator doesn't see
+    // "v0.8.0 → v0.8.0" in the header.
+    if display_from == to_v {
+        print_target_inline(to);
+        return;
+    }
+    let entries = match fetch_releases_list() {
+        Ok(all) => select_range(&all, from, to),
+        Err(_) => {
+            // The list endpoint failed; fall through to fetching just
+            // the target version's body. Preserves the "always show
+            // the target" contract.
+            print_target_inline(to);
+            return;
+        }
+    };
+    if entries.is_empty() {
+        // No intermediates landed in (from, to] above floor — fall
+        // back to single-version display of the target.
+        print_target_inline(to);
+        return;
+    }
+    print!("{}", render_range(&display_from, to, &entries));
+}
+
+/// Helper used by `print_since` when the list-endpoint path can't
+/// produce a range — fetches and prints just the target's body, or
+/// the quiet fallback line if even that fails.
+fn print_target_inline(version: &str) {
     match fetch_release_body(version) {
         Ok(body) => print!("{}", render(version, &body)),
         Err(_) => println!("{}", fallback_link(version)),
@@ -227,8 +439,6 @@ mod tests {
 
     #[test]
     fn extract_body_handles_unicode_escape() {
-        // `✨` is ✨ — exactly the kind of character a release body
-        // may contain when JSON-encoded with ASCII-safe escaping.
         let blob = r#"{"body":"✨ sparkle"}"#;
         assert_eq!(extract_body_field(blob).as_deref(), Some("✨ sparkle"));
     }
@@ -287,30 +497,18 @@ mod tests {
 
     #[test]
     fn parse_release_body_treats_h2_as_non_convention() {
-        // The curated convention is `# Headline\nDescription` with no
-        // sub-headings. A `## ` line means the body is richer markdown
-        // (most commonly cargo-dist's auto-generated body), so the
-        // parser short-circuits to empty and the renderer raw-falls
-        // back. Keeps users from seeing `## Install` styled as a
-        // dim-italic description by accident.
         let body = "# Headline\nIntro line.\n## Subsection\nMore description.\n";
         assert!(parse_release_body(body).is_empty());
     }
 
     #[test]
     fn parse_release_body_treats_code_fence_as_non_convention() {
-        // Fenced code blocks signal install-snippet / changelog-rich
-        // bodies. Same raw-fallback treatment as `## ` sub-headings.
         let body = "# Headline\nDescription with snippet:\n```sh\nteamctl up\n```\n";
         assert!(parse_release_body(body).is_empty());
     }
 
     #[test]
     fn parse_release_body_treats_cargo_dist_body_as_non_convention() {
-        // Smoke-test against the actual shape cargo-dist produces.
-        // `# team-bot 0.7.3` looks like a headline, but the body has
-        // both `## Install...` and fenced code blocks — neither match
-        // the curated convention.
         let body = "# team-bot 0.7.3\n## Install team-bot 0.7.3\n### shell\n```sh\ncurl ...\n```\n";
         assert!(parse_release_body(body).is_empty());
     }
@@ -331,7 +529,6 @@ mod tests {
         let rendered = render("0.8.0", body);
         assert!(rendered.starts_with("✨ What's new in v0.8.0\n\n"));
         assert!(rendered.contains("Headline\n"));
-        // Each description line is two-space indented and italic+dim wrapped.
         assert!(rendered.contains("  \x1b[2;3mLine one.\x1b[0m"));
         assert!(rendered.contains("  \x1b[2;3mLine two.\x1b[0m"));
     }
@@ -341,7 +538,6 @@ mod tests {
         let body = "# H\nD.\n";
         let rendered = render("v0.8.0", body);
         assert!(rendered.starts_with("✨ What's new in v0.8.0\n\n"));
-        // No double-v.
         assert!(!rendered.contains("vv0.8.0"));
     }
 
@@ -353,20 +549,17 @@ mod tests {
         assert!(rendered.contains("Older release with no structured convention."));
         assert!(rendered.contains("Just prose."));
         // No ANSI escapes on the raw fallback path.
-        assert!(!rendered.contains("\x1b["));
+        let body_only = rendered.replace("📖 Full changelog: https://teamctl.run/changelog\n", "");
+        assert!(!body_only.contains("\x1b["));
     }
 
     #[test]
     fn render_separates_entries_with_blank_line() {
         let body = "# A\nDesc A.\n\n# B\nDesc B.\n";
         let rendered = render("0.8.0", body);
-        // Between the description of A and the headline of B there
-        // should be exactly one blank line.
         let a_idx = rendered.find("Desc A.").unwrap();
         let b_idx = rendered.find("B\n").unwrap();
         let between = &rendered[a_idx..b_idx];
-        // Count newlines between the end of A's description line and
-        // the start of B's headline line.
         let nl_count = between.matches('\n').count();
         assert!(
             nl_count >= 2,
@@ -377,7 +570,18 @@ mod tests {
     #[test]
     fn render_handles_empty_body() {
         let rendered = render("0.8.0", "");
-        assert_eq!(rendered, "✨ What's new in v0.8.0\n\n");
+        assert!(rendered.starts_with("✨ What's new in v0.8.0\n\n"));
+        assert!(rendered.contains("📖 Full changelog"));
+    }
+
+    #[test]
+    fn render_appends_footer_line() {
+        let rendered = render("0.8.0", "# H\nD.\n");
+        assert!(rendered.contains("📖 Full changelog: https://teamctl.run/changelog"));
+        assert!(
+            rendered.ends_with("https://teamctl.run/changelog\n"),
+            "footer should be the last line: {rendered:?}"
+        );
     }
 
     #[test]
@@ -390,5 +594,208 @@ mod tests {
     #[test]
     fn fallback_link_strips_v_prefix() {
         assert_eq!(fallback_link("v0.8.0"), fallback_link("0.8.0"));
+    }
+
+    // ── Range / aggregate display ────────────────────────────────────
+
+    #[test]
+    fn is_below_floor_is_inclusive_at_floor() {
+        // The floor IS the first supported version, not below it.
+        assert!(!is_below_floor("0.8.0"));
+        assert!(!is_below_floor("v0.8.0"));
+        assert!(!is_below_floor("0.8.1"));
+        assert!(!is_below_floor("0.9.0"));
+        assert!(!is_below_floor("1.0.0"));
+    }
+
+    #[test]
+    fn is_below_floor_excludes_pre_floor_versions() {
+        assert!(is_below_floor("0.7.3"));
+        assert!(is_below_floor("0.7.0"));
+        assert!(is_below_floor("0.6.0"));
+        assert!(is_below_floor("v0.7.3"));
+    }
+
+    #[test]
+    fn parse_releases_list_extracts_tag_and_body() {
+        // r##""## escape needed because the JSON content contains `"#`
+        // (body field starts with `"# `), which would prematurely close
+        // a single-hash raw string.
+        let json = r##"[
+            {"tag_name":"v0.8.2","body":"# H2\nBody2","name":"v0.8.2"},
+            {"tag_name":"v0.8.1","body":"# H1\nBody1"},
+            {"tag_name":"v0.8.0","body":"# H0\nBody0"}
+        ]"##;
+        let list = parse_releases_list(json);
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].version, "0.8.2");
+        assert_eq!(list[0].body, "# H2\nBody2");
+        assert_eq!(list[2].version, "0.8.0");
+    }
+
+    #[test]
+    fn parse_releases_list_returns_empty_on_malformed_json() {
+        assert!(parse_releases_list("{not json").is_empty());
+        assert!(parse_releases_list(r#"{"message":"Not Found"}"#).is_empty());
+    }
+
+    #[test]
+    fn parse_releases_list_skips_items_missing_tag() {
+        let json = r#"[
+            {"tag_name":"v0.8.0","body":"keep"},
+            {"body":"skip me — no tag"},
+            {"tag_name":"","body":"skip — empty tag"}
+        ]"#;
+        let list = parse_releases_list(json);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].version, "0.8.0");
+    }
+
+    #[test]
+    fn parse_releases_list_tolerates_null_body() {
+        let json = r#"[{"tag_name":"v0.8.0","body":null}]"#;
+        let list = parse_releases_list(json);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].body, "");
+    }
+
+    fn sample_releases() -> Vec<ReleaseEntry> {
+        // GitHub returns newest-first; mirror that here.
+        vec![
+            ReleaseEntry {
+                version: "0.8.3".into(),
+                body: "# T3\nD3".into(),
+            },
+            ReleaseEntry {
+                version: "0.8.2".into(),
+                body: "# T2\nD2".into(),
+            },
+            ReleaseEntry {
+                version: "0.8.1".into(),
+                body: "# T1\nD1".into(),
+            },
+            ReleaseEntry {
+                version: "0.8.0".into(),
+                body: "# T0\nD0".into(),
+            },
+            ReleaseEntry {
+                version: "0.7.3".into(),
+                body: "old".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn select_range_excludes_from_and_includes_to() {
+        let r = select_range(&sample_releases(), "0.8.0", "0.8.3");
+        let vs: Vec<&str> = r.iter().map(|e| e.version.as_str()).collect();
+        assert_eq!(vs, vec!["0.8.1", "0.8.2", "0.8.3"]);
+    }
+
+    #[test]
+    fn select_range_cuts_below_floor() {
+        // from below floor; floor + above should still surface.
+        let r = select_range(&sample_releases(), "0.7.0", "0.8.1");
+        let vs: Vec<&str> = r.iter().map(|e| e.version.as_str()).collect();
+        // 0.7.3 excluded by floor; 0.8.0 + 0.8.1 included.
+        assert_eq!(vs, vec!["0.8.0", "0.8.1"]);
+    }
+
+    #[test]
+    fn select_range_returns_oldest_first() {
+        let r = select_range(&sample_releases(), "0.7.0", "0.8.3");
+        assert_eq!(r.first().unwrap().version, "0.8.0");
+        assert_eq!(r.last().unwrap().version, "0.8.3");
+    }
+
+    #[test]
+    fn select_range_is_empty_when_from_equals_to() {
+        // (X, X] is empty; the caller falls back to single-version.
+        let r = select_range(&sample_releases(), "0.8.2", "0.8.2");
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn select_range_excludes_targets_below_floor() {
+        // Both endpoints pre-floor; the result should be empty.
+        let r = select_range(&sample_releases(), "0.7.0", "0.7.3");
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn render_range_shows_range_frame_and_per_version_subheaders() {
+        let entries = vec![
+            ReleaseEntry {
+                version: "0.8.1".into(),
+                body: "# H1\nD1.".into(),
+            },
+            ReleaseEntry {
+                version: "0.8.2".into(),
+                body: "# H2\nD2.".into(),
+            },
+        ];
+        let rendered = render_range("0.8.0", "0.8.2", &entries);
+        assert!(rendered.starts_with("✨ What's new in v0.8.0 → v0.8.2\n\n"));
+        assert!(rendered.contains("v0.8.1\nH1\n"));
+        assert!(rendered.contains("v0.8.2\nH2\n"));
+        assert!(rendered.ends_with("https://teamctl.run/changelog\n"));
+    }
+
+    #[test]
+    fn render_range_strips_v_prefix_consistently() {
+        let entries = vec![ReleaseEntry {
+            version: "v0.8.1".into(),
+            body: "# H\nD.".into(),
+        }];
+        let rendered = render_range("v0.8.0", "v0.8.1", &entries);
+        assert!(rendered.starts_with("✨ What's new in v0.8.0 → v0.8.1\n\n"));
+        // No double-v leaking through anywhere.
+        assert!(!rendered.contains("vv"));
+    }
+
+    #[test]
+    fn render_range_separates_versions_with_blank_line() {
+        let entries = vec![
+            ReleaseEntry {
+                version: "0.8.1".into(),
+                body: "# A\nDesc A.".into(),
+            },
+            ReleaseEntry {
+                version: "0.8.3".into(),
+                body: "# B\nDesc B.".into(),
+            },
+        ];
+        // Frame uses v0.8.0 → v0.8.4 so the frame doesn't end in a
+        // string that collides with our subheader search patterns.
+        let rendered = render_range("0.8.0", "0.8.4", &entries);
+        assert!(
+            rendered.contains("\n\nv0.8.3\n"),
+            "expected blank line before v0.8.3 subheader, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn footer_line_points_to_changelog() {
+        assert_eq!(
+            footer_line(),
+            "📖 Full changelog: https://teamctl.run/changelog"
+        );
+    }
+
+    #[test]
+    fn effective_from_clamps_pre_floor_current_to_floor() {
+        // Hypothetical 0.7.x backport: the running binary's version is
+        // pre-floor, so the displayed frame's FROM clamps up to 0.8.0
+        // rather than leaking "v0.7.3" into the header.
+        assert_eq!(effective_from("0.7.3"), "0.8.0");
+        assert_eq!(effective_from("v0.6.0"), "0.8.0");
+    }
+
+    #[test]
+    fn effective_from_preserves_at_or_above_floor() {
+        assert_eq!(effective_from("0.8.0"), "0.8.0");
+        assert_eq!(effective_from("0.8.5"), "0.8.5");
+        assert_eq!(effective_from("v0.9.0"), "0.9.0");
+        assert_eq!(effective_from("1.0.0"), "1.0.0");
     }
 }
