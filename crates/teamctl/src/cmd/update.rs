@@ -111,7 +111,13 @@ pub fn run(method_override: Option<String>, check_only: bool, yes: bool) -> Resu
     plan.execute()?;
     println!("✓ update complete. Run `teamctl --version` to confirm.");
     try_update_claude_plugin(&RealClaudeRunner);
-    crate::cmd::release_notes::print_for(&latest);
+    // Range = max(current_version, FLOOR_VERSION) to latest, per owner
+    // spec. The aggregate path catches multi-version jumps so an
+    // operator who skipped 0.8.1/0.8.2 sees all their notes on
+    // landing at 0.8.3. Floor clamp is applied internally. Leading
+    // blank line provides visual separation from the installer output.
+    println!();
+    crate::cmd::release_notes::print_since(CURRENT_VERSION, &latest);
     Ok(())
 }
 
