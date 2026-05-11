@@ -1,0 +1,26 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: sf-
+
+budget:
+  daily_usd_limit: 15.0
+  message_ttl_hours: 168 # 7 days. Operational context compounds over weeks.
+
+hitl:
+  globally_sensitive_actions:
+    - external_email
+    - publish
+    - deploy
+    - release
+
+# Telegram is configured on hub in projects/founder.yaml.
+# Run `teamctl bot setup` to wire it up.
+
+projects:
+  - file: projects/founder.yaml

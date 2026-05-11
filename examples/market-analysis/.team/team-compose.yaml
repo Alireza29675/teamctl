@@ -1,0 +1,26 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: mkt-
+
+budget:
+  daily_usd_limit: 15.0
+  message_ttl_hours: 168 # 7 days. market context compounds over weeks
+
+hitl:
+  globally_sensitive_actions:
+    - trade
+    - payment
+    - external_email
+    - publish
+
+# Telegram is configured on the chief in projects/markets.yaml.
+# Run `teamctl bot setup` to wire it up.
+
+projects:
+  - file: projects/markets.yaml

@@ -4,21 +4,21 @@ The team a one-person open-source project wishes it had: a **triage**
 worker who labels new issues, a **bug_fix** worker (Codex) who opens
 PRs, a **docs** worker who keeps the manual honest after merges, and a
 **release_manager** who runs in plan-mode and proposes releases the
-maintainer approves on Telegram. You — the maintainer — talk to one
+maintainer approves on Telegram. You: the maintainer: talk to one
 bot and stay in the work that only you can do.
 
 ```
 maintainer (Claude Opus)              ← Telegram: maintainer bot
-  ├─ triage          (Claude Sonnet)  · #triage  — labels new issues
-  ├─ bug_fix         (Codex GPT-5)    · #dev     — opens PRs
-  ├─ docs            (Claude Sonnet)  · #all     — cross-checks docs
-  └─ release_manager (Claude Opus,    · #release — proposes releases
+  ├─ triage          (Claude Sonnet)  · #triage : labels new issues
+  ├─ bug_fix         (Codex GPT-5)    · #dev    : opens PRs
+  ├─ docs            (Claude Sonnet)  · #all    : cross-checks docs
+  └─ release_manager (Claude Opus,    · #release: proposes releases
                       plan-mode)                   (read-only)
 ```
 
-`triage` and `bug_fix` are insulated from each other's channels — the
+`triage` and `bug_fix` are insulated from each other's channels: the
 labelling chatter never bleeds into the patch flow, and vice versa.
-The `release_manager` lives in `permission_mode: plan` — it can read
+The `release_manager` lives in `permission_mode: plan`: it can read
 every PR and the changelog, but it cannot tag, push, or run
 `cargo publish`. Its only output is a release plan, which becomes a
 Telegram approval prompt.
@@ -29,7 +29,7 @@ Telegram approval prompt.
 # 1. Install teamctl + the runtimes you want.
 curl -sSf https://teamctl.run/install | sh
 npm i -g @anthropic-ai/claude-code
-# codex — see OpenAI's install docs (used by bug_fix)
+# codex: see OpenAI's install docs (used by bug_fix)
 
 # 2. Create one Telegram bot via @BotFather.
 #    Get your chat id from @userinfobot.
@@ -68,7 +68,7 @@ team-bot \
   --manager oss:maintainer
 ```
 
-DM the maintainer bot when an issue lands — paste the URL and let
+DM the maintainer bot when an issue lands: paste the URL and let
 `triage` route it. The release plan will arrive in the same chat as a
 Telegram approval prompt when `release_manager` thinks the milestone
 is ready.
@@ -91,7 +91,7 @@ release-critical actions**. Three patterns layer:
    becomes a Telegram approval prompt; the maintainer's tap is the
    audit trail.
 
-The release plan template lives in `.team/roles/release_manager.md` — it's
+The release plan template lives in `.team/roles/release_manager.md`: it's
 the thing that makes plan-mode useful instead of frustrating, because
 it gives the agent a concrete artifact to produce.
 

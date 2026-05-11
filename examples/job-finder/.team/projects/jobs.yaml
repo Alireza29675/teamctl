@@ -1,0 +1,48 @@
+version: 2
+
+project:
+  id: jobs
+  name: Job finder
+  cwd: ./workspace
+
+channels:
+  - name: all
+    members: "*"
+
+managers:
+  lead:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/lead.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    can_dm: [scout, matcher]
+    can_broadcast: [all]
+    # Run `teamctl bot setup` to populate.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_LEAD_TOKEN
+        chat_ids_env: TEAMCTL_TG_LEAD_CHATS
+
+workers:
+  # scout watches job boards and aggregators on the operator's declared
+  # interests, surfaces postings worth a look to the matcher.
+  scout:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/scout.md
+    permission_mode: auto
+    reports_to: lead
+    can_dm: [lead, matcher]
+    can_broadcast: [all]
+
+  # matcher takes the operator's CV plus a posting and produces an
+  # honest fit assessment (with cover letter draft when fit is good).
+  matcher:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/matcher.md
+    permission_mode: auto
+    reports_to: lead
+    can_dm: [lead, scout]
+    can_broadcast: [all]

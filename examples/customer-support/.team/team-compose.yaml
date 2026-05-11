@@ -1,0 +1,24 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: cs-
+
+budget:
+  daily_usd_limit: 10.0
+  message_ttl_hours: 168 # 7 days. Ticket-pattern memory compounds.
+
+hitl:
+  globally_sensitive_actions:
+    - external_email
+    - publish
+
+# Telegram is configured on triage in projects/support.yaml.
+# Run `teamctl bot setup` to wire it up.
+
+projects:
+  - file: projects/support.yaml

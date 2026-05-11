@@ -1,0 +1,48 @@
+version: 2
+
+project:
+  id: finance
+  name: Personal finance
+  cwd: ./workspace
+
+channels:
+  - name: all
+    members: "*"
+
+managers:
+  books:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/books.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    can_dm: [tracker, analyst]
+    can_broadcast: [all]
+    # Run `teamctl bot setup` to populate.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_BOOKS_TOKEN
+        chat_ids_env: TEAMCTL_TG_BOOKS_CHATS
+
+workers:
+  # tracker watches your accounts, holdings, and transactions.
+  # surfaces anomalies and significant moves to books.
+  tracker:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/tracker.md
+    permission_mode: auto
+    reports_to: books
+    can_dm: [books, analyst]
+    can_broadcast: [all]
+
+  # analyst owns the synthesis: weekly/monthly summaries,
+  # pattern detection, savings rate trends, category breakdowns.
+  analyst:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/analyst.md
+    permission_mode: auto
+    reports_to: books
+    can_dm: [books, tracker]
+    can_broadcast: [all]

@@ -37,12 +37,14 @@ These are real teams running on teamctl. Copy any of them as a starting point.
 
 | Example | Agents | What they do |
 |---|---|---|
-| 🌱 **[Personal research](examples/personal-research/)** | 2 (buddy + curator) | The buddy holds your reading list and the compounding mental model of what you actually care about. The curator runs on a loop following the news on your declared interests and surfaces what matters. The smallest valid teamctl team. |
+| 🌱 **[Personal research](examples/personal-research/)** | 2 (buddy + curator) | The buddy holds your reading list and the compounding mental model of what you actually care about. The curator runs on a loop following the news on your declared interests and surfaces what matters. |
 | 💼 **[Job finder](examples/job-finder/)** | 3 (lead + scout + matcher) | Scout watches job boards. Matcher does the deep CV-to-posting alignment. Lead handles your applications domain and talks to you on Telegram. Drafts cover letters in your voice; you tap to send. |
-| 📈 **[Market analysis](examples/market-analysis/)** | 4 (chief + collector + interpreter + risk) | A read-only research desk. Tells you when something's worth your attention. Never moves money on its own. HITL on anything that touches the bank account. |
-| 🏗️ **[SaaS product team](examples/saas-product/)** | 7 (product_lead + platform + auth + billing + dashboards + docs-site + community) | A small SaaS by domain. Each agent owns one product surface end-to-end; product_lead holds the roadmap. |
+| 💰 **[Personal finance](examples/personal-finance/)** | 3 (books + tracker + analyst) | Books talks to you on Telegram. Tracker watches your accounts and surfaces anomalies. Analyst builds the long-arc patterns (weekly digests, savings rate, category trends). Read-only by design; nothing moves money without your tap. |
+| 🛠️ **[Solo founder ops](examples/solo-founder-ops/)** | 4 (hub + research + inbox + analytics) | Hub holds the day picture. Research chases context. Inbox drafts replies and keeps the journal. Analytics watches your product metrics. The everything-that-is-not-building team. |
+| 📬 **[Customer support](examples/customer-support/)** | 2 (triage + drafter) | Triage reads everything coming in and decides what gets your eyes. Drafter writes the reply in your voice; you tap to send. HITL on every external send. |
+| 🛰️ **[OSS maintainer](examples/oss-maintainer/)** | 5 (maintainer + triage + bug_fix + docs + release_manager) | Triage labels new issues. Bug-fix opens PRs. Docs keeps the manual honest. Release-manager runs in plan-mode and proposes releases for your approval. You stay in the work only you can do. |
 
-More examples live under [`examples/`](examples/).
+More examples live under [`examples/`](examples/), including the legacy `market-analysts` (advanced finance desk with plan-mode dissent) and the four classic shapes (`hello-team`, `indie-game-studio`, `solo-triage`, `newsletter-office`, `startup-team`).
 
 ## What a team looks like
 
