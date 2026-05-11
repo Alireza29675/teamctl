@@ -34,7 +34,37 @@ fi
 # Default to empty here so `set -u` doesn't trip the `[ -n "$EFFORT" ]`
 # check below for agents that omit it.
 : "${EFFORT:=}"
-: "${BOOTSTRAP_PROMPT:=Begin your shift as ${AGENT}. Team traffic is delivered to you as \`<channel source=\"team\">\` events via Claude Code Channels -- you do not need to poll. By default the body is a short \"📬 1 new message ...\" stub (meta.lazy=\"1\"); call \`inbox_read\` with the meta.id to fetch the full body and resolve it in one step. If the stub doesn't merit handling, call \`inbox_ack\` to dismiss. When the body lands inline (no meta.lazy, e.g. operator used \`/readnow\`), act on it directly and call \`inbox_ack\` on the id when done. Between events, idle. Use \`inbox_peek\` only for non-destructive catch-up after a restart.}"
+# T-118 / T-174: rendered into the env file only for claude-code
+# runtime. Default to empty under `set -u` so the wrapper's
+# `[ -n "$CLAUDE_SESSION_ID" ]` and `[ -n "$CLAUDE_SESSION_NAME" ]`
+# checks below are safe even when these vars are absent from the env
+# file (env file written by an older teamctl render, missing-var
+# write race, non-claude-code runtime co-existing in the same
+# wrapper). Without this default, `set -u` aborts the wrapper at the
+# unguarded reference, the tmux pane closes immediately, and the
+# supervisor marks the agent stopped without ever printing a
+# diagnostic.
+: "${CLAUDE_SESSION_ID:=}"
+: "${CLAUDE_SESSION_NAME:=}"
+# T-190: macOS ships bash 3.2 as `/bin/sh`. Bash 3.2 has a parser
+# bug in `${VAR:=DEFAULT}` parameter-expansion: it cannot reliably
+# parse escape sequences inside the DEFAULT (backslash-backtick,
+# backslash-quote). This wrapper's `BOOTSTRAP_PROMPT` default
+# contains both — `\`<channel source=\"team\">\`` and friends — so
+# every spawn on macOS aborts at this line with "unexpected EOF
+# while looking for matching `}`", the tmux pane closes, and the
+# supervisor marks the agent stopped. Linux dash + bash 4+ parse
+# the construct correctly, which is why this regression hid through
+# Linux qa.
+#
+# Fix: pull the default OUT of `${VAR:=...}` form into a regular
+# conditional assignment. A double-quoted string literal parses
+# identically on bash 3.2 / 4+ / dash, so the escapes work everywhere.
+# Behavior is unchanged when BOOTSTRAP_PROMPT is already set by the
+# env file (the `[ -z ]` short-circuits).
+if [ -z "${BOOTSTRAP_PROMPT:-}" ]; then
+    BOOTSTRAP_PROMPT="Begin your shift as ${AGENT}. Team traffic is delivered to you as \`<channel source=\"team\">\` events via Claude Code Channels -- you do not need to poll. By default the body is a short \"📬 1 new message ...\" stub (meta.lazy=\"1\"); call \`inbox_read\` with the meta.id to fetch the full body and resolve it in one step. If the stub doesn't merit handling, call \`inbox_ack\` to dismiss. When the body lands inline (no meta.lazy, e.g. operator used \`/readnow\`), act on it directly and call \`inbox_ack\` on the id when done. Between events, idle. Use \`inbox_peek\` only for non-destructive catch-up after a restart."
+fi
 
 cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || true
 

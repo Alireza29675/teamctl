@@ -440,6 +440,59 @@ mod tests {
         }
     }
 
+    /// T-190: the wrapper runs under `set -u`. Both
+    /// `CLAUDE_SESSION_ID` and `CLAUDE_SESSION_NAME` are rendered
+    /// into the env file only for `runtime: claude-code` agents
+    /// (team-core::render::render_env). If they're absent for any
+    /// reason — env file from an older render, write race, future
+    /// runtime variant — the unguarded `[ -n "$CLAUDE_SESSION_ID" ]`
+    /// reference aborts the wrapper, the tmux pane closes, and the
+    /// supervisor marks the agent stopped without a diagnostic.
+    /// The defaults at the top of the wrapper close that hole; a
+    /// silent edit that drops them re-opens the failure mode.
+    #[test]
+    fn wrapper_session_vars_have_set_u_defaults() {
+        for marker in [
+            ": \"${CLAUDE_SESSION_ID:=}\"",
+            ": \"${CLAUDE_SESSION_NAME:=}\"",
+        ] {
+            assert!(
+                DEFAULT_WRAPPER.contains(marker),
+                "DEFAULT_WRAPPER missing marker: {marker}",
+            );
+        }
+    }
+
+    /// T-190: macOS ships bash 3.2 as `/bin/sh`. Bash 3.2 has a
+    /// parser bug where `${VAR:=DEFAULT}` cannot reliably parse
+    /// escape sequences inside DEFAULT (backslash-backtick,
+    /// backslash-quote). The wrapper's BOOTSTRAP_PROMPT default
+    /// contains both, so the pre-T-190 `${BOOTSTRAP_PROMPT:=...}`
+    /// shape aborted every spawn on macOS — the 0.8.0 fresh-install
+    /// regression. The fix is conditional assignment, not parameter
+    /// expansion: pin that BOTH the `:=` form is GONE and the
+    /// `[ -z ]` plain-assignment shape is present, so a future
+    /// cleanup can't silently regress macOS again.
+    #[test]
+    fn wrapper_bootstrap_prompt_default_is_macos_safe() {
+        assert!(
+            !DEFAULT_WRAPPER.contains("${BOOTSTRAP_PROMPT:="),
+            "DEFAULT_WRAPPER still uses ${{VAR:=DEFAULT}} for \
+             BOOTSTRAP_PROMPT — that shape is bash-3.2-fatal on \
+             macOS when DEFAULT contains escape sequences. Keep \
+             the conditional-assignment form.",
+        );
+        for marker in [
+            "if [ -z \"${BOOTSTRAP_PROMPT:-}\" ]; then",
+            "BOOTSTRAP_PROMPT=\"Begin your shift as ${AGENT}.",
+        ] {
+            assert!(
+                DEFAULT_WRAPPER.contains(marker),
+                "DEFAULT_WRAPPER missing marker: {marker}",
+            );
+        }
+    }
+
     fn compose_with_multi_role_prompt(root: &Path, project_id: &str) -> Compose {
         let mut managers = BTreeMap::new();
         managers.insert(
