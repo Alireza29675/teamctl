@@ -111,6 +111,7 @@ pub fn run(method_override: Option<String>, check_only: bool, yes: bool) -> Resu
     plan.execute()?;
     println!("✓ update complete. Run `teamctl --version` to confirm.");
     try_update_claude_plugin(&RealClaudeRunner);
+    crate::cmd::release_notes::print_for(&latest);
     Ok(())
 }
 

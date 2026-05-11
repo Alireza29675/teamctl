@@ -13,6 +13,7 @@ pub mod inspect;
 pub mod logs;
 pub mod mail;
 pub mod project_filter;
+pub mod release_notes;
 pub mod reload;
 pub mod rl_watch;
 pub mod send;
@@ -26,6 +27,7 @@ pub mod update;
 pub mod update_check;
 pub mod validate;
 pub mod warn;
+pub mod whatsnew;
 
 use std::path::{Path, PathBuf};
 

@@ -226,6 +226,14 @@ enum Command {
         #[arg(short = 'y', long)]
         yes: bool,
     },
+    /// Print the GitHub release body for a teamctl version (defaults
+    /// to the running binary's version). Same renderer as the
+    /// post-update display; non-conforming bodies fall through to raw.
+    Whatsnew {
+        /// Version to look up (e.g. `0.7.3`). When omitted, uses the
+        /// running binary's version.
+        version: Option<String>,
+    },
 
     // ── Internal ────────────────────────────────────────────────────
     /// Wrap a runtime invocation, watching for rate-limit signatures.
@@ -335,6 +343,9 @@ fn main() -> Result<()> {
     if let Command::Update { method, check, yes } = cli.command {
         return cmd::update::run(method, check, yes);
     }
+    if let Command::Whatsnew { version } = cli.command {
+        return cmd::whatsnew::run(version);
+    }
     if let Command::Sessions { action, json } = cli.command {
         return match action {
             None => cmd::sessions::run(json),
@@ -416,6 +427,7 @@ fn main() -> Result<()> {
         Command::Sessions { .. } => unreachable!("handled above"),
         Command::Ui { .. } => unreachable!("handled above"),
         Command::Update { .. } => unreachable!("handled above"),
+        Command::Whatsnew { .. } => unreachable!("handled above"),
     }
 }
 
