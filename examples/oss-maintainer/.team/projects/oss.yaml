@@ -6,7 +6,7 @@ project:
   cwd: ./workspace
 
 channels:
-  # Pipeline channels — triage and bug_fix are insulated from each
+  # Pipeline channels: triage and bug_fix are insulated from each
   # other so triage doesn't see the patch flow and bug_fix doesn't see
   # the labelling chatter. Each pairs the worker with the maintainer.
   - name: triage
@@ -63,7 +63,7 @@ workers:
     can_dm: [maintainer]
     can_broadcast: [all]
 
-  # release_manager runs in plan mode — it cannot mutate the repo. Its
+  # release_manager runs in plan mode: it cannot mutate the repo. Its
   # only output is proposals to the maintainer, which become Telegram
   # approval prompts via `request_approval(action="release")`.
   release_manager:

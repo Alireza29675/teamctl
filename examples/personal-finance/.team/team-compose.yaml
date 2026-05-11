@@ -1,0 +1,25 @@
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: fin-
+
+budget:
+  daily_usd_limit: 8.0
+  message_ttl_hours: 168 # 7 days. Financial-state memory compounds over weeks.
+
+hitl:
+  globally_sensitive_actions:
+    - payment
+    - external_email
+    - publish
+
+# Telegram is configured on books in projects/finance.yaml.
+# Run `teamctl bot setup` to wire it up.
+
+projects:
+  - file: projects/finance.yaml
