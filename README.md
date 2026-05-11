@@ -4,11 +4,9 @@
 
 # teamctl
 
-**A team of AI agents, declared in YAML. They work together, even when you're not looking.**
+**A team of AI agents, collaborating over a messaging system, all declared in YAML. Persistent and scalable.**
 
 Each agent is a real Claude Code, Codex, or Gemini session with its own identity, its own memory, and a domain it owns end-to-end. They talk to each other through a durable mailbox. They collaborate the way real teammates do: handing off, pushing back, picking up where the other left off, asking for help when they need it, keeping the work moving while you sleep. You stay in the loop on what matters through Telegram, the TUI, or the CLI.
-
-[Screenshot or short GIF of `teamctl ui` showing a 3-agent team running and exchanging messages]
 
 teamctl is built for **TeamOps**: the operational discipline of running teams of agents at scale. Read [How to think about agent teams](https://teamctl.run/concepts/teams/) for the methodology. Or skip to the examples below.
 
@@ -44,8 +42,6 @@ These are real teams running on teamctl. Copy any of them as a starting point.
 📈 **[Market analysis](examples/market-analysis/).** Four agents on a read-only research desk (chief + collector + interpreter + risk). Tells you when something's worth your attention; never moves money on its own. HITL on anything that touches the bank account.
 
 🏗️ **[SaaS product team](examples/saas-product/).** Seven agents running a small SaaS by domain. Platform + auth + billing + dashboards + docs-site + community, with a product_lead on top holding the roadmap. Each owns one product surface end-to-end.
-
-[Screenshot of the examples grid: a thumbnail or short visual per example]
 
 More examples live under [`examples/`](examples/).
 
@@ -112,30 +108,6 @@ You can attach to any agent's tmux pane to read along: `teamctl attach side-proj
 - 📖 [How to think about agent teams](https://teamctl.run/concepts/teams/) for the methodology, the two-gate framing, and what TeamOps means in practice.
 - 📚 [Documentation](https://teamctl.run) for full docs, concepts, reference, and ADRs.
 - 🧪 [How teamctl compares](https://teamctl.run/compare/) for the feature matrix vs neighboring tools. No put-downs.
-
-## The team that ships teamctl
-
-teamctl is developed *on* teamctl, by a team of agents running in this very `.team/` directory. The team's compose file lives at [`.team/projects/teamctl.yaml`](.team/projects/teamctl.yaml).
-
-<p align="center">
-  <a href=".team/projects/teamctl.yaml">
-    <img src="docs/assets/team-chart.jpg" alt="teamctl development team org chart" width="700">
-  </a>
-</p>
-
-|  | Name | Role | What they're like |
-|---|---|---|---|
-| <img src="docs/assets/team/sage.jpg" width="60"> | **[Sage](.team/roles/sage.md)** | Co-thinker | Probes, never solves. Sits between raw idea and tracked work, sharpens ideas worth shipping and kills the ones that aren't. |
-| <img src="docs/assets/team/hugo.jpg" width="60"> | **[Hugo](.team/roles/hugo.md)** | Project manager | Coordinator and protector of engineer focus. Turns blessed GitHub issues into shipped work; never overloads anyone. |
-| <img src="docs/assets/team/neda.jpg" width="60"> | **[Neda](.team/roles/neda.md)** | Comms / external voice | Wrote this README. Cult-classic-README school: every line earns its place. Founder voice, opinions earned. |
-| <img src="docs/assets/team/ada.jpg" width="60"> | **[Ada](.team/roles/ada.md)** | Product engineer | Methodical and precise. Tight, factual messages with the right amount of detail and nothing more. |
-| <img src="docs/assets/team/wren.jpg" width="60"> | **[Wren](.team/roles/wren.md)** | Product engineer | Warm and supportive. Calls out good work, offers to help when someone's stuck. Lifts the team without faking it. |
-| <img src="docs/assets/team/otis.jpg" width="60"> | **[Otis](.team/roles/otis.md)** | Product engineer | The thorough explainer. Writes the PR descriptions everyone thanks him for: context first, decisions second, trade-offs honest. |
-| <img src="docs/assets/team/kian.jpg" width="60"> | **[Kian](.team/roles/kian.md)** | Product engineer | Quiet and deep. Antennae for security holes and regressions. Spots the input that isn't validated, the rename that half-applied. |
-| <img src="docs/assets/team/nico.jpg" width="60"> | **[Nico](.team/roles/nico.md)** | Product engineer | High-frequency communicator. Frequent small updates, low silence. The team always knows where his ticket stands because he says it. |
-| <img src="docs/assets/team/otto.jpg" width="60"> | **[Otto](.team/roles/otto.md)** | TeamOps | Keeps the dogfood team running cleanly. Lives in a separate project from the dev team. A process can't cleanly restart itself. |
-
-Each agent runs in `tmux`, with its own identity, its own memory, and a domain it owns. Click any name to read its role prompt. The team coordinates through teamctl's own mailbox, the same one your team will run on.
 
 ## License
 
