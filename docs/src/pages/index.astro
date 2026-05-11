@@ -7,7 +7,7 @@
 // does not import any of it.
 
 import { Picture } from 'astro:assets';
-import heroJpg from '../../assets/hero.jpg';
+import heroPng from '../../assets/hero.png';
 
 const installCmd = 'curl -sSf https://teamctl.run/install | sh';
 const upCmd = 'teamctl up';
@@ -72,7 +72,7 @@ const yamlHtml = yaml
     <main>
       <figure class="hero">
         <Picture
-          src={heroJpg}
+          src={heroPng}
           alt=""
           loading="eager"
           decoding="async"
