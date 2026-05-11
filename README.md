@@ -37,13 +37,13 @@ If you'd rather hand-author the team yourself, read the [handbook](https://teamc
 
 These are real teams running on teamctl. Copy any of them as a starting point.
 
-🌱 **[Personal research](examples/personal-research/)** — two agents (buddy + curator). The buddy holds your reading list and the compounding mental model of what you actually care about; the curator runs on a loop following the news on your declared interests and surfaces what matters. The smallest valid teamctl team.
+🌱 **[Personal research](examples/personal-research/).** Two agents (buddy + curator). The buddy holds your reading list and the compounding mental model of what you actually care about; the curator runs on a loop following the news on your declared interests and surfaces what matters. The smallest valid teamctl team.
 
-💼 **[Job finder](examples/job-finder/)** — three agents (lead + scout + matcher). Scout watches job boards, matcher does the deep CV-to-posting alignment, lead handles your applications domain and talks to you on Telegram. Drafts cover letters in your voice; you tap to send.
+💼 **[Job finder](examples/job-finder/).** Three agents (lead + scout + matcher). Scout watches job boards, matcher does the deep CV-to-posting alignment, lead handles your applications domain and talks to you on Telegram. Drafts cover letters in your voice; you tap to send.
 
-📈 **[Market analysis](examples/market-analysis/)** — four agents on a read-only research desk (chief + collector + interpreter + risk). Tells you when something's worth your attention; never moves money on its own. HITL on anything that touches the bank account.
+📈 **[Market analysis](examples/market-analysis/).** Four agents on a read-only research desk (chief + collector + interpreter + risk). Tells you when something's worth your attention; never moves money on its own. HITL on anything that touches the bank account.
 
-🏗️ **[SaaS product team](examples/saas-product/)** — seven agents running a small SaaS by domain. Platform + auth + billing + dashboards + docs-site + community, with a product_lead on top holding the roadmap. Each owns one product surface end-to-end.
+🏗️ **[SaaS product team](examples/saas-product/).** Seven agents running a small SaaS by domain. Platform + auth + billing + dashboards + docs-site + community, with a product_lead on top holding the roadmap. Each owns one product surface end-to-end.
 
 [Screenshot of the examples grid: a thumbnail or short visual per example]
 
