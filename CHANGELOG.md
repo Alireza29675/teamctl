@@ -6,6 +6,21 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ### Added
 
+- **Mouse-wheel routing in `teamctl ui`** (T-158). The TUI now
+  enables mouse capture on startup and routes wheel events by
+  focused pane. With **Detail** focused, each wheel tick walks the
+  agent's tmux pane history — wheel-up enters copy-mode and
+  scrolls back through what's already been printed, wheel-down
+  walks back toward live (same observable behaviour as a regular
+  `tmux attach` + wheel). With **Roster** focused, the wheel steps
+  the agent selection up/down — same step size as `j` / `k`. Modal
+  overlays (compose, approvals, picker, splash) ignore mouse input
+  so a surprise wheel-tick can't route past them. Mouse capture is
+  released on every exit path, including panic. Keyboard scrolling
+  continues to work alongside. Mailbox row-cursor scrolling will
+  land with T-131; the routing scaffold is already in place for
+  that fill-in.
+
 - **Daily update-availability nudge on `teamctl status` and
   `teamctl up`** (T-129). When a newer release is published on
   GitHub, both commands surface a single line on stderr:

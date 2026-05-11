@@ -6,6 +6,7 @@ use std::panic;
 
 use anyhow::Result;
 use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -56,13 +57,17 @@ fn handle_info_flags() -> bool {
 
 fn enter_terminal() -> Result<()> {
     enable_raw_mode()?;
-    execute!(stdout(), EnterAlternateScreen)?;
+    // EnableMouseCapture routes wheel events through the TUI's own
+    // event loop (T-158). Released in `leave_terminal` so the parent
+    // shell regains normal mouse behaviour on every exit path —
+    // including the panic hook below.
+    execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     Ok(())
 }
 
 fn leave_terminal() -> Result<()> {
     let mut out = io::stdout();
-    execute!(out, LeaveAlternateScreen)?;
+    execute!(out, DisableMouseCapture, LeaveAlternateScreen)?;
     disable_raw_mode()?;
     Ok(())
 }
