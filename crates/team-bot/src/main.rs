@@ -334,10 +334,11 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
     if msg.voice().is_some() && state.stt.is_some() && state.manager.is_some() {
         return handle_voice(&bot, &msg, &state).await;
     }
-    // T-086-B: capture the inbound Telegram message id on every mailbox
-    // row we write so agents (via `inbox_peek`) can read it back as
-    // `telegram_msg_id` and pass it through `reply_to_message_id` to
-    // thread their reply.
+    // Capture the inbound Telegram message id on every mailbox row we
+    // write. T-086-B feeds it to `react_to_user.telegram_msg_id` for
+    // emoji reactions. T-168 also has the store look it up server-side
+    // when an agent's `reply_to_user.reply_to_message_id` (= a mailbox
+    // id) references this row, resolving to the value persisted here.
     let inbound_msg_id: i64 = msg.id.0 as i64;
     if let Some(rest) = trimmed.strip_prefix("/dm ") {
         if let Some((target, body)) = rest.split_once(' ') {
@@ -966,11 +967,13 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
             if let Some(rp) = reply.clone() {
                 req = req.reply_parameters(rp);
             }
-            let _ = req.await;
+            if let Some(e) = req.await.err() {
+                tracing::warn!("send_message (text) failed for mailbox row {}: {e}", row.id);
+            }
         }
         DispatchKind::Image | DispatchKind::File => {
             let Some(payload) = row.payload.as_deref().and_then(parse_payload) else {
-                let _ = bot
+                if let Some(e) = bot
                     .send_message(
                         chat,
                         format!(
@@ -979,11 +982,18 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
                         ),
                     )
                     .parse_mode(ParseMode::Html)
-                    .await;
+                    .await
+                    .err()
+                {
+                    tracing::warn!(
+                        "send_message (media-unparseable fallback) failed for mailbox row {}: {e}",
+                        row.id
+                    );
+                }
                 return;
             };
             let Some(input) = input_file_from(&payload) else {
-                let _ = bot
+                if let Some(e) = bot
                     .send_message(
                         chat,
                         format!(
@@ -993,7 +1003,14 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
                         ),
                     )
                     .parse_mode(ParseMode::Html)
-                    .await;
+                    .await
+                    .err()
+                {
+                    tracing::warn!(
+                        "send_message (unsupported-source fallback) failed for mailbox row {}: {e}",
+                        row.id
+                    );
+                }
                 return;
             };
             let caption_text = payload
@@ -1069,10 +1086,17 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
             // exhaustive without flagging the row as unknown.
         }
         DispatchKind::UnknownFallback => {
-            let _ = bot
+            if let Some(e) = bot
                 .send_message(chat, format!("{}{attribution}", render_html(&row.text)))
                 .parse_mode(ParseMode::Html)
-                .await;
+                .await
+                .err()
+            {
+                tracing::warn!(
+                    "send_message (unknown-kind fallback) failed for mailbox row {}: {e}",
+                    row.id
+                );
+            }
         }
     }
 }

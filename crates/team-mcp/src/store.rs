@@ -12,6 +12,53 @@ pub struct Store {
     pub(crate) conn: Mutex<Connection>,
 }
 
+/// Resolve a mailbox id to the `telegram_msg_id` of that row, if any.
+///
+/// T-168: agents pass `reply_to_message_id` as a mailbox id (the value
+/// they have from the channel envelope's `meta.id`). The bot's outbound
+/// dispatcher actually needs the Telegram message id, which lives on the
+/// referenced row. Resolving at insert time pins the resolved value on
+/// the outgoing row — no extra DB roundtrip on the bot's hot dispatch
+/// path, and the value can't drift if the source row is later mutated.
+///
+/// `None` input (no threading requested) returns `None` without a
+/// lookup. `Some(id)` that doesn't resolve (row missing, or row has no
+/// `telegram_msg_id`) is warn-logged and returns `None` — the outgoing
+/// message still sends, just without `reply_parameters`. We never fail
+/// the insert over a bad threading hint.
+fn resolve_telegram_msg_id(conn: &Connection, mailbox_id: Option<i64>) -> Option<i64> {
+    let mid = mailbox_id?;
+    match conn.query_row(
+        "SELECT telegram_msg_id FROM messages WHERE id = ?1",
+        params![mid],
+        |r| r.get::<_, Option<i64>>(0),
+    ) {
+        Ok(Some(tid)) => Some(tid),
+        Ok(None) => {
+            tracing::warn!(
+                mailbox_id = mid,
+                "reply_to_message_id: referenced mailbox row has no telegram_msg_id; reply will land without threading"
+            );
+            None
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            tracing::warn!(
+                mailbox_id = mid,
+                "reply_to_message_id: mailbox row not found; reply will land without threading"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::warn!(
+                mailbox_id = mid,
+                error = %e,
+                "reply_to_message_id: lookup failed; reply will land without threading"
+            );
+            None
+        }
+    }
+}
+
 fn try_open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path).context("open sqlite")?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -30,12 +77,14 @@ pub struct Message {
     pub text: String,
     pub thread_id: Option<String>,
     pub sent_at: f64,
-    /// Telegram message id this row pertains to (T-086-B). On inbound rows
+    /// Telegram message id this row pertains to. On inbound rows
     /// (sender = `user:telegram`) it's the source message the operator
-    /// typed — agents read this to populate `reply_to_message_id` on a
-    /// threaded reply. On outbound rows (sender = `<project>:<agent>`) it's
-    /// the id `reply_parameters` should target. `None` on rows unrelated to
-    /// Telegram.
+    /// typed — agents read this to populate `react_to_user.telegram_msg_id`
+    /// for emoji reactions. (For reply threading, agents pass the row's
+    /// mailbox id as `reply_to_user.reply_to_message_id`; T-168 resolves
+    /// it to this column at insert time.) On outbound rows (sender =
+    /// `<project>:<agent>`) it's the resolved id `reply_parameters` should
+    /// target. `None` on rows unrelated to Telegram.
     pub telegram_msg_id: Option<i64>,
     /// Mailbox-kind discriminator (T-086-A schema). `None` for legacy
     /// text-only rows; `Some("image"|"file"|"media_error"|...)` for
@@ -96,10 +145,16 @@ impl Store {
             .unwrap_or(0.0)
     }
 
-    /// Insert a DM (recipient is `<project>:<agent>`). `reply_to_message_id`
-    /// (T-086-B) is the Telegram message id this row replies to — populated
-    /// only on outbound `user:telegram` rows that the agent wants threaded
-    /// in the Telegram client; `None` everywhere else preserves back-compat.
+    /// Insert a DM (recipient is `<project>:<agent>`). `reply_to_mailbox_id`
+    /// (T-168) is the **mailbox id** of the inbound user message this row
+    /// replies to — the obvious value an agent has from the channel
+    /// envelope. We resolve it to the row's `telegram_msg_id` at insert
+    /// time and persist that on the outgoing row, so the bot's outbound
+    /// dispatcher reads a value it can hand to `reply_parameters` without
+    /// a second roundtrip. Resolution misses warn-log and leave the column
+    /// NULL (message still sends, just without threading). `None` skips
+    /// resolution entirely — peer-to-peer DMs and non-Telegram paths take
+    /// this branch.
     #[allow(clippy::too_many_arguments)]
     pub fn send_dm(
         &self,
@@ -108,9 +163,10 @@ impl Store {
         recipient: &str,
         text: &str,
         thread_id: Option<&str>,
-        reply_to_message_id: Option<i64>,
+        reply_to_mailbox_id: Option<i64>,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
+        let telegram_msg_id = resolve_telegram_msg_id(&conn, reply_to_mailbox_id);
         conn.execute(
             "INSERT INTO messages
                 (project_id, sender, recipient, text, thread_id, sent_at, telegram_msg_id)
@@ -122,7 +178,7 @@ impl Store {
                 text,
                 thread_id,
                 Self::now(),
-                reply_to_message_id,
+                telegram_msg_id,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -134,9 +190,9 @@ impl Store {
     /// "value":"/tmp/x.png","caption":"…"}`). The `text` column carries the
     /// caption (if any) so legacy text-only readers still see something
     /// meaningful; the structured payload is the source of truth for
-    /// dispatch. `reply_to_message_id` plumbs Telegram threading the same
-    /// way it does for `send_dm` — set on outbound media rows when the
-    /// agent wants the photo/file to nest under a specific user message.
+    /// dispatch. `reply_to_mailbox_id` plumbs Telegram threading the same
+    /// way it does for `send_dm` — see that fn's doc for the resolution
+    /// contract.
     #[allow(clippy::too_many_arguments)]
     pub fn send_dm_kind(
         &self,
@@ -147,9 +203,10 @@ impl Store {
         thread_id: Option<&str>,
         kind: &str,
         payload: &str,
-        reply_to_message_id: Option<i64>,
+        reply_to_mailbox_id: Option<i64>,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
+        let telegram_msg_id = resolve_telegram_msg_id(&conn, reply_to_mailbox_id);
         conn.execute(
             "INSERT INTO messages
                 (project_id, sender, recipient, text, thread_id, sent_at,
@@ -164,7 +221,7 @@ impl Store {
                 Self::now(),
                 kind,
                 payload,
-                reply_to_message_id,
+                telegram_msg_id,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -740,22 +797,46 @@ mod tests {
         );
     }
 
+    /// Hand-insert an inbound row with a known `telegram_msg_id` and
+    /// return its mailbox id. Mirrors what team-bot's inbound capture
+    /// writes when an operator's Telegram message arrives.
+    fn seed_inbound_row(s: &Store, telegram_msg_id: Option<i64>) -> i64 {
+        let conn = s.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO messages
+                (project_id, sender, recipient, text, sent_at, telegram_msg_id)
+             VALUES ('p', 'user:telegram', 'p:mgr', 'hello', 0.0, ?1)",
+            params![telegram_msg_id],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
     #[test]
-    fn send_dm_persists_reply_to_message_id_when_set() {
-        // T-086-B: outbound DMs that should thread under a specific
-        // Telegram user message carry the target id in the
-        // `telegram_msg_id` column. The bot's outbound dispatcher reads
-        // this and attaches `reply_parameters` on the send.
+    fn send_dm_resolves_mailbox_id_to_telegram_msg_id() {
+        // T-168 happy path: agent passes the inbound row's mailbox id
+        // (the value visible in the channel envelope as `meta.id`).
+        // store.rs resolves it to the row's `telegram_msg_id` at insert
+        // time and persists THAT on the outgoing row — what the bot's
+        // outbound dispatcher actually feeds `reply_parameters` with.
         let f = NamedTempFile::new().unwrap();
         let s = Store::open(f.path()).unwrap();
-        let id = s
-            .send_dm("p", "p:mgr", "user:telegram", "ack", None, Some(12345))
+        let inbound_mailbox_id = seed_inbound_row(&s, Some(12345));
+        let outbound_id = s
+            .send_dm(
+                "p",
+                "p:mgr",
+                "user:telegram",
+                "ack",
+                None,
+                Some(inbound_mailbox_id),
+            )
             .unwrap();
         let conn = s.conn.lock().unwrap();
         let stored: Option<i64> = conn
             .query_row(
                 "SELECT telegram_msg_id FROM messages WHERE id = ?1",
-                params![id],
+                params![outbound_id],
                 |r| r.get(0),
             )
             .unwrap();
@@ -784,12 +865,66 @@ mod tests {
     }
 
     #[test]
-    fn send_dm_kind_persists_reply_to_message_id_alongside_payload() {
-        // Threading + media in one row: image attached as a reply.
-        // Both columns persist independently.
+    fn send_dm_resolution_misses_when_row_has_no_telegram_msg_id() {
+        // T-168 miss case A: agent references an inbound row that
+        // exists but isn't a Telegram-sourced row (telegram_msg_id is
+        // NULL on peer-to-peer or system rows). Resolution returns
+        // None; the outgoing row sends without threading rather than
+        // failing the whole call.
         let f = NamedTempFile::new().unwrap();
         let s = Store::open(f.path()).unwrap();
-        let id = s
+        let inbound_mailbox_id = seed_inbound_row(&s, None);
+        let outbound_id = s
+            .send_dm(
+                "p",
+                "p:mgr",
+                "user:telegram",
+                "ack",
+                None,
+                Some(inbound_mailbox_id),
+            )
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        let stored: Option<i64> = conn
+            .query_row(
+                "SELECT telegram_msg_id FROM messages WHERE id = ?1",
+                params![outbound_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(stored.is_none());
+    }
+
+    #[test]
+    fn send_dm_resolution_misses_when_mailbox_id_does_not_exist() {
+        // T-168 miss case B: agent passes a mailbox id that points at
+        // no row at all (stale id, off-by-one, etc.). Same posture:
+        // resolution misses, the send still goes through unthreaded.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let outbound_id = s
+            .send_dm("p", "p:mgr", "user:telegram", "ack", None, Some(999_999))
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        let stored: Option<i64> = conn
+            .query_row(
+                "SELECT telegram_msg_id FROM messages WHERE id = ?1",
+                params![outbound_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(stored.is_none());
+    }
+
+    #[test]
+    fn send_dm_kind_resolves_mailbox_id_to_telegram_msg_id() {
+        // T-168 happy path for media: image attached as a reply
+        // resolves the mailbox id the same way `send_dm` does. Kind +
+        // payload + resolved telegram_msg_id all persist on one row.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let inbound_mailbox_id = seed_inbound_row(&s, Some(99));
+        let outbound_id = s
             .send_dm_kind(
                 "p",
                 "p:mgr",
@@ -798,14 +933,14 @@ mod tests {
                 None,
                 "image",
                 r#"{"source":"url","value":"https://x.test/a.png"}"#,
-                Some(99),
+                Some(inbound_mailbox_id),
             )
             .unwrap();
         let conn = s.conn.lock().unwrap();
         let (kind, telegram_msg_id): (Option<String>, Option<i64>) = conn
             .query_row(
                 "SELECT kind, telegram_msg_id FROM messages WHERE id = ?1",
-                params![id],
+                params![outbound_id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
