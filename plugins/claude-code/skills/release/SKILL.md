@@ -1,9 +1,11 @@
 ---
-description: Craft a curated public-facing GitHub release body for a new version. Voice-first writing surface; engineering handles the technical cascade separately.
-allowed-tools: Bash, Read, Write, Edit
+name: release
+description: Use when writing a public-facing GitHub release announcement for a new version. Produces the curated short body users see on the releases page: triplet/verb headline (e.g. *"listen, look, attach"*), two-tier body (three triplet paragraphs + quiet-wins bullets), emoji anchors, cut philosophy. Separates the writer's surface from engineering's technical cascade (version bump, CHANGELOG.md dating, tag push, gh release create, cargo-dist or equivalent + smoke tests).
 ---
 
-`/teamctl:release` is the writing surface for cutting a release. It produces the **public-facing GitHub release body**: short, curated, scannable. The thing your users see on `github.com/<org>/<repo>/releases` and (if you've wired it) what `teamctl update` prints after upgrade.
+# Release body
+
+This skill is the writing surface for cutting a release. It produces the **public-facing GitHub release body**: short, curated, scannable. The thing your users see on `github.com/<org>/<repo>/releases` and (if you've wired it) what an update command prints after upgrade.
 
 This skill stops at a ratified body. The technical cascade (version bumps, CHANGELOG dating, tag push, cargo-dist or equivalent, smoke tests) is engineering's job; the placeholders are demarcated below.
 
