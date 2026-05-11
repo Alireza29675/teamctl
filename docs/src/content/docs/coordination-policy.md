@@ -1,5 +1,5 @@
 ---
-title: Coordination policy: how teamctl keeps the mailbox sane
+title: Coordination policy
 ---
 
 
