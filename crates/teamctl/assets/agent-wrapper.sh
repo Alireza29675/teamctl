@@ -110,7 +110,34 @@ while :; do
             # versions. The bootstrap is small enough that warm-start
             # cost is trivial, and the model recognizes "I've already
             # done this".
-            [ -n "$CLAUDE_SESSION_ID" ] && set -- "$@" --session-id "$CLAUDE_SESSION_ID"
+            #
+            # T-174: claude code 2.1.138 split `--session-id` into
+            # create-only semantics — passing it on a UUID whose jsonl
+            # already exists errors with "Session ID is already in
+            # use". To attach to an existing session you must use
+            # `--resume <UUID>` instead. Probe the on-disk session
+            # path; when it exists, splice `--resume`. On a fresh
+            # spawn (or after manual cleanup) the path is absent and
+            # we fall through to the original `--session-id` shape —
+            # the deterministic UUID is unchanged, only the flag
+            # selection branches. The `-n` display-name flag is kept
+            # on both branches: claude tolerates it on `--resume`
+            # (no-op when the existing session already carries the
+            # name) and we don't want to bet the agent's tmux
+            # identity on undocumented persistence.
+            #
+            # Glob (`projects/*/...`) on purpose — claude's
+            # cwd-to-project-dir slug is observed-not-documented
+            # (currently `/` and `.` → `-`, may shift). The UUIDv5 is
+            # globally unique per agent, so at most one file ever
+            # matches and we never have to mirror that algorithm.
+            if [ -n "$CLAUDE_SESSION_ID" ]; then
+                if ls "$HOME/.claude/projects/"*/"$CLAUDE_SESSION_ID.jsonl" >/dev/null 2>&1; then
+                    set -- "$@" --resume "$CLAUDE_SESSION_ID"
+                else
+                    set -- "$@" --session-id "$CLAUDE_SESSION_ID"
+                fi
+            fi
             [ -n "$CLAUDE_SESSION_NAME" ] && set -- "$@" -n "$CLAUDE_SESSION_NAME"
             [ -n "$PERMISSION_MODE" ] && set -- "$@" --permission-mode "$PERMISSION_MODE"
             # Autonomous agents have no human at the keyboard, so any
