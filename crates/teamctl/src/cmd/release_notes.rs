@@ -217,11 +217,69 @@ fn has_non_convention_markdown(body: &str) -> bool {
         .any(|l| l.starts_with("## ") || l.starts_with("```"))
 }
 
+/// Per-crate install sections cargo-dist appends to every release body —
+/// one heading per crate (`# team-bot 0.8.1`, `# teamctl 0.8.1`, ...)
+/// with shell-install snippets and sha256 tables underneath. Truncate
+/// the body at the first such heading so the curated prose stands
+/// alone. Older releases / hand-edited bodies without these headings
+/// are returned unchanged.
+fn truncate_at_cargo_dist(body: &str) -> &str {
+    let mut idx = 0;
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.strip_suffix('\n').unwrap_or(line);
+        if is_cargo_dist_install_heading(trimmed) {
+            return &body[..idx];
+        }
+        idx += line.len();
+    }
+    body
+}
+
+/// Match `^# <known-crate> <MAJOR>.<MINOR>.<PATCH>$` exactly. The
+/// known-crate set is the four workspace crates cargo-dist publishes;
+/// add to this list when a new crate joins the release.
+fn is_cargo_dist_install_heading(line: &str) -> bool {
+    // Order matters here only for the "teamctl-ui" / "teamctl" pair
+    // because `strip_prefix("teamctl")` succeeds on "teamctl-ui ..." —
+    // but the following byte is `-`, not the space we require, so the
+    // semver check fails cleanly. The check is robust regardless of
+    // order; the alphabetical list is just for readability.
+    const KNOWN_CRATES: &[&str] = &["team-bot", "team-mcp", "teamctl", "teamctl-ui"];
+    let rest = match line.strip_prefix("# ") {
+        Some(r) => r,
+        None => return false,
+    };
+    for c in KNOWN_CRATES {
+        if let Some(after_crate) = rest.strip_prefix(c) {
+            if let Some(ver) = after_crate.strip_prefix(' ') {
+                if is_three_part_semver(ver) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// `true` if `s` is exactly `MAJOR.MINOR.PATCH` with all-digit
+/// components. Trailing pre-release / build-metadata suffixes are
+/// rejected — cargo-dist's install headings never carry them.
+fn is_three_part_semver(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
 /// Render the body of a single release — entries with styled
 /// descriptions, or raw fallback. No top frame, no footer. Use
 /// [`render`] for the single-version display and [`render_range`] for
-/// aggregate.
+/// aggregate. The body is pre-truncated at the first cargo-dist
+/// install heading so install tables / sha256 hex don't bury the
+/// curated voice piece (see #197).
 fn render_body(body: &str) -> String {
+    let body = truncate_at_cargo_dist(body);
     let entries = parse_release_body(body);
     if entries.is_empty() {
         let trimmed = body.trim_end();
@@ -366,6 +424,14 @@ pub fn print_since(from: &str, to: &str) {
         // No intermediates landed in (from, to] above floor — fall
         // back to single-version display of the target.
         print_target_inline(to);
+        return;
+    }
+    if entries.len() == 1 {
+        // A 1-element range repeats the same version across three
+        // layers (range frame, per-version subheader, body's opening
+        // line). Collapse to the single-version frame instead. See
+        // #198. Genuine multi-version ranges still use render_range.
+        print_target_inline(&entries[0].version);
         return;
     }
     print!("{}", render_range(&display_from, to, &entries));
@@ -797,5 +863,99 @@ mod tests {
         assert_eq!(effective_from("0.8.5"), "0.8.5");
         assert_eq!(effective_from("v0.9.0"), "0.9.0");
         assert_eq!(effective_from("1.0.0"), "1.0.0");
+    }
+
+    // ── #197: cargo-dist install-heading truncation ─────────────────
+
+    #[test]
+    fn is_cargo_dist_install_heading_recognizes_known_crates() {
+        assert!(is_cargo_dist_install_heading("# team-bot 0.8.1"));
+        assert!(is_cargo_dist_install_heading("# team-mcp 0.8.1"));
+        assert!(is_cargo_dist_install_heading("# teamctl 0.8.1"));
+        assert!(is_cargo_dist_install_heading("# teamctl-ui 0.8.1"));
+        assert!(is_cargo_dist_install_heading("# teamctl 10.20.30"));
+    }
+
+    #[test]
+    fn is_cargo_dist_install_heading_rejects_other_shapes() {
+        assert!(!is_cargo_dist_install_heading("# Headline"));
+        assert!(!is_cargo_dist_install_heading("## team-bot 0.8.1"));
+        assert!(!is_cargo_dist_install_heading("team-bot 0.8.1"));
+        assert!(!is_cargo_dist_install_heading("# unknown-crate 0.8.1"));
+        assert!(!is_cargo_dist_install_heading("# teamctl 0.8"));
+        assert!(!is_cargo_dist_install_heading("# teamctl 0.8.1-rc.1"));
+        assert!(!is_cargo_dist_install_heading("# teamctl v0.8.1"));
+        assert!(!is_cargo_dist_install_heading(""));
+    }
+
+    #[test]
+    fn truncate_at_cargo_dist_drops_install_section_and_below() {
+        let body = "Curated prose paragraph one.\n\n\
+            Curated prose paragraph two.\n\n\
+            # team-bot 0.8.1\n## Install\n```sh\ncurl ...\n```\n";
+        let kept = truncate_at_cargo_dist(body);
+        assert!(kept.starts_with("Curated prose paragraph one."));
+        assert!(kept.contains("paragraph two."));
+        assert!(!kept.contains("team-bot 0.8.1"));
+        assert!(!kept.contains("Install"));
+        assert!(!kept.contains("```"));
+    }
+
+    #[test]
+    fn truncate_at_cargo_dist_unchanged_when_no_install_heading() {
+        let body = "# Curated headline\nDescription with no install boilerplate.\n";
+        assert_eq!(truncate_at_cargo_dist(body), body);
+    }
+
+    #[test]
+    fn truncate_at_cargo_dist_empty_result_when_install_starts_at_top() {
+        // Cargo-dist body with no prose above the first crate heading —
+        // truncation yields an empty slice. Render's empty-body branch
+        // handles this without panicking.
+        let body = "# teamctl 0.8.1\n## Install\n";
+        assert_eq!(truncate_at_cargo_dist(body), "");
+    }
+
+    #[test]
+    fn truncate_at_cargo_dist_keeps_prose_with_inline_hash() {
+        // An inline `# 1` or `## ` mid-paragraph is not a heading
+        // because the heading detector requires the line to start with
+        // `# <crate> <semver>`. Make sure prose containing `#1` style
+        // strings survives.
+        let body = "Fixed issue #197 by truncating before cargo-dist.\n";
+        assert_eq!(truncate_at_cargo_dist(body), body);
+    }
+
+    #[test]
+    fn render_body_strips_cargo_dist_install_section() {
+        let body = "# Curated headline\nDescription.\n\n# teamctl 0.8.1\n```sh\nnoise\n```\n";
+        let rendered = render_body(body);
+        // The curated entry should render with style; the cargo-dist
+        // tail must be gone.
+        assert!(rendered.contains("Curated headline\n"));
+        assert!(rendered.contains("Description."));
+        assert!(!rendered.contains("teamctl 0.8.1"));
+        assert!(!rendered.contains("```"));
+    }
+
+    // ── #198: 1-element range collapses to single-version frame ─────
+
+    #[test]
+    fn render_range_path_used_for_multi_version() {
+        // Sanity check the path still exists for genuine ranges.
+        let entries = vec![
+            ReleaseEntry {
+                version: "0.8.1".into(),
+                body: "# A\nDesc A.".into(),
+            },
+            ReleaseEntry {
+                version: "0.8.2".into(),
+                body: "# B\nDesc B.".into(),
+            },
+        ];
+        let rendered = render_range("0.8.0", "0.8.2", &entries);
+        assert!(rendered.starts_with("✨ What's new in v0.8.0 → v0.8.2\n\n"));
+        assert!(rendered.contains("\nv0.8.1\n"));
+        assert!(rendered.contains("\n\nv0.8.2\n"));
     }
 }
