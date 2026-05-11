@@ -419,6 +419,27 @@ mod tests {
         }
     }
 
+    /// T-174: the wrapper picks `--resume` vs `--session-id` by
+    /// probing the on-disk session jsonl. A silent edit that drops
+    /// the resume branch would re-trigger "Session ID is already in
+    /// use" on the second `teamctl up` under claude 2.1.138+; an edit
+    /// that drops the create branch would break first-launch.
+    /// Pin both markers plus the glob shape so neither half regresses.
+    #[test]
+    fn wrapper_session_id_resume_branch_present() {
+        for marker in [
+            "--session-id \"$CLAUDE_SESSION_ID\"",
+            "--resume \"$CLAUDE_SESSION_ID\"",
+            "$HOME/.claude/projects/",
+            "$CLAUDE_SESSION_ID.jsonl",
+        ] {
+            assert!(
+                DEFAULT_WRAPPER.contains(marker),
+                "DEFAULT_WRAPPER missing marker: {marker}",
+            );
+        }
+    }
+
     fn compose_with_multi_role_prompt(root: &Path, project_id: &str) -> Compose {
         let mut managers = BTreeMap::new();
         managers.insert(
