@@ -662,6 +662,7 @@ mod tests {
                 on_rate_limit: None,
                 effort: None,
                 interfaces: None,
+                display_name: None,
             },
         );
         Compose {

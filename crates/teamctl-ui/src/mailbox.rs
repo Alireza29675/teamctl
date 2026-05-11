@@ -93,8 +93,11 @@ pub struct MessageRow {
 /// Format a single row for the mailbox pane. Kept terse: `[from]
 /// text` on one line — no timestamps, no recipient (the tab tells
 /// you the recipient class). Multi-line bodies are flattened with a
-/// space so a single message stays one row in the pane.
-pub fn render_row(row: &MessageRow) -> String {
+/// space so a single message stays one row in the pane. `team` is
+/// consulted via `agent_label` so senders with a `display_name` show
+/// their human label; unknown senders (cross-project, system) fall
+/// back to the canonical id verbatim.
+pub fn render_row(row: &MessageRow, team: &crate::data::TeamSnapshot) -> String {
     let one_line: String = row
         .text
         .replace('\n', " ")
@@ -102,7 +105,8 @@ pub fn render_row(row: &MessageRow) -> String {
         .chars()
         .take(180)
         .collect();
-    format!("[{}] {}", row.sender, one_line)
+    let sender = crate::data::agent_label(team, &row.sender);
+    format!("[{}] {}", sender, one_line)
 }
 
 /// Lookup contract: each method returns rows newer than `after_id`
@@ -450,16 +454,49 @@ mod tests {
         assert_eq!(buf.channel_after, 0);
     }
 
+    fn empty_team() -> crate::data::TeamSnapshot {
+        crate::data::TeamSnapshot::empty(std::path::PathBuf::from("/tmp"))
+    }
+
     #[test]
     fn render_row_flattens_newlines_and_truncates() {
+        let team = empty_team();
         let r = row(1, "p:m", "p:dev", "first\nsecond\nthird");
-        assert_eq!(render_row(&r), "[p:m] first second third");
+        assert_eq!(render_row(&r, &team), "[p:m] first second third");
 
         let long: String = "x".repeat(300);
         let r = row(1, "s", "r", &long);
-        let rendered = render_row(&r);
+        let rendered = render_row(&r, &team);
         // 5 chars ("[s] ") + at most 180 chars of body = 185.
         assert!(rendered.chars().count() <= 185);
+    }
+
+    #[test]
+    fn render_row_uses_display_name_when_set() {
+        // T-160: when the sender id has a `display_name` in the team
+        // snapshot, the mailbox row renders the label, not the id.
+        // Unknown senders fall through to the raw id (covered above).
+        use crate::data::{AgentInfo, TeamSnapshot};
+        use team_core::supervisor::AgentState;
+        let agent = AgentInfo {
+            id: "p:sage".into(),
+            agent: "sage".into(),
+            project: "p".into(),
+            tmux_session: "a-p-sage".into(),
+            state: AgentState::Unknown,
+            unread_mail: 0,
+            pending_approvals: 0,
+            is_manager: true,
+            display_name: Some("Sage (Visionary)".into()),
+        };
+        let team = TeamSnapshot {
+            root: std::path::PathBuf::from("/tmp"),
+            team_name: "t".into(),
+            agents: vec![agent],
+            channels: vec![],
+        };
+        let r = row(1, "p:sage", "p:hugo", "ping");
+        assert_eq!(render_row(&r, &team), "[Sage (Visionary)] ping");
     }
 
     #[test]

@@ -99,7 +99,8 @@ fn render_tile(
     app: &App,
 ) {
     let glyph = state_glyph(info, ascii);
-    let title = format!(" {glyph} {} ", info.id);
+    let label = crate::data::agent_label(&app.team, &info.id);
+    let title = format!(" {glyph} {label} ");
     let border_style = if selected {
         Style::default()
             .fg(app.capabilities.accent())
@@ -224,7 +225,7 @@ fn render_channel_feed(buf: &mut Buffer, area: Rect, app: &App) {
     let start = filtered.len().saturating_sub(cap);
     let lines: Vec<Line<'_>> = filtered[start..]
         .iter()
-        .map(|r| Line::raw(crate::mailbox::render_row(r)))
+        .map(|r| Line::raw(crate::mailbox::render_row(r, &app.team)))
         .collect();
     Paragraph::new(lines).render(inner, buf);
 }

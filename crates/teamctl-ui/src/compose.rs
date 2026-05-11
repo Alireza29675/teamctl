@@ -44,9 +44,19 @@ pub enum ComposeTarget {
 }
 
 impl ComposeTarget {
-    pub fn title(&self) -> String {
+    /// Header text for the compose-modal title bar. DM targets render
+    /// the agent's `display_name` when set (T-160 fallback) so the
+    /// operator sees the same human label that surfaces in the roster
+    /// and mailbox; broadcast targets render `#<channel-name>`
+    /// unchanged. Pass `&app.team` so the agent lookup goes through
+    /// the existing TeamSnapshot rather than carving a second context
+    /// path.
+    pub fn title(&self, team: &crate::data::TeamSnapshot) -> String {
         match self {
-            ComposeTarget::Dm { agent_id, .. } => format!("→ {agent_id}"),
+            ComposeTarget::Dm { agent_id, .. } => {
+                let label = crate::data::agent_label(team, agent_id);
+                format!("→ {label}")
+            }
             ComposeTarget::Broadcast { channel_id, .. } => {
                 let short = channel_id
                     .rsplit_once(':')
@@ -540,22 +550,60 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::CONTROL)
     }
 
+    fn empty_team() -> crate::data::TeamSnapshot {
+        crate::data::TeamSnapshot::empty(std::path::PathBuf::from("/tmp"))
+    }
+
     #[test]
     fn dm_target_title_renders_as_arrow_agent() {
+        let team = empty_team();
         let t = ComposeTarget::Dm {
             agent_id: "writing:dev1".into(),
             project_id: "writing".into(),
         };
-        assert_eq!(t.title(), "→ writing:dev1");
+        // Empty team → no display_name override; falls through to the
+        // canonical id.
+        assert_eq!(t.title(&team), "→ writing:dev1");
+    }
+
+    #[test]
+    fn dm_target_title_uses_display_name_when_set() {
+        // T-160: DM modal title swaps in `display_name` when the
+        // target agent has one in the team snapshot.
+        use crate::data::{AgentInfo, TeamSnapshot};
+        use team_core::supervisor::AgentState;
+        let agent = AgentInfo {
+            id: "writing:dev1".into(),
+            agent: "dev1".into(),
+            project: "writing".into(),
+            tmux_session: "a-writing-dev1".into(),
+            state: AgentState::Unknown,
+            unread_mail: 0,
+            pending_approvals: 0,
+            is_manager: false,
+            display_name: Some("Dev 1 (Drafter)".into()),
+        };
+        let team = TeamSnapshot {
+            root: std::path::PathBuf::from("/tmp"),
+            team_name: "t".into(),
+            agents: vec![agent],
+            channels: vec![],
+        };
+        let t = ComposeTarget::Dm {
+            agent_id: "writing:dev1".into(),
+            project_id: "writing".into(),
+        };
+        assert_eq!(t.title(&team), "→ Dev 1 (Drafter)");
     }
 
     #[test]
     fn broadcast_target_title_strips_project_prefix() {
+        let team = empty_team();
         let t = ComposeTarget::Broadcast {
             channel_id: "writing:editorial".into(),
             project_id: "writing".into(),
         };
-        assert_eq!(t.title(), "→ #editorial");
+        assert_eq!(t.title(&team), "→ #editorial");
     }
 
     #[test]

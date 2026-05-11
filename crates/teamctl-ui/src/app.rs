@@ -1128,7 +1128,7 @@ fn render_compose_modal(area: Rect, buf: &mut Buffer, app: &App) {
     let title = app
         .compose_target
         .as_ref()
-        .map(|t| t.title())
+        .map(|t| t.title(&app.team))
         .unwrap_or_else(|| "→ ?".into());
     let block = Block::default()
         .title(title)
@@ -1268,7 +1268,10 @@ fn render_approvals_modal(area: Rect, buf: &mut Buffer, app: &App) {
 
     let mut lines: Vec<ratatui::text::Line<'_>> = vec![
         ratatui::text::Line::styled(format!("#{}  {}", a.id, a.action), bold),
-        ratatui::text::Line::styled(format!("from: {}", a.agent_id), muted),
+        ratatui::text::Line::styled(
+            format!("from: {}", crate::data::agent_label(&app.team, &a.agent_id)),
+            muted,
+        ),
         ratatui::text::Line::raw(""),
         ratatui::text::Line::raw(a.summary.clone()),
     ];
@@ -1841,6 +1844,7 @@ mod tests {
             unread_mail: 0,
             pending_approvals: 0,
             is_manager: false,
+            display_name: None,
         }
     }
 

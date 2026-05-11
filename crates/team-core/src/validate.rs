@@ -76,7 +76,27 @@ pub enum ValidationError {
         "project `{project}`: agent `{agent}` has a blank `role_prompt` (empty string or empty list)"
     )]
     BlankRolePrompt { project: String, agent: String },
+
+    #[error("project `{project}`: agent `{agent}` has a blank `display_name`")]
+    BlankDisplayName { project: String, agent: String },
+
+    #[error("project `{project}`: agent `{agent}` `display_name` is {got} chars (max {max})")]
+    DisplayNameTooLong {
+        project: String,
+        agent: String,
+        got: usize,
+        max: usize,
+    },
 }
+
+/// T-160: max length for `display_name`. 64 is a sensible upper bound
+/// matching ratatui column widths in the TUI roster pane; longer names
+/// would force unsightly truncation downstream. Counted in Unicode
+/// scalar values (`chars().count()`), not grapheme clusters — most
+/// operator-typed labels are simple text where the two coincide, and
+/// the saved dependency on `unicode-segmentation` is not worth the
+/// fidelity gain for an at-most-64-cell rendering window.
+pub const DISPLAY_NAME_MAX_CHARS: usize = 64;
 
 pub fn validate(compose: &Compose) -> Vec<ValidationError> {
     let mut errs = Vec::new();
@@ -186,6 +206,26 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
                     });
                 }
             }
+            if let Some(dn) = &a.display_name {
+                // T-160: trim before checking so `display_name: "   "`
+                // is rejected as blank rather than slipping through
+                // (whitespace-only labels render as a void cell in the
+                // TUI — same operator-confusion shape as empty).
+                let trimmed_len = dn.trim().chars().count();
+                if trimmed_len == 0 {
+                    errs.push(ValidationError::BlankDisplayName {
+                        project: p.project.id.clone(),
+                        agent: id.into(),
+                    });
+                } else if dn.chars().count() > DISPLAY_NAME_MAX_CHARS {
+                    errs.push(ValidationError::DisplayNameTooLong {
+                        project: p.project.id.clone(),
+                        agent: id.into(),
+                        got: dn.chars().count(),
+                        max: DISPLAY_NAME_MAX_CHARS,
+                    });
+                }
+            }
         };
 
         for (id, a) in &p.managers {
@@ -222,6 +262,7 @@ mod tests {
                 on_rate_limit: None,
                 effort: None,
                 interfaces: None,
+                display_name: None,
             },
         );
         let mut workers = BTreeMap::new();
@@ -239,6 +280,7 @@ mod tests {
                 on_rate_limit: None,
                 effort: None,
                 interfaces: None,
+                display_name: None,
             },
         );
         Compose {
@@ -358,5 +400,73 @@ mod tests {
         assert!(!validate(&c)
             .iter()
             .any(|e| matches!(e, ValidationError::BlankRolePrompt { .. })));
+    }
+
+    #[test]
+    fn blank_display_name_flags() {
+        let mut c = toy_compose("dev");
+        c.projects[0].managers.get_mut("mgr").unwrap().display_name = Some(String::new());
+        assert!(validate(&c)
+            .iter()
+            .any(|e| matches!(e, ValidationError::BlankDisplayName { .. })));
+    }
+
+    #[test]
+    fn display_name_at_max_length_validates() {
+        let mut c = toy_compose("dev");
+        let exactly_max = "x".repeat(DISPLAY_NAME_MAX_CHARS);
+        c.projects[0].managers.get_mut("mgr").unwrap().display_name = Some(exactly_max);
+        assert!(!validate(&c).iter().any(|e| matches!(
+            e,
+            ValidationError::BlankDisplayName { .. } | ValidationError::DisplayNameTooLong { .. }
+        )));
+    }
+
+    #[test]
+    fn display_name_above_max_length_flags() {
+        let mut c = toy_compose("dev");
+        let too_long = "x".repeat(DISPLAY_NAME_MAX_CHARS + 1);
+        c.projects[0].managers.get_mut("mgr").unwrap().display_name = Some(too_long);
+        assert!(validate(&c)
+            .iter()
+            .any(|e| matches!(e, ValidationError::DisplayNameTooLong { .. })));
+    }
+
+    #[test]
+    fn display_name_counts_chars_not_bytes() {
+        // T-160: limit applies to Unicode-scalar-value (`chars()`)
+        // count, not bytes. Each `🦀` is one char but four UTF-8
+        // bytes; 64 crabs must still validate even though that's 256
+        // bytes on disk.
+        let mut c = toy_compose("dev");
+        let sixty_four_crabs = "🦀".repeat(DISPLAY_NAME_MAX_CHARS);
+        c.projects[0].managers.get_mut("mgr").unwrap().display_name = Some(sixty_four_crabs);
+        assert!(!validate(&c).iter().any(|e| matches!(
+            e,
+            ValidationError::BlankDisplayName { .. } | ValidationError::DisplayNameTooLong { .. }
+        )));
+    }
+
+    #[test]
+    fn whitespace_only_display_name_flags_blank() {
+        // T-160 qa follow-up: whitespace-only labels render as a void
+        // cell in the TUI — reject under the same `BlankDisplayName`
+        // error as empty strings so the operator gets a clear message.
+        let mut c = toy_compose("dev");
+        c.projects[0].managers.get_mut("mgr").unwrap().display_name = Some("   ".into());
+        assert!(validate(&c)
+            .iter()
+            .any(|e| matches!(e, ValidationError::BlankDisplayName { .. })));
+    }
+
+    #[test]
+    fn populated_display_name_validates() {
+        let mut c = toy_compose("dev");
+        c.projects[0].managers.get_mut("mgr").unwrap().display_name =
+            Some("Sage (Visionary)".into());
+        assert!(!validate(&c).iter().any(|e| matches!(
+            e,
+            ValidationError::BlankDisplayName { .. } | ValidationError::DisplayNameTooLong { .. }
+        )));
     }
 }

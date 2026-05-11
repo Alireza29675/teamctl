@@ -94,6 +94,7 @@ fn synth_agent(id: &str, state: AgentState, unread: u32, pending: u32) -> AgentI
         unread_mail: unread,
         pending_approvals: pending,
         is_manager: false,
+        display_name: None,
     }
 }
 
@@ -466,6 +467,93 @@ fn wall_layout_renders_tile_grid_at_120x30() {
     app.toggle_wall_layout();
     let buf = render_to_buffer(&app, 120, 30);
     insta::assert_snapshot!("wall_layout_120x30", buffer_to_string(&buf));
+}
+
+fn agent_with_label(id: &str, display: &str, state: AgentState) -> AgentInfo {
+    let mut info = synth_agent(id, state, 0, 0);
+    info.display_name = Some(display.into());
+    info
+}
+
+#[test]
+fn roster_renders_display_name_when_set() {
+    // T-160: the Agents sidebar (roster pane) renders `display_name`
+    // in place of the raw YAML key for agents that have one set;
+    // agents without a display_name keep the existing short-form
+    // (`info.agent`) fallback.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![
+            agent_with_label("writing:manager", "Manager (Lead)", AgentState::Running),
+            synth_agent("writing:worker-1", AgentState::Running, 0, 0),
+        ],
+    ));
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(
+        s.contains("Manager (Lead)"),
+        "roster missing display_name `Manager (Lead)`: {s}"
+    );
+    assert!(
+        s.contains("worker-1"),
+        "roster missing short-form fallback for agent without display_name: {s}"
+    );
+}
+
+#[test]
+fn detail_header_renders_display_name_when_set() {
+    // T-160: the Detail pane border title (`DETAIL · <label>`) swaps
+    // the canonical id for `display_name` when the selected agent has
+    // one set. Cross-project clarity is preserved by the fallback to
+    // the canonical id when `display_name` is absent.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![agent_with_label(
+            "writing:manager",
+            "Manager (Lead)",
+            AgentState::Running,
+        )],
+    ));
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(s.contains("DETAIL"), "detail pane not rendered: {s}");
+    assert!(
+        s.contains("Manager (Lead)"),
+        "detail title missing display_name `Manager (Lead)`: {s}"
+    );
+}
+
+#[test]
+fn wall_tile_title_renders_display_name_when_set() {
+    // T-160: Wall layout tile titles (the per-tile borders that
+    // replace the AGENTS/MAILBOX pane chrome) carry `display_name` in
+    // place of the canonical id when set.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![
+            agent_with_label("writing:manager", "Manager (Lead)", AgentState::Running),
+            synth_agent("writing:worker-1", AgentState::Running, 0, 0),
+            synth_agent("writing:worker-2", AgentState::Running, 0, 0),
+            synth_agent("writing:critic", AgentState::Stopped, 0, 0),
+        ],
+    ));
+    app.toggle_wall_layout();
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(
+        s.contains("Manager (Lead)"),
+        "wall tile title missing display_name `Manager (Lead)`: {s}"
+    );
+    assert!(
+        s.contains("writing:worker-1"),
+        "wall tile title missing canonical-id fallback for agent without display_name: {s}"
+    );
 }
 
 #[test]
