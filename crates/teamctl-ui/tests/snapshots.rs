@@ -94,6 +94,7 @@ fn synth_agent(id: &str, state: AgentState, unread: u32, pending: u32) -> AgentI
         unread_mail: unread,
         pending_approvals: pending,
         is_manager: false,
+        display_name: None,
     }
 }
 

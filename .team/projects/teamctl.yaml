@@ -16,6 +16,7 @@ channels:
   - nico
 managers:
   sage:
+    display_name: Sage (Visionary)
     runtime: claude-code
     model: claude-opus-4-7
     role_prompt: roles/sage.md
@@ -35,6 +36,7 @@ managers:
           api_key_env: GROQ_API_KEY
           model: whisper-large-v3
   hugo:
+    display_name: Hugo (Project Manager)
     runtime: claude-code
     model: claude-opus-4-7
     role_prompt: roles/hugo.md
@@ -56,6 +58,7 @@ managers:
         bot_token_env: TEAMCTL_TG_HUGO_TOKEN
         chat_ids_env: TEAMCTL_TG_HUGO_CHATS
   ada:
+    display_name: Ada (Engineer)
     runtime: claude-code
     model: claude-opus-4-7
     role_prompt: roles/ada.md
@@ -75,6 +78,7 @@ managers:
         bot_token_env: TEAMCTL_TG_ADA_TOKEN
         chat_ids_env: TEAMCTL_TG_ADA_CHATS
   wren:
+    display_name: Wren (Engineer)
     runtime: claude-code
     model: claude-opus-4-7
     role_prompt: roles/wren.md
@@ -94,6 +98,7 @@ managers:
         bot_token_env: TEAMCTL_TG_WREN_TOKEN
         chat_ids_env: TEAMCTL_TG_WREN_CHATS
   otis:
+    display_name: Otis (Engineer)
     runtime: claude-code
     model: claude-opus-4-7
     role_prompt: roles/otis.md
@@ -113,6 +118,7 @@ managers:
         bot_token_env: TEAMCTL_TG_OTIS_TOKEN
         chat_ids_env: TEAMCTL_TG_OTIS_CHATS
   kian:
+    display_name: Kian (Engineer)
     runtime: claude-code
     model: claude-opus-4-7
     role_prompt: roles/kian.md
@@ -132,6 +138,7 @@ managers:
         bot_token_env: TEAMCTL_TG_KIAN_TOKEN
         chat_ids_env: TEAMCTL_TG_KIAN_CHATS
   nico:
+    display_name: Nico (Engineer)
     runtime: claude-code
     model: claude-opus-4-7
     role_prompt: roles/nico.md
@@ -151,6 +158,7 @@ managers:
         bot_token_env: TEAMCTL_TG_NICO_TOKEN
         chat_ids_env: TEAMCTL_TG_NICO_CHATS
   neda:
+    display_name: Neda (Comms)
     runtime: claude-code
     model: claude-opus-4-7
     role_prompt: roles/neda.md

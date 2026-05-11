@@ -31,10 +31,11 @@ impl Widget for Statusline<'_> {
         // reads it as a sticky modal warning even in monochrome
         // terminals where colour alone wouldn't carry.
         if matches!(self.app.stage, crate::app::Stage::StreamKeys) {
-            let target = self
+            let target_id = self
                 .app
                 .selected_agent_id()
                 .unwrap_or_else(|| "<no agent>".into());
+            let target = crate::data::agent_label(&self.app.team, &target_id);
             let banner = format!(
                 "● STREAM-KEYS → {target}   keystrokes forwarding to tmux pane   ·   Esc to exit"
             );

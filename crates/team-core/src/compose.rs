@@ -453,6 +453,16 @@ pub struct Agent {
     /// channel it speaks on in one place. Workers leave this unset.
     #[serde(default)]
     pub interfaces: Option<AgentInterfaces>,
+
+    /// T-160: optional human-friendly label rendered by the TUI in
+    /// place of the agent id (roster, details header, mailbox row
+    /// attribution, statusline). Absent → render the agent id (current
+    /// behavior). Validation: non-empty, ≤64 chars, UTF-8 anything.
+    /// The agent id stays canonical for routing, tmux session names,
+    /// CLI args, and YAML cross-refs (`can_dm`, `can_broadcast`,
+    /// `reports_to`) — display_name is render-time only.
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 /// Container for per-manager interface adapters. Open shape so adding

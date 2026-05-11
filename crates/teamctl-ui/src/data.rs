@@ -48,6 +48,26 @@ pub struct AgentInfo {
     /// PR-UI-2; kept on the struct so PR-UI-4's approvals modal can
     /// route based on tier without a second compose lookup.
     pub is_manager: bool,
+    /// T-160: optional human-friendly label from
+    /// `team-compose.yaml`. When `Some`, the TUI renders this in place
+    /// of `id` everywhere an agent label surfaces to the operator
+    /// (roster, detail header, mailbox attribution, statusline,
+    /// approvals, compose modal). When `None`, label falls back to
+    /// `id`. The id stays canonical for routing/tmux/CLI.
+    pub display_name: Option<String>,
+}
+
+/// Return the operator-facing label for `agent_id`: the agent's
+/// `display_name` when set, otherwise `agent_id` itself. Read-only
+/// borrow into the snapshot — callers that need an owned `String`
+/// can `.to_string()` at the use-site. Unknown ids fall through to
+/// `agent_id` (the canonical id is always a valid label).
+pub fn agent_label<'a>(team: &'a TeamSnapshot, agent_id: &'a str) -> &'a str {
+    team.agents
+        .iter()
+        .find(|a| a.id == agent_id)
+        .and_then(|a| a.display_name.as_deref())
+        .unwrap_or(agent_id)
 }
 
 /// One channel exposed in `team-compose.yaml`. Used by PR-UI-6's
@@ -126,6 +146,7 @@ impl TeamSnapshot {
 
         let mut agents = Vec::new();
         for h in compose.agents() {
+            let display_name = h.spec.display_name.clone();
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
             let state = supervisor.state(&spec).unwrap_or(AgentState::Unknown);
@@ -141,6 +162,7 @@ impl TeamSnapshot {
                 unread_mail,
                 pending_approvals,
                 is_manager: h.is_manager,
+                display_name,
             });
         }
 
@@ -278,6 +300,7 @@ mod tests {
             unread_mail: unread,
             pending_approvals: pending,
             is_manager: false,
+            display_name: None,
         }
     }
 

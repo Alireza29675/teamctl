@@ -224,7 +224,7 @@ fn render_channel_feed(buf: &mut Buffer, area: Rect, app: &App) {
     let start = filtered.len().saturating_sub(cap);
     let lines: Vec<Line<'_>> = filtered[start..]
         .iter()
-        .map(|r| Line::raw(crate::mailbox::render_row(r)))
+        .map(|r| Line::raw(crate::mailbox::render_row(r, &app.team)))
         .collect();
     Paragraph::new(lines).render(inner, buf);
 }

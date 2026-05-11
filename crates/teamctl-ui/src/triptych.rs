@@ -372,7 +372,8 @@ fn render_split_cell(
         .find(|a| a.id == agent_id)
         .map(|info| crate::data::state_glyph(info, ascii))
         .unwrap_or("?");
-    let title = format!(" {glyph} {agent_id} ");
+    let label = crate::data::agent_label(&app.team, agent_id);
+    let title = format!(" {glyph} {label} ");
     let border = if is_focused_split {
         Style::default()
             .fg(app.capabilities.accent())
@@ -485,7 +486,7 @@ fn render_mailbox_body(buf: &mut Buffer, area: Rect, app: &App) {
     let start = rows.len().saturating_sub(cap);
     let lines: Vec<Line<'_>> = rows[start..]
         .iter()
-        .map(|r| Line::raw(render_row(r)))
+        .map(|r| Line::raw(render_row(r, &app.team)))
         .collect();
     Paragraph::new(lines).render(area, buf);
 }
