@@ -8,7 +8,7 @@
 
 Each agent is a real Claude Code, Codex, or Gemini session with its own identity, its own memory, and a domain it owns end-to-end. They talk to each other through a durable mailbox. They collaborate the way real teammates do: handing off, pushing back, picking up where the other left off, asking for help when they need it, keeping the work moving while you sleep. You stay in the loop on what matters through Telegram, the TUI, or the CLI.
 
-teamctl is built for **TeamOps**: the operational discipline of running teams of agents at scale. Read [How to think about agent teams](https://teamctl.run/concepts/teams/) for the methodology. Or skip to the examples below.
+teamctl is built to scale agent-to-agent collaboration and solve bigger problems with better orchestration. Read [How to think about agent teams](https://teamctl.run/concepts/teams/) for the methodology. Or skip to the examples below.
 
 ## Install
 
@@ -35,13 +35,12 @@ If you'd rather hand-author the team yourself, read the [handbook](https://teamc
 
 These are real teams running on teamctl. Copy any of them as a starting point.
 
-🌱 **[Personal research](examples/personal-research/).** Two agents (buddy + curator). The buddy holds your reading list and the compounding mental model of what you actually care about; the curator runs on a loop following the news on your declared interests and surfaces what matters. The smallest valid teamctl team.
-
-💼 **[Job finder](examples/job-finder/).** Three agents (lead + scout + matcher). Scout watches job boards, matcher does the deep CV-to-posting alignment, lead handles your applications domain and talks to you on Telegram. Drafts cover letters in your voice; you tap to send.
-
-📈 **[Market analysis](examples/market-analysis/).** Four agents on a read-only research desk (chief + collector + interpreter + risk). Tells you when something's worth your attention; never moves money on its own. HITL on anything that touches the bank account.
-
-🏗️ **[SaaS product team](examples/saas-product/).** Seven agents running a small SaaS by domain. Platform + auth + billing + dashboards + docs-site + community, with a product_lead on top holding the roadmap. Each owns one product surface end-to-end.
+| Example | Agents | What they do |
+|---|---|---|
+| 🌱 **[Personal research](examples/personal-research/)** | 2 (buddy + curator) | The buddy holds your reading list and the compounding mental model of what you actually care about. The curator runs on a loop following the news on your declared interests and surfaces what matters. The smallest valid teamctl team. |
+| 💼 **[Job finder](examples/job-finder/)** | 3 (lead + scout + matcher) | Scout watches job boards. Matcher does the deep CV-to-posting alignment. Lead handles your applications domain and talks to you on Telegram. Drafts cover letters in your voice; you tap to send. |
+| 📈 **[Market analysis](examples/market-analysis/)** | 4 (chief + collector + interpreter + risk) | A read-only research desk. Tells you when something's worth your attention. Never moves money on its own. HITL on anything that touches the bank account. |
+| 🏗️ **[SaaS product team](examples/saas-product/)** | 7 (product_lead + platform + auth + billing + dashboards + docs-site + community) | A small SaaS by domain. Each agent owns one product surface end-to-end; product_lead holds the roadmap. |
 
 More examples live under [`examples/`](examples/).
 
@@ -97,8 +96,8 @@ You can attach to any agent's tmux pane to read along: `teamctl attach side-proj
 ## What you get
 
 - **Persistent agents.** Each one has identity, memory, and a domain. They survive reboots.
-- **A durable mailbox.** SQLite-backed, async, allowlisted. Agents DM and broadcast through it; you can audit every line.
-- **HITL when it matters.** `publish`, `release`, `deploy`, `external_email`. Every sensitive action pauses for your tap on Telegram before it ships.
+- **A messaging backbone.** Agents DM and broadcast through Slack-like channels; you can audit every line.
+- **Human-in-the-loop (HITL) when it matters.** `publish`, `release`, `deploy`, `external_email`. Every sensitive action pauses for your tap on Telegram before it ships.
 - **Multi-runtime.** Mix Claude Code, Codex, and Gemini in the same team. Different agents can use different keys for billing or rate-limit headroom.
 - **Project isolation.** Run unrelated teams side-by-side without cross-talk. Bridge two projects only when you mean to.
 - **Telegram, today.** Discord, email, and more on the way.
