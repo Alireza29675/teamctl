@@ -12,6 +12,7 @@
 use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
+use serde::Deserialize;
 
 use crate::cmd::update::CURRENT_VERSION;
 
@@ -37,49 +38,29 @@ pub fn fetch_release_body(version: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("no `body` field in GitHub releases response for v{v}"))
 }
 
-/// Pull the `body` value out of a GitHub releases-API JSON blob and
-/// JSON-unescape it. Returns `None` when the field is missing, `null`,
-/// or empty — all three mean "no release notes to show."
+/// Subset of the GitHub releases-API response we actually read. All
+/// other fields are ignored on parse. `body` is `Option` to cover both
+/// the `"body": null` and the field-missing shapes the API has been
+/// observed in.
+#[derive(Deserialize)]
+struct ReleaseResponse {
+    #[serde(default)]
+    body: Option<String>,
+}
+
+/// Pull the `body` value out of a GitHub releases-API JSON blob.
+/// Returns `None` when the field is missing, `null`, or empty — all
+/// three mean "no release notes to show." Parse failure (malformed
+/// JSON) also resolves to `None`; the caller falls back to the
+/// release-link line rather than raising.
 fn extract_body_field(json: &str) -> Option<String> {
-    let needle = "\"body\":";
-    let idx = json.find(needle)?;
-    let after = json[idx + needle.len()..].trim_start();
-    if let Some(rest) = after.strip_prefix("null") {
-        // Sanity-check the next char isn't part of a longer token.
-        let next = rest.chars().next();
-        if matches!(next, None | Some(',') | Some('}') | Some(' ') | Some('\n')) {
-            return None;
-        }
+    let parsed: ReleaseResponse = serde_json::from_str(json).ok()?;
+    let body = parsed.body?;
+    if body.is_empty() {
+        None
+    } else {
+        Some(body)
     }
-    let value = after.strip_prefix('"')?;
-    let mut out = String::new();
-    let mut chars = value.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next()? {
-                'n' => out.push('\n'),
-                'r' => out.push('\r'),
-                't' => out.push('\t'),
-                '"' => out.push('"'),
-                '\\' => out.push('\\'),
-                '/' => out.push('/'),
-                'u' => {
-                    let mut hex = String::new();
-                    for _ in 0..4 {
-                        hex.push(chars.next()?);
-                    }
-                    let cp = u32::from_str_radix(&hex, 16).ok()?;
-                    out.push(char::from_u32(cp)?);
-                }
-                _ => return None,
-            }
-        } else if c == '"' {
-            return if out.is_empty() { None } else { Some(out) };
-        } else {
-            out.push(c);
-        }
-    }
-    None
 }
 
 /// Parse `# Headline\nDescription` pairs out of a release-body markdown
@@ -250,6 +231,32 @@ mod tests {
         // may contain when JSON-encoded with ASCII-safe escaping.
         let blob = r#"{"body":"✨ sparkle"}"#;
         assert_eq!(extract_body_field(blob).as_deref(), Some("✨ sparkle"));
+    }
+
+    #[test]
+    fn extract_body_survives_round_trip_with_realistic_release_body() {
+        // T-180: pin the serde_json swap against a release-body shape
+        // that mixes the escapes the old hand-rolled parser had to
+        // special-case: nested quotes around CLI vocabulary, escaped
+        // backslashes inside backtick-spans, unicode-escaped accent,
+        // and an emoji-prefixed opening line. If serde drifts or the
+        // struct stops covering all three, this fails loud.
+        let blob = r#"{"tag_name":"v0.8.0","body":"✨ \"What's new\" cleanup\n\nSwap `extract_body_field` to serde_json — fixes \"escaped quote\" handling and unicode (éclat) survives round-trip. Path: C:\\Users\\test.","name":"0.8.0"}"#;
+        let body = extract_body_field(blob).expect("body present");
+        assert!(body.contains("\"What's new\""));
+        assert!(body.contains("`extract_body_field`"));
+        assert!(body.contains("éclat"));
+        assert!(body.contains(r"C:\Users\test"));
+        assert!(body.starts_with("✨"));
+    }
+
+    #[test]
+    fn extract_body_returns_none_for_malformed_json() {
+        // Old hand-rolled parser silently returned None on shapes it
+        // couldn't walk; serde behaves the same via `.ok()?`. Pin it
+        // explicitly so a future change can't accidentally raise.
+        let blob = r#"{"body": "unterminated"#;
+        assert!(extract_body_field(blob).is_none());
     }
 
     #[test]
