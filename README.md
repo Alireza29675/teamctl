@@ -70,16 +70,16 @@ managers:
         chat_ids_env: TEAMCTL_TG_MANAGER_CHATS
 
 workers:
-  dev:
+  frontend:
     runtime: codex
     model: gpt-5-codex
-    role_prompt: roles/dev.md
+    role_prompt: roles/frontend.md
     reports_to: manager
 
-  researcher:
+  backend:
     runtime: claude-code
     model: claude-sonnet-4-6
-    role_prompt: roles/researcher.md
+    role_prompt: roles/backend.md
     reports_to: manager
 ```
 
@@ -92,7 +92,7 @@ teamctl ui          # watch them work
 teamctl status      # is everyone alive?
 ```
 
-You can attach to any agent's tmux pane to read along: `teamctl attach side-project:dev`. You can also DM them from the CLI: `teamctl send side-project:manager "what's on my plate?"`.
+You can attach to any agent's tmux pane to read along: `teamctl attach side-project:frontend`. You can also DM them from the CLI: `teamctl send side-project:manager "what's on my plate?"`.
 
 ## What you get
 
