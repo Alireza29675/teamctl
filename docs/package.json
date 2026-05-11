@@ -4,6 +4,10 @@
   "type": "module",
   "version": "0.1.0",
   "scripts": {
+    "sync-changelog": "node tools/sync-changelog.mjs",
+    "predev": "npm run sync-changelog",
+    "prebuild": "npm run sync-changelog",
+    "prepreview": "npm run sync-changelog",
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview"

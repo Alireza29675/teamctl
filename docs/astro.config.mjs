@@ -52,6 +52,7 @@ export default defineConfig({
             { label: 'runtimes/*.yaml', link: '/reference/runtimes-yaml/' },
           ],
         },
+        { label: 'Changelog', link: '/changelog/' },
         {
           label: 'Guides',
           items: [
