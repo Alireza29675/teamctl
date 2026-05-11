@@ -184,7 +184,12 @@ fn render_agents(buf: &mut Buffer, area: Rect, app: &App) {
 
 fn agent_line<'a>(info: &'a AgentInfo, selected: bool, ascii: bool, app: &App) -> Line<'a> {
     let glyph = state_glyph(info, ascii);
-    let display = format!(" {glyph}  {}", info.agent);
+    // T-160: roster prefers the operator's display_name when set,
+    // falling back to the YAML key (`info.agent`) — the canonical id
+    // would over-prefix the project and is reserved for cross-project
+    // surfaces like the detail header and wall-tile title.
+    let label = info.display_name.as_deref().unwrap_or(&info.agent);
+    let display = format!(" {glyph}  {label}");
     let style = if selected {
         Style::default()
             .fg(app.capabilities.accent())
@@ -204,10 +209,10 @@ fn render_detail(buf: &mut Buffer, area: Rect, app: &App) {
     let title = match app
         .selected_agent
         .and_then(|i| app.team.agents.get(i))
-        .map(|a| a.id.as_str())
+        .map(|a| crate::data::agent_label(&app.team, &a.id))
     {
-        Some(id) if stream => format!("DETAIL · {id}  [STREAM-KEYS]"),
-        Some(id) => format!("DETAIL · {id}"),
+        Some(label) if stream => format!("DETAIL · {label}  [STREAM-KEYS]"),
+        Some(label) => format!("DETAIL · {label}"),
         None if stream => "DETAIL  [STREAM-KEYS]".to_string(),
         None => "DETAIL".to_string(),
     };
