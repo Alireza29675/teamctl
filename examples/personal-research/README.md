@@ -18,7 +18,7 @@ The team passes both gates with two triggers active:
 
 - **Entry conditions.** Buddy owns the research/mental-model domain end-to-end. Curator owns the sourcing/filter domain end-to-end. Both accumulate compounding state (buddy: your mental model, decisions made; curator: source quality memory, filter calibration).
 - **Work-shape triggers.** *Domain separation* fires for both: research-on-demand and proactive-news-following are different surfaces with different state. *Focus separation* fires for curator (continuous attention to feeds, not fired-off per question).
-- **Team-shape triggers.** *Multiple opinions*: curator's "what's worth surfacing" is one filter; buddy's "what's worth bringing to the operator" is a second filter. Two filters land less noise than one. *Synergy*: the buddy's mental model of the operator's interests informs the curator's filter over time, and the curator's surfacings feed back into the buddy's model. Compounding both ways.
+- **Team-shape trigger.** *Synergy*: the buddy's mental model of the operator's interests informs the curator's filter over time, and the curator's surfacings feed back into the buddy's model. Compounding both ways. (Note: this isn't *multiple opinions* in the methodology sense, since curator and buddy filter different artifacts in sequence rather than the same decision as peers. Synergy is the trigger doing the real work.)
 
 ## Install
 
