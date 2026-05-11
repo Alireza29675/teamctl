@@ -22,7 +22,7 @@ On TTL expiry (or `teamctl bridge close <id>`) further cross-project DMs are rej
 
 ## Why not just DM freely?
 
-Without enforced isolation, a marketing agent in Project A could accidentally (or, worse, adversarially) leak intent or data to an engineering agent in Project B. Bridges make cross-talk explicit, time-bounded, and auditable.
+Without enforced isolation, an agent owning the auth domain in Project A could accidentally (or, worse, adversarially) leak intent or data to an agent owning the docs domain in Project B. Bridges make cross-talk explicit, time-bounded, and auditable.
 
 ## Commands
 

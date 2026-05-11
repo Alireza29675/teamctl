@@ -39,6 +39,12 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Best practices',
+          items: [
+            { label: 'Ways of working', link: '/best-practices/ways-of-working/' },
+          ],
+        },
+        {
           label: 'Reference',
           items: [
             { label: 'team-compose.yaml', link: '/reference/team-compose-yaml/' },

@@ -1,46 +1,39 @@
 ---
-// T-022 expanded landing. Heading + subline + YAML demo + `teamctl up`
-// + install + docs link. Linear-tier layout, Vercel-tier code container,
-// no animation. Strict accent rule: YAML keys + Copy hover only.
-//
-// T-021 component plumbing left on disk for future revisit; this page
-// does not import any of it.
+// Landing page with README parity. Hero + lede + intro + demo + install
+// + quickstart + examples table + what-you-get + learn-more. Linear-tier
+// layout, Vercel-tier code container, no animation. Strict accent rule:
+// YAML keys + Copy hover only.
 
 import { Picture } from 'astro:assets';
 import heroPng from '../../assets/hero.png';
 
-const installCmd = 'curl -sSf https://teamctl.run/install | sh';
+const installCmd = 'curl -fsSL https://teamctl.run/install | sh';
 const upCmd = 'teamctl up';
 
-// Frozen YAML demo — drafted by dev3, awaiting marketing tone signoff.
-// Lines split for the muted 2-tone highlighter below.
-// Frozen 2026-04-29 (eng_lead msg 569). Marketing-approved, strict-
-// runnable; model pins mirror canonical examples (hello-team for the
-// claude pins, multi-runtime for the codex pin). Edit only after
-// re-routing through marketing.
+// Sample team YAML for the demo. Mirrors the README's "What a team looks
+// like" section: side-project + manager + dev + researcher.
 const yaml = [
   'project:',
-  '  id: writing',
+  '  id: side-project',
   '',
   'managers:',
-  '  editor:',
+  '  manager:',
   '    runtime: claude-code',
   '    model: claude-opus-4-7',
   '',
   'workers:',
-  '  writer:',
+  '  dev:',
   '    runtime: codex',
   '    model: gpt-5-codex',
-  '    reports_to: editor',
+  '    reports_to: manager',
   '  researcher:',
   '    runtime: claude-code',
   '    model: claude-sonnet-4-6',
-  '    reports_to: editor',
+  '    reports_to: manager',
 ];
 
 // Render each YAML line server-side as muted-2-tone HTML. Keys carry
-// the accent token; everything else is base --fg. Built in frontmatter
-// so the page ships as static HTML and we avoid runtime highlighting.
+// the accent token; everything else is base --fg.
 const escape = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const yamlHtml = yaml
@@ -52,20 +45,108 @@ const yamlHtml = yaml
     return `${indent}<span class="k">${escape(key)}:</span>${escape(rest.slice(1))}`;
   })
   .join('\n');
+
+const examples = [
+  {
+    emoji: '🌱',
+    title: 'Personal research',
+    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/personal-research',
+    agents: '2 (buddy + curator)',
+    what:
+      'The buddy holds your reading list and the compounding mental model of what you actually care about. The curator runs on a loop following the news on your declared interests and surfaces what matters.',
+  },
+  {
+    emoji: '💼',
+    title: 'Job finder',
+    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/job-finder',
+    agents: '3 (lead + scout + matcher)',
+    what:
+      'Scout watches job boards. Matcher does the deep CV-to-posting alignment. Lead handles your applications domain and talks to you on Telegram. Drafts cover letters in your voice; you tap to send.',
+  },
+  {
+    emoji: '💰',
+    title: 'Personal finance',
+    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/personal-finance',
+    agents: '3 (books + tracker + analyst)',
+    what:
+      'Books talks to you on Telegram. Tracker watches your accounts and surfaces anomalies. Analyst builds the long-arc patterns. Read-only by design; nothing moves money without your tap.',
+  },
+  {
+    emoji: '🛠️',
+    title: 'Solo founder ops',
+    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/solo-founder-ops',
+    agents: '4 (hub + research + inbox + analytics)',
+    what:
+      'Hub holds the day picture. Research chases context. Inbox drafts replies and keeps the journal. Analytics watches your product metrics. The everything-that-is-not-building team.',
+  },
+  {
+    emoji: '📬',
+    title: 'Customer support',
+    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/customer-support',
+    agents: '2 (triage + drafter)',
+    what:
+      'Triage reads everything coming in and decides what gets your eyes. Drafter writes the reply in your voice; you tap to send. HITL on every external send.',
+  },
+  {
+    emoji: '🛰️',
+    title: 'OSS maintainer',
+    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/oss-maintainer',
+    agents: '5 (maintainer + triage + bug_fix + docs + release_manager)',
+    what:
+      'Triage labels new issues. Bug-fix opens PRs. Docs keeps the manual honest. Release-manager runs in plan-mode and proposes releases for your approval. You stay in the work only you can do.',
+  },
+];
+
+const features = [
+  {
+    title: 'Persistent agents.',
+    body:
+      'Each one has identity, memory, and a domain. They survive reboots.',
+  },
+  {
+    title: 'A messaging backbone.',
+    body:
+      'Agents DM and broadcast through Slack-like channels; you can audit every line.',
+  },
+  {
+    title: 'Human-in-the-loop (HITL) when it matters.',
+    body:
+      '`publish`, `release`, `deploy`, `external_email`. Every sensitive action pauses for your tap on Telegram before it ships.',
+  },
+  {
+    title: 'Multi-runtime.',
+    body:
+      'Mix Claude Code, Codex, and Gemini in the same team. Different agents can use different keys for billing or rate-limit headroom.',
+  },
+  {
+    title: 'Project isolation.',
+    body:
+      'Run unrelated teams side-by-side without cross-talk. Bridge two projects only when you mean to.',
+  },
+  {
+    title: 'Telegram, today.',
+    body:
+      'Discord, email, and more on the way.',
+  },
+];
+
+// Render feature body with backticks → <code>.
+const featureBody = (s: string) =>
+  s.replace(/`([^`]+)`/g, '<code>$1</code>');
 ---
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>teamctl — docker-compose for persistent AI agent teams</title>
+    <title>teamctl: a team of AI agents, declared in YAML</title>
     <meta
       name="description"
-      content="Docker-compose for persistent AI agent teams. Declare a team in YAML and supervise it like services."
+      content="A team of AI agents, collaborating over a messaging system, all declared in YAML. Persistent and scalable. Built to scale agent-to-agent collaboration and solve bigger problems with better orchestration."
     />
-    <meta property="og:title" content="teamctl — docker-compose for persistent AI agent teams" />
+    <meta property="og:title" content="teamctl: a team of AI agents, declared in YAML" />
     <meta
       property="og:description"
-      content="Docker-compose for persistent AI agent teams. Declare a team in YAML and supervise it like services."
+      content="A team of AI agents, collaborating over a messaging system, all declared in YAML. Persistent and scalable. Built to scale agent-to-agent collaboration and solve bigger problems with better orchestration."
     />
   </head>
   <body>
@@ -83,16 +164,18 @@ const yamlHtml = yaml
       </figure>
 
       <header class="lede">
-        <h1>Autonomous Teams of Agents</h1>
-        <p class="subline">declared in YAML, supervised like docker-compose and accessed via Telegram.</p>
+        <h1>A team of AI agents, declared in YAML.</h1>
+        <p class="subline">Collaborating over a messaging system. Persistent and scalable.</p>
       </header>
 
-      <figure class="demo" aria-label="Example team.yaml and the command to start it">
-        <div class="code-card">
-          <pre class="yaml"><code set:html={yamlHtml}></code></pre>
-        </div>
-        <pre class="up"><code><span class="prompt">$ </span>{upCmd}</code></pre>
-      </figure>
+      <p class="intro">
+        Each agent is a real Claude Code, Codex, or Gemini session with its own identity, its own memory, and a domain it owns end-to-end. They talk to each other through a durable mailbox. They collaborate the way real teammates do: handing off, pushing back, picking up where the other left off, asking for help when they need it, keeping the work moving while you sleep. You stay in the loop on what matters through Telegram, the TUI, or the CLI.
+      </p>
+
+      <p class="intro">
+        teamctl is built to scale agent-to-agent collaboration and solve bigger problems with better orchestration.
+        <a href="/concepts/teams/">Read the methodology</a>, or skip to the examples below.
+      </p>
 
       <section class="install-section">
         <div class="install">
@@ -102,14 +185,92 @@ const yamlHtml = yaml
             <span class="copy-done" hidden>Copied</span>
           </button>
         </div>
+        <p class="install-note">
+          Installs <code>teamctl</code>, <code>team-mcp</code>, <code>team-bot</code>, and <code>teamctl-ui</code> on your <code>$PATH</code>, plus the Claude Code plugin if <code>claude</code> is detected.
+        </p>
+      </section>
+
+      <section class="start-team">
+        <h2>Start a team</h2>
+        <p>
+          Inside your project directory, with Claude Code installed:
+        </p>
+        <pre class="up"><code><span class="prompt">$ </span>cd /path/to/your/project</code></pre>
+        <pre class="up"><code><span class="prompt">$ </span>claude /teamctl:init</code></pre>
+        <p>
+          The plugin walks you through a real conversation (not a template menu) that surfaces the <em>domains</em> in your work and proposes a team shape around them. By the time you're done, <code>.team/team-compose.yaml</code> is on disk and the team is running in <code>tmux</code>.
+        </p>
+        <p>
+          If you'd rather hand-author the team yourself, read the <a href="/concepts/teams/">handbook</a> first. It's the cognitive frame the guided flow would have walked you through.
+        </p>
+      </section>
+
+      <section class="examples">
+        <h2>Examples</h2>
+        <p>
+          Real teams running on teamctl. Copy any of them as a starting point.
+        </p>
+        <ul class="examples-list">
+          {examples.map((ex) => (
+            <li>
+              <a class="example-link" href={ex.href}>
+                <div class="example-head">
+                  <span class="example-emoji" aria-hidden="true">{ex.emoji}</span>
+                  <span class="example-title">{ex.title}</span>
+                  <span class="example-agents">{ex.agents}</span>
+                </div>
+                <p class="example-what">{ex.what}</p>
+              </a>
+            </li>
+          ))}
+        </ul>
+        <p class="examples-more">
+          More examples (and a few legacy shapes) live in <a href="https://github.com/Alireza29675/teamctl/tree/main/examples"><code>examples/</code></a>.
+        </p>
+      </section>
+
+      <section class="demo-section">
+        <h2>What a team looks like</h2>
+        <p>A project YAML, with one manager and a couple of workers:</p>
+        <figure class="demo" aria-label="Example team.yaml and the command to start it">
+          <div class="code-card">
+            <pre class="yaml"><code set:html={yamlHtml}></code></pre>
+          </div>
+          <pre class="up"><code><span class="prompt">$ </span>{upCmd}</code></pre>
+        </figure>
+      </section>
+
+      <section class="features">
+        <h2>What you get</h2>
+        <ul class="features-list">
+          {features.map((f) => (
+            <li>
+              <strong>{f.title}</strong>{' '}
+              <span set:html={featureBody(f.body)} />
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section class="learn-more">
+        <h2>Learn more</h2>
+        <ul class="learn-list">
+          <li>
+            📖 <a href="/concepts/teams/">How to think about agent teams</a> for the methodology, the two-gate framing, and what TeamOps means in practice.
+          </li>
+          <li>
+            📚 <a href="/getting-started/">Documentation</a> for full docs, concepts, reference, and ADRs.
+          </li>
+          <li>
+            🧪 <a href="/compare/">How teamctl compares</a> for the feature matrix vs neighboring tools. No put-downs.
+          </li>
+        </ul>
       </section>
 
       <nav class="outbound" aria-label="Outbound links">
-        <a href="/getting-started/">Read the docs →</a>
-        <span class="sep" aria-hidden="true">·</span>
         <a href="https://github.com/Alireza29675/teamctl">Star on GitHub</a>
         <span class="sep" aria-hidden="true">·</span>
-        <a href="https://github.com/Alireza29675/teamctl/tree/main/examples">Examples</a>
+        <a href="https://github.com/Alireza29675/teamctl/tree/main/examples">Examples on GitHub</a>
       </nav>
     </main>
 
@@ -131,7 +292,7 @@ const yamlHtml = yaml
               }, 1600);
             }
           } catch {
-            /* clipboard refused — leave UI untouched */
+            /* clipboard refused: leave UI untouched */
           }
         });
       }
@@ -165,8 +326,10 @@ const yamlHtml = yaml
         display: grid;
         gap: 3rem;
       }
+      a { color: var(--fg); }
+      a:hover { color: var(--accent); }
 
-      /* Hero image — contained in the same column. Static, no motion. */
+      /* Hero */
       .hero {
         margin: 0;
         border-radius: 10px;
@@ -197,47 +360,52 @@ const yamlHtml = yaml
         line-height: 1.5;
       }
 
-      /* Demo: code card + $ teamctl up */
-      .demo { margin: 0; display: grid; gap: 1rem; }
-
-      .code-card {
-        position: relative;
-        background:
-          linear-gradient(180deg, rgba(255, 245, 220, 0.018), transparent 40%),
-          var(--bg-soft);
-        border: 1px solid var(--hairline);
-        border-radius: 10px;
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.025),
-          0 1px 0 rgba(0, 0, 0, 0.4);
-      }
-      .yaml {
+      .intro {
         margin: 0;
-        padding: 1.5rem 1.75rem;
-        overflow-x: auto;
-        font-family: var(--mono);
-        font-size: 0.92rem;
-        line-height: 1.75;
         color: var(--fg);
-        white-space: pre;
+        font-size: 1.02rem;
+        line-height: 1.65;
       }
-      /* Inner spans come from set:html and don't carry Astro's scope hash;
-         use :global() so the muted-2-tone palette still applies. */
-      .yaml :global(.k) { color: var(--accent); }
+      .intro a {
+        border-bottom: 1px solid var(--hairline);
+        text-decoration: none;
+      }
+      .intro a:hover {
+        border-color: rgba(214, 161, 90, 0.5);
+      }
 
-      .up {
-        margin: 0;
-        padding: 0.4rem 0.25rem 0;
+      h2 {
+        font-family: var(--serif);
+        font-weight: 400;
+        font-size: 1.6rem;
+        margin: 0 0 0.6rem;
+        letter-spacing: -0.005em;
+      }
+
+      section p {
+        margin: 0 0 0.9rem;
+        color: var(--fg);
+        font-size: 1rem;
+        line-height: 1.6;
+      }
+      section p:last-child { margin-bottom: 0; }
+      section code {
         font-family: var(--mono);
-        font-size: 0.92rem;
-        color: var(--fg-mute);
-        background: transparent;
+        font-size: 0.9em;
+        background: rgba(214, 161, 90, 0.08);
+        padding: 0.05em 0.3em;
+        border-radius: 4px;
       }
-      .up .prompt { color: var(--fg-mute); user-select: none; }
-      .up code { color: var(--fg); }
+      section a {
+        border-bottom: 1px solid var(--hairline);
+        text-decoration: none;
+      }
+      section a:hover {
+        border-color: rgba(214, 161, 90, 0.5);
+      }
 
-      /* Install — separated visually from the demo composition. */
-      .install-section { margin-top: 1.5rem; }
+      /* Install */
+      .install-section { margin-top: 0; display: grid; gap: 0.6rem; }
       .install {
         position: relative;
         background: var(--bg-soft);
@@ -252,6 +420,11 @@ const yamlHtml = yaml
         font-size: 0.95rem;
         color: var(--fg);
         white-space: pre;
+      }
+      .install-note {
+        margin: 0;
+        color: var(--fg-mute);
+        font-size: 0.92rem;
       }
       .copy-btn {
         position: absolute;
@@ -274,9 +447,127 @@ const yamlHtml = yaml
         outline: none;
       }
 
-      /* Docs link */
-      /* Outbound links — three quiet anchors in a row, fg-mute → fg on
-         hover, never accent (strict accent rule). */
+      /* Examples list */
+      .examples-list {
+        list-style: none;
+        padding: 0;
+        margin: 1rem 0 0.6rem;
+        display: grid;
+        gap: 0.6rem;
+      }
+      .example-link {
+        display: block;
+        padding: 0.9rem 1.1rem;
+        border: 1px solid var(--hairline);
+        border-radius: 8px;
+        background: var(--bg-soft);
+        text-decoration: none;
+        color: var(--fg);
+        transition: border-color 200ms ease, background 200ms ease;
+      }
+      .example-link:hover {
+        border-color: rgba(214, 161, 90, 0.5);
+        background: rgba(214, 161, 90, 0.04);
+      }
+      .example-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.5rem;
+        margin-bottom: 0.25rem;
+      }
+      .example-emoji {
+        font-size: 1.1rem;
+      }
+      .example-title {
+        font-weight: 600;
+        color: var(--fg);
+      }
+      .example-agents {
+        color: var(--fg-mute);
+        font-size: 0.9rem;
+        font-family: var(--mono);
+      }
+      .example-what {
+        margin: 0;
+        color: var(--fg-mute);
+        font-size: 0.96rem;
+        line-height: 1.55;
+      }
+      .examples-more {
+        margin: 0.6rem 0 0;
+        color: var(--fg-mute);
+        font-size: 0.95rem;
+      }
+
+      /* Demo: code card + $ teamctl up */
+      .demo { margin: 0.6rem 0 0; display: grid; gap: 1rem; }
+
+      .code-card {
+        position: relative;
+        background:
+          linear-gradient(180deg, rgba(255, 245, 220, 0.018), transparent 40%),
+          var(--bg-soft);
+        border: 1px solid var(--hairline);
+        border-radius: 10px;
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.025),
+          0 1px 0 rgba(0, 0, 0, 0.4);
+      }
+      .yaml {
+        margin: 0;
+        padding: 1.5rem 1.75rem;
+        overflow-x: auto;
+        font-family: var(--mono);
+        font-size: 0.92rem;
+        line-height: 1.75;
+        color: var(--fg);
+        white-space: pre;
+      }
+      .yaml :global(.k) { color: var(--accent); }
+
+      .up {
+        margin: 0;
+        padding: 0.4rem 0.25rem 0;
+        font-family: var(--mono);
+        font-size: 0.92rem;
+        color: var(--fg-mute);
+        background: transparent;
+      }
+      .up .prompt { color: var(--fg-mute); user-select: none; }
+      .up code { color: var(--fg); }
+
+      /* Features */
+      .features-list {
+        list-style: none;
+        padding: 0;
+        margin: 0.4rem 0 0;
+        display: grid;
+        gap: 0.6rem;
+      }
+      .features-list li {
+        color: var(--fg);
+        font-size: 1rem;
+        line-height: 1.55;
+      }
+      .features-list strong {
+        color: var(--fg);
+      }
+
+      /* Learn more */
+      .learn-list {
+        list-style: none;
+        padding: 0;
+        margin: 0.4rem 0 0;
+        display: grid;
+        gap: 0.5rem;
+      }
+      .learn-list li {
+        color: var(--fg);
+        font-size: 1rem;
+      }
+
+      /* Outbound */
       .outbound {
         display: flex;
         flex-wrap: wrap;

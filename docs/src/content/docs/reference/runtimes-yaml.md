@@ -16,20 +16,24 @@ Each YAML file under `runtimes/` defines one runtime adapter. File stem = runtim
 
 ## Shipped adapters
 
-- `claude-code.yaml` — Anthropic's Claude Code CLI.
-- `codex.yaml` — OpenAI's Codex CLI.
-- `gemini.yaml` — Google's Gemini CLI.
+- `claude-code.yaml`: Anthropic's Claude Code CLI.
+- `codex.yaml`: OpenAI's Codex CLI.
+- `gemini.yaml`: Google's Gemini CLI.
 
 ## Example
 
 ```yaml
-# runtimes/aider.yaml — hypothetical adapter for aider
+# runtimes/aider.yaml: hypothetical adapter for aider
 binary: aider
 supports_mcp: true
-session_resume: "none"
 default_model: sonnet
 env:
   AIDER_CHAT_HISTORY_FILE: ""
 ```
+
+> `session_resume` was an early field for declaring resume strategy.
+> It's still parsed (back-compat) but inert: leave it out of new
+> adapters. claude-code agents now auto-resume via deterministic
+> UUIDv5 session ids; other runtimes either resume natively or don't.
 
 You'd also need a `run_aider` branch in `bin/agent-wrapper.sh` that knows how to pass `--mcp-config` and `--system-instruction` to `aider`.
