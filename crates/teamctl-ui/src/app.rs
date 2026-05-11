@@ -24,7 +24,7 @@ use crate::approvals::{
 };
 use crate::compose::{CliMessageSender, ComposeTarget, Editor, EditorAction, MessageSender};
 use crate::data::TeamSnapshot;
-use crate::keysender::{encode_key, KeySender, TmuxKeySender};
+use crate::keysender::{encode_key, KeySender, ScrollDirection, TmuxKeySender};
 use crate::layouts;
 use crate::mailbox::{BrokerMailboxSource, MailboxBuffers, MailboxSource, MailboxTab};
 use crate::pane::{PaneSource, TmuxPaneSource};
@@ -1622,6 +1622,45 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
         },
         Event::Resize(_, _) => {
             // ratatui redraws on the next loop iteration; nothing to do.
+        }
+        // T-158: mouse-wheel routes by focused pane. Detail forwards
+        // each tick to the agent's tmux pane as a copy-mode scroll —
+        // wheel-up enters copy-mode and walks history, wheel-down
+        // walks back toward live. Roster steps the agent selection
+        // (same step as `j`/`k`). Mailbox is a no-op until T-131
+        // lands the row-cursor state for the rows to scroll; the
+        // routing scaffold is in place so that fill-in is local.
+        // Stages other than Triptych ignore mouse input — modal
+        // overlays (compose, approvals, picker, help) own the screen
+        // and shouldn't get a surprise scroll routed past them.
+        Event::Mouse(m) if matches!(app.stage, Stage::Triptych) => {
+            use crossterm::event::MouseEventKind;
+            let direction = match m.kind {
+                MouseEventKind::ScrollUp => Some(ScrollDirection::Up),
+                MouseEventKind::ScrollDown => Some(ScrollDirection::Down),
+                _ => None,
+            };
+            if let Some(dir) = direction {
+                match app.focused_pane {
+                    Pane::Detail => {
+                        if let Some(session) = app.focused_session().map(|s| s.to_string()) {
+                            // Best-effort, same convention as
+                            // stream-keys: tmux failure (session
+                            // vanished) is silent; the next refresh
+                            // reflects reality.
+                            let _ = key_sender.scroll(&session, dir);
+                        }
+                    }
+                    Pane::Roster => match dir {
+                        ScrollDirection::Up => app.select_prev(),
+                        ScrollDirection::Down => app.select_next(),
+                    },
+                    Pane::Mailbox => {
+                        // T-131 will wire row-level scroll state
+                        // here. v1 ships the routing only.
+                    }
+                }
+            }
         }
         _ => {}
     }

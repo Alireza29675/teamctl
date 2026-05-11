@@ -55,6 +55,7 @@ use teamctl_ui::approvals::{Approval, Decision};
 use teamctl_ui::compose::test_support::MockMessageSender;
 use teamctl_ui::data::{AgentInfo, TeamSnapshot};
 use teamctl_ui::keysender::test_support::MockKeySender;
+use teamctl_ui::keysender::ScrollDirection;
 use teamctl_ui::mailbox::test_support::MockMailboxSource;
 use teamctl_ui::triptych::{MainLayout, Pane};
 
@@ -104,6 +105,26 @@ impl Harness {
             modifiers,
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
+        });
+        app::handle_event(
+            &mut self.app,
+            ev,
+            &self.decider,
+            &self.sender,
+            &self.mailbox,
+            &self.key_sender,
+        );
+    }
+
+    /// Dispatch one mouse-wheel tick — T-158. Column/row are fixed
+    /// to (0, 0) because the routing logic keys on `app.focused_pane`,
+    /// not the click position.
+    pub fn dispatch_mouse(&mut self, kind: crossterm::event::MouseEventKind) {
+        let ev = Event::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
         });
         app::handle_event(
             &mut self.app,
@@ -1552,4 +1573,145 @@ fn closing_compose_modal_clears_attach_overlay_state() {
     h.dispatch_key(KeyCode::Char('@'));
     assert!(!h.app.compose_attach_input_open);
     assert_eq!(h.app.compose_attach_buffer, "");
+}
+
+// ── T-158 mouse-scroll routing ─────────────────────────────────────
+
+#[test]
+fn mouse_wheel_in_detail_pane_forwards_scroll_to_focused_agent_session() {
+    // The load-bearing path: with Detail focused and an agent
+    // selected, every wheel tick lands as a `scroll(session, dir)`
+    // call on the KeySender so tmux walks the agent's pane history.
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "t",
+        vec![synth_agent("t:m", AgentState::Running, 0, 0)],
+    ));
+    h.app.dismiss_splash();
+    h.dispatch_key(KeyCode::Tab); // Roster → Detail
+    assert_eq!(h.app.focused_pane, Pane::Detail);
+
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollUp);
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollUp);
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollDown);
+
+    let calls = h.key_sender.scroll_calls.lock().unwrap();
+    assert_eq!(calls.len(), 3, "every wheel tick forwards exactly once");
+    let session = "t-t-m"; // synth_agent's `format!("t-{project}-{agent}")`
+    assert_eq!(
+        *calls,
+        vec![
+            (session.into(), ScrollDirection::Up),
+            (session.into(), ScrollDirection::Up),
+            (session.into(), ScrollDirection::Down),
+        ]
+    );
+    // Keystroke channel must remain silent — scroll goes through
+    // its own KeySender entry point.
+    assert!(h.key_sender.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn mouse_wheel_in_detail_pane_is_silent_when_no_agent_selected() {
+    // Empty team → no `focused_session()`. Wheel ticks must not
+    // panic and must not produce phantom forwards.
+    let mut h = Harness::new();
+    h.app.dismiss_splash();
+    assert_eq!(h.app.focused_pane, Pane::Roster);
+    h.dispatch_key(KeyCode::Tab); // → Detail
+    assert!(h.app.selected_agent_id().is_none());
+
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollUp);
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollDown);
+
+    assert!(h.key_sender.scroll_calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn mouse_wheel_in_roster_steps_agent_selection() {
+    // Roster wheel = `j` / `k`. Three agents, start at index 0,
+    // ScrollDown advances to 1, ScrollUp returns to 0.
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "t",
+        vec![
+            synth_agent("t:a", AgentState::Running, 0, 0),
+            synth_agent("t:b", AgentState::Running, 0, 0),
+            synth_agent("t:c", AgentState::Running, 0, 0),
+        ],
+    ));
+    h.app.dismiss_splash();
+    assert_eq!(h.app.focused_pane, Pane::Roster);
+    assert_eq!(h.app.selected_agent_id().as_deref(), Some("t:a"));
+
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollDown);
+    assert_eq!(h.app.selected_agent_id().as_deref(), Some("t:b"));
+
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollDown);
+    assert_eq!(h.app.selected_agent_id().as_deref(), Some("t:c"));
+
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollUp);
+    assert_eq!(h.app.selected_agent_id().as_deref(), Some("t:b"));
+
+    // Roster routing must not leak into the KeySender channels.
+    assert!(h.key_sender.scroll_calls.lock().unwrap().is_empty());
+    assert!(h.key_sender.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn mouse_wheel_in_mailbox_is_a_noop_for_v1() {
+    // T-131 will wire mailbox row-cursor scrolling. v1 ships the
+    // routing scaffold only — Mailbox-focused wheel ticks must not
+    // forward to KeySender (that's Detail's lane) and must not
+    // accidentally cycle the tab (left/right arrows own that).
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "t",
+        vec![synth_agent("t:m", AgentState::Running, 0, 0)],
+    ));
+    h.app.dismiss_splash();
+    h.dispatch_key(KeyCode::Tab); // → Detail
+    h.dispatch_key(KeyCode::Tab); // → Mailbox
+    assert_eq!(h.app.focused_pane, Pane::Mailbox);
+    let tab_before = h.app.mailbox_tab;
+
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollUp);
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollDown);
+
+    assert_eq!(
+        h.app.mailbox_tab, tab_before,
+        "mailbox wheel must not cycle tabs in v1 — arrows own that"
+    );
+    assert!(h.key_sender.scroll_calls.lock().unwrap().is_empty());
+    assert!(h.key_sender.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn mouse_wheel_in_non_triptych_stages_is_silent() {
+    // Modal overlays own the screen. Wheel ticks fired into Splash,
+    // ApprovalsModal, ComposeModal, etc. must not route past — a
+    // surprise scroll routed into the agent during a compose modal
+    // would be a real UX bug.
+    let mut h = Harness::new();
+    h.app.replace_team(fixture_team(
+        "t",
+        vec![synth_agent("t:m", AgentState::Running, 0, 0)],
+    ));
+    assert_eq!(h.app.stage, Stage::Splash);
+
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollUp);
+    assert_eq!(
+        h.app.stage,
+        Stage::Splash,
+        "wheel must not dismiss the splash stage"
+    );
+    assert!(h.key_sender.scroll_calls.lock().unwrap().is_empty());
+
+    // ComposeModal — open it, fire wheel, assert silent.
+    h.app.dismiss_splash();
+    h.dispatch_key(KeyCode::Char('@'));
+    assert_eq!(h.app.stage, Stage::ComposeModal);
+    h.dispatch_mouse(crossterm::event::MouseEventKind::ScrollDown);
+    assert_eq!(h.app.stage, Stage::ComposeModal, "modal stays open");
+    assert!(h.key_sender.scroll_calls.lock().unwrap().is_empty());
 }

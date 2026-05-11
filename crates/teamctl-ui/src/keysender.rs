@@ -21,6 +21,22 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// poll already gates throughput).
 pub trait KeySender: Send + Sync {
     fn send(&self, session: &str, key: &EncodedKey) -> Result<()>;
+
+    /// Forward one mouse-wheel tick to the named tmux session as a
+    /// terminal-history scroll. Implementations target the pane's
+    /// copy-mode scroll commands, so the agent's history surfaces the
+    /// same way `tmux attach` + wheel does — wheel-up auto-enters
+    /// copy-mode, subsequent ticks scroll the buffer. Wheel-down on a
+    /// pane not in copy-mode is a no-op (tmux's own behaviour).
+    fn scroll(&self, session: &str, direction: ScrollDirection) -> Result<()>;
+}
+
+/// Direction of one mouse-wheel tick. Maps to tmux copy-mode commands
+/// `scroll-up` / `scroll-down`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollDirection {
+    Up,
+    Down,
 }
 
 /// One encoded keystroke ready for `tmux send-keys`. Carries the
@@ -157,6 +173,31 @@ impl KeySender for TmuxKeySender {
         let _ = output;
         Ok(())
     }
+
+    fn scroll(&self, session: &str, direction: ScrollDirection) -> Result<()> {
+        // ScrollUp first runs `copy-mode -e` so wheel-up on an
+        // un-scrolled pane mirrors `tmux attach` + wheel: enter
+        // copy-mode and start scrolling. `-e` auto-exits copy-mode
+        // once the user scrolls back to the bottom, so wheel-down at
+        // the end of history drops the operator cleanly back into
+        // the live pane. Already-in-copy-mode is a harmless no-op for
+        // the second invocation.
+        if matches!(direction, ScrollDirection::Up) {
+            let _ = Command::new("tmux")
+                .args(["copy-mode", "-e", "-t", session])
+                .output()
+                .with_context(|| format!("invoke tmux copy-mode -e -t {session}"))?;
+        }
+        let cmd = match direction {
+            ScrollDirection::Up => "scroll-up",
+            ScrollDirection::Down => "scroll-down",
+        };
+        let _ = Command::new("tmux")
+            .args(["send-keys", "-t", session, "-X", cmd])
+            .output()
+            .with_context(|| format!("invoke tmux send-keys -t {session} -X {cmd}"))?;
+        Ok(())
+    }
 }
 
 /// Test fixtures. Made `pub` (rather than `#[cfg(test)]`) so the
@@ -168,9 +209,12 @@ pub mod test_support {
 
     /// Recording stub. Captures every `(session, encoded)` pair so
     /// tests can assert which session was targeted with which key.
+    /// Separate `scroll_calls` log for mouse-wheel forwards so
+    /// keystroke and scroll surfaces stay independently inspectable.
     #[derive(Default)]
     pub struct MockKeySender {
         pub calls: Mutex<Vec<(String, EncodedKey)>>,
+        pub scroll_calls: Mutex<Vec<(String, ScrollDirection)>>,
     }
 
     impl KeySender for MockKeySender {
@@ -179,6 +223,14 @@ pub mod test_support {
                 .lock()
                 .unwrap()
                 .push((session.to_string(), key.clone()));
+            Ok(())
+        }
+
+        fn scroll(&self, session: &str, direction: ScrollDirection) -> Result<()> {
+            self.scroll_calls
+                .lock()
+                .unwrap()
+                .push((session.to_string(), direction));
             Ok(())
         }
     }
@@ -345,5 +397,21 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "t-p-a");
         assert_eq!(calls[0].1, enc);
+    }
+
+    #[test]
+    fn mock_records_scroll_session_and_direction() {
+        use test_support::MockKeySender;
+        let mock = MockKeySender::default();
+        mock.scroll("t-p-a", ScrollDirection::Up).unwrap();
+        mock.scroll("t-p-a", ScrollDirection::Down).unwrap();
+        let calls = mock.scroll_calls.lock().unwrap();
+        assert_eq!(
+            *calls,
+            vec![
+                ("t-p-a".to_string(), ScrollDirection::Up),
+                ("t-p-a".to_string(), ScrollDirection::Down),
+            ]
+        );
     }
 }
