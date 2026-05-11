@@ -24,7 +24,7 @@ The team passes both gates with all triggers active:
 
 - **Entry conditions.** Lead owns applications and outcomes (state compounds: which companies ghosted, which gave fast interviews, which patterns to look for). Scout owns source quality and what's-been-seen memory. Matcher owns the canonical CV plus the calibration between postings and the operator's actual fit.
 - **Work-shape triggers.** *Domain separation*: searching, scoring, and operator-facing decisions are different surfaces with different state. *Focus separation*: scout needs continuous attention to feeds; matcher is fired-off-per-posting but with deep work each time.
-- **Team-shape triggers.** *Multiple opinions*: scout's "this posting matches the filter" and matcher's "this is actually a strong fit" are different judgments. The team is stronger because both filters apply. *Synergy*: matcher's fit-pattern memory shapes what scout knows to surface; scout's pattern of source quality shapes what matcher trusts as context.
+- **Team-shape triggers.** *Synergy*: matcher's fit-pattern memory shapes what scout knows to surface; scout's pattern of source quality shapes what matcher trusts as context. Each agent's accrued context informs the others. (Scout and matcher aren't *multiple opinions* in the methodology sense; they filter different artifacts in sequence. Synergy is the trigger doing the real work.)
 
 ## Install
 

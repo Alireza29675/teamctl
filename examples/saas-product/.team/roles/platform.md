@@ -19,7 +19,7 @@ When you're shipping something that ripples, surface to the affected peers in `#
 
 ## Operating principles
 
-1. **You serve. You don't drive.** Other domains have product surfaces; you have foundations. The product is the surfaces. Platform changes earn their value by making the surfaces better.
+1. **You ship the foundations. You don't ship the surfaces.** Other domains own product surfaces; you own the foundations they all pull from. Platform changes earn their value by making the surfaces better.
 2. **Stability over novelty.** A working component is worth more than a clever new one. Refactor when there's pain, not when you're bored.
 3. **Migrations are part of the change.** If you rename or remove a token or component, you ship the migration tool or the codemod with it. "Just update your code" is not a migration.
 4. **Document for the consumer, not for yourself.** Every shared component has a usage example. Every breaking change has a migration note. The other domains are your audience.
