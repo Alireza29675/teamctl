@@ -13,6 +13,7 @@ pub mod layouts;
 pub mod mailbox;
 pub mod onboarding;
 pub mod pane;
+pub mod pane_resize;
 pub mod splash;
 pub mod statusline;
 pub mod theme;

@@ -194,6 +194,14 @@ pub struct App {
     /// Single-line buffer for the path-input overlay. Reset on close
     /// so a cancelled draft can't leak into the next attach attempt.
     pub compose_attach_buffer: String,
+    /// T-199: per-session cache of the last Detail-pane size we
+    /// pushed to `tmux resize-pane`. The run loop diffs the current
+    /// Detail rect against this on every frame and only spawns the
+    /// tmux command when the size actually changed — common case
+    /// (no resize, no focus switch) is a HashMap lookup. Keyed by
+    /// `tmux_session` (e.g. `t-hello-manager`). See
+    /// `crate::pane_resize`.
+    pub last_synced_pane_sizes: std::collections::HashMap<String, (u16, u16)>,
 }
 
 const MAX_DETAIL_LINES: usize = 2000;
@@ -239,6 +247,7 @@ impl App {
             tutorial_pending_for_team: false,
             spinner_frame: 0,
             tutorial_step: 0,
+            last_synced_pane_sizes: std::collections::HashMap::new(),
         }
     }
 
@@ -886,12 +895,23 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
     let decider = CliApprovalDecider;
     let sender = CliMessageSender;
     let key_sender = TmuxKeySender;
+    let pane_resizer = crate::pane_resize::TmuxPaneResizer;
     // First refresh resolves the team root; only then can we
     // bring up the file-watcher, which keys on `<root>/state/`.
     refresh_with_default_sources(&mut app, &pane_source);
     let mut watch = Watch::try_new(&app.team.root.join("state"));
     while app.running {
         terminal.draw(|f| draw(f, &app))?;
+        // T-199: after every frame, push the focused agent's inner
+        // tmux pane to match teamctl-ui's Detail rect so claude
+        // reflows when the operator resizes the host terminal (or
+        // when focus switches to a different agent whose pane was
+        // last sized for a different layout). The cache inside
+        // `sync_focused_pane_size_to` keeps this to one HashMap
+        // lookup per frame in the no-op case.
+        let term_sz = terminal.size()?;
+        let term_area = ratatui::layout::Rect::new(0, 0, term_sz.width, term_sz.height);
+        sync_focused_pane_size_to(&mut app, term_area, &pane_resizer);
         if event::poll(POLL_INTERVAL)? {
             // The mailbox source for handle_event mirrors the
             // refresh path; the same db_path key avoids divergence
@@ -929,6 +949,44 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// T-199: push the focused agent's inner tmux pane to match the
+/// Detail rect teamctl-ui will draw into. No-op when:
+///
+/// - no agent is focused (nothing to size);
+/// - the active main layout isn't Triptych (Wall / MailboxFirst
+///   render differently and aren't in scope for this fix; flagged
+///   as follow-up surfaces in #199);
+/// - the Detail rect is degenerate (zero width or height — the
+///   helper returns `None` and we leave the pane alone);
+/// - the cached size for this session already matches.
+///
+/// The cache lives on `App` (`last_synced_pane_sizes`) so the
+/// common case (no resize, focused on same agent) is a HashMap
+/// lookup, not a subprocess spawn.
+pub fn sync_focused_pane_size_to<R: crate::pane_resize::PaneResizer>(
+    app: &mut App,
+    total_area: ratatui::layout::Rect,
+    resizer: &R,
+) {
+    if !matches!(app.layout, MainLayout::Triptych) {
+        return;
+    }
+    let Some(detail) =
+        crate::pane_resize::triptych_detail_area(total_area, app.has_pending_approvals())
+    else {
+        return;
+    };
+    let Some(session) = app.focused_session().map(|s| s.to_string()) else {
+        return;
+    };
+    let target = (detail.width, detail.height);
+    if !crate::pane_resize::should_sync(&app.last_synced_pane_sizes, &session, target) {
+        return;
+    }
+    resizer.resize(&session, target.0, target.1);
+    app.last_synced_pane_sizes.insert(session, target);
 }
 
 /// Build the production `BrokerMailboxSource` + `BrokerApprovalSource`
@@ -3216,5 +3274,163 @@ mod tests {
         stream_dispatch(&mut app, key(KeyCode::Char('a')), &ks);
         assert_eq!(app.stage, Stage::Triptych);
         assert!(ks.calls.lock().unwrap().is_empty());
+    }
+
+    // ── T-199: detail-pane → inner-tmux size sync ───────────────────
+
+    fn pane_sync_fixture() -> App {
+        let mut app = App::new();
+        app.team = fixture_team(vec![
+            agent("hello:mgr", AgentState::Running),
+            agent("hello:dev", AgentState::Running),
+        ]);
+        app.selected_agent = Some(0);
+        app.stage = Stage::Triptych;
+        app.layout = MainLayout::Triptych;
+        app
+    }
+
+    #[test]
+    fn sync_fires_resize_on_first_frame() {
+        let mut app = pane_sync_fixture();
+        let resizer = crate::pane_resize::test_support::MockPaneResizer::default();
+        sync_focused_pane_size_to(
+            &mut app,
+            ratatui::layout::Rect::new(0, 0, 120, 40),
+            &resizer,
+        );
+        let calls = resizer.calls.lock().unwrap();
+        // First frame: cache empty, expect one call for the focused
+        // session (mgr) at the typical 120×40 Triptych Detail rect.
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "t-hello-mgr");
+        assert_eq!(calls[0].1, 92); // Detail width = 120 - 28 sidebar
+        assert_eq!(calls[0].2, 24); // Detail height = 3/5 of 40
+    }
+
+    #[test]
+    fn sync_skips_when_size_unchanged() {
+        let mut app = pane_sync_fixture();
+        let resizer = crate::pane_resize::test_support::MockPaneResizer::default();
+        // Two frames at identical size → only the first should fire.
+        sync_focused_pane_size_to(
+            &mut app,
+            ratatui::layout::Rect::new(0, 0, 120, 40),
+            &resizer,
+        );
+        sync_focused_pane_size_to(
+            &mut app,
+            ratatui::layout::Rect::new(0, 0, 120, 40),
+            &resizer,
+        );
+        assert_eq!(resizer.calls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sync_fires_again_when_terminal_resizes() {
+        let mut app = pane_sync_fixture();
+        let resizer = crate::pane_resize::test_support::MockPaneResizer::default();
+        sync_focused_pane_size_to(
+            &mut app,
+            ratatui::layout::Rect::new(0, 0, 120, 40),
+            &resizer,
+        );
+        // Operator resized the host terminal.
+        sync_focused_pane_size_to(
+            &mut app,
+            ratatui::layout::Rect::new(0, 0, 200, 60),
+            &resizer,
+        );
+        let calls = resizer.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].1, 92);
+        assert_eq!(calls[0].2, 24);
+        assert_eq!(calls[1].1, 172); // 200 - 28
+                                     // Height = 3/5 of 60 = 36.
+        assert_eq!(calls[1].2, 36);
+    }
+
+    #[test]
+    fn sync_fires_on_focus_switch_to_unsynced_session() {
+        let mut app = pane_sync_fixture();
+        let resizer = crate::pane_resize::test_support::MockPaneResizer::default();
+        sync_focused_pane_size_to(
+            &mut app,
+            ratatui::layout::Rect::new(0, 0, 120, 40),
+            &resizer,
+        );
+        // Operator switched focus to the dev agent.
+        app.selected_agent = Some(1);
+        sync_focused_pane_size_to(
+            &mut app,
+            ratatui::layout::Rect::new(0, 0, 120, 40),
+            &resizer,
+        );
+        let calls = resizer.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "t-hello-mgr");
+        assert_eq!(calls[1].0, "t-hello-dev");
+    }
+
+    #[test]
+    fn sync_is_noop_when_no_agent_focused() {
+        let mut app = pane_sync_fixture();
+        app.selected_agent = None;
+        let resizer = crate::pane_resize::test_support::MockPaneResizer::default();
+        sync_focused_pane_size_to(
+            &mut app,
+            ratatui::layout::Rect::new(0, 0, 120, 40),
+            &resizer,
+        );
+        assert!(resizer.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn sync_is_noop_when_layout_is_not_triptych() {
+        let mut app = pane_sync_fixture();
+        app.layout = MainLayout::Wall;
+        let resizer = crate::pane_resize::test_support::MockPaneResizer::default();
+        sync_focused_pane_size_to(
+            &mut app,
+            ratatui::layout::Rect::new(0, 0, 120, 40),
+            &resizer,
+        );
+        // Wall / MailboxFirst use different geometry; out of scope for
+        // T-199. No tmux resize-pane should fire from this path.
+        assert!(resizer.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn sync_is_noop_on_degenerate_terminal_area() {
+        let mut app = pane_sync_fixture();
+        let resizer = crate::pane_resize::test_support::MockPaneResizer::default();
+        // Width is exactly the sidebar (28) → Detail rect is zero.
+        sync_focused_pane_size_to(&mut app, ratatui::layout::Rect::new(0, 0, 28, 40), &resizer);
+        assert!(resizer.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn sync_accounts_for_approvals_stripe_when_present() {
+        let mut app = pane_sync_fixture();
+        // Force the approvals-stripe path: one pending approval.
+        app.pending_approvals = vec![crate::approvals::Approval {
+            id: 1,
+            project_id: "hello".into(),
+            agent_id: "hello:dev".into(),
+            action: "test".into(),
+            summary: "test approval".into(),
+            payload_json: String::new(),
+        }];
+        assert!(app.has_pending_approvals());
+        let resizer = crate::pane_resize::test_support::MockPaneResizer::default();
+        sync_focused_pane_size_to(
+            &mut app,
+            ratatui::layout::Rect::new(0, 0, 120, 40),
+            &resizer,
+        );
+        let calls = resizer.calls.lock().unwrap();
+        // Stripe consumes one row → Detail height is 3/5 of 39 = 23.
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].2, 23);
     }
 }
