@@ -15,6 +15,7 @@ pub mod onboarding;
 pub mod pane;
 pub mod pane_resize;
 pub mod splash;
+pub mod status_bar;
 pub mod statusline;
 pub mod theme;
 pub mod triptych;

@@ -72,14 +72,22 @@ fn statusline_renders_tutorial_hint_at_right() {
     // The `· t tutorial` hint is always visible (SPEC §4); pin it
     // here at a narrow width to catch regressions where it gets
     // pushed off-screen by a wider left-side hint.
+    //
+    // T-209: the layout grew a third row (bottom status bar with cwd
+    // + CPU/RAM), so the statusline is now the SECOND-to-last line,
+    // not the last. The last line is the new status bar.
     let mut app = fresh_app();
     app.dismiss_splash();
     let buf = render_to_buffer(&app, 80, 10);
     let s = buffer_to_string(&buf);
-    let last_line = s.lines().last().expect("buffer not empty");
+    let lines: Vec<&str> = s.lines().collect();
+    let statusline = lines
+        .get(lines.len().saturating_sub(2))
+        .copied()
+        .expect("buffer not empty");
     assert!(
-        last_line.contains("t tutorial"),
-        "statusline missing tutorial hint at 80 cols: {last_line:?}"
+        statusline.contains("t tutorial"),
+        "statusline missing tutorial hint at 80 cols: {statusline:?}"
     );
 }
 
@@ -723,4 +731,77 @@ fn stream_keys_mode_renders_banner_and_pane_marker() {
         "detail pane title missing the stream-mode tag"
     );
     insta::assert_snapshot!("stream_keys_banner_120x30", rendered);
+}
+
+// ── T-209: bottom status bar (cwd left + CPU/RAM right) ──────────
+
+#[test]
+fn status_bar_renders_path_left_and_metrics_right_at_120x30() {
+    // Plant a deterministic team root on the App so the path slot
+    // has known content (the default empty PathBuf would render as
+    // empty string, which is a degenerate case). sysinfo's untouched
+    // numbers stay at zero — that's the intended uninit shape for
+    // snapshots (a refresh tick fires at runtime, not in tests).
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    let last_line = s.lines().last().expect("buffer not empty");
+    assert!(
+        last_line.contains("/tmp/teamctl-fixture/.team"),
+        "status bar missing team-root path at 120 cols: {last_line:?}"
+    );
+    assert!(
+        last_line.contains("CPU "),
+        "status bar missing CPU label: {last_line:?}"
+    );
+    assert!(
+        last_line.contains("RAM "),
+        "status bar missing RAM label: {last_line:?}"
+    );
+}
+
+#[test]
+fn status_bar_truncates_path_when_narrow_keeps_metrics_visible() {
+    // At a comfortably wide-enough width, both slots fit and the
+    // path renders with a head-and-tail ellipsis. The basename
+    // (`.team` here) MUST stay visible — losing it would make the
+    // status bar useless on multi-project hosts.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.team.root = std::path::PathBuf::from(
+        "/home/operator/very/long/nested/project/path/teamctl-deep-nest/.team",
+    );
+    let buf = render_to_buffer(&app, 100, 20);
+    let s = buffer_to_string(&buf);
+    let last_line = s.lines().last().expect("buffer not empty");
+    assert!(
+        last_line.contains(".team"),
+        "narrow status bar dropped the basename: {last_line:?}"
+    );
+    assert!(
+        last_line.contains("CPU "),
+        "narrow status bar dropped CPU label: {last_line:?}"
+    );
+}
+
+#[test]
+fn status_bar_elides_metrics_when_too_narrow_for_both_slots() {
+    // 30 cols: too narrow for both path AND CPU/RAM. Path wins —
+    // operator's "WHERE am I" matters more than live metrics.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
+    let buf = render_to_buffer(&app, 30, 20);
+    let s = buffer_to_string(&buf);
+    let last_line = s.lines().last().expect("buffer not empty");
+    assert!(
+        last_line.contains(".team"),
+        "narrow status bar dropped the basename: {last_line:?}"
+    );
+    assert!(
+        !last_line.contains("CPU "),
+        "expected CPU to elide on 30-col width: {last_line:?}"
+    );
 }

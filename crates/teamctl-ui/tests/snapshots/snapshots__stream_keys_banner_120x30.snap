@@ -29,6 +29,6 @@ expression: rendered
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
-│                          ││                                                                                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
-● STREAM-KEYS → writing:manager   keystrokes forwarding to tmux pane   ·   Esc to exit
+● STREAM-KEYS → writing:manager   keystrokes forwarding to tmux pane   ·   Esc to exit                                  
+/fixture                                                                                           CPU 0% · RAM 0.0/0 GB

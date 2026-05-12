@@ -29,6 +29,7 @@ use crate::layouts;
 use crate::mailbox::{BrokerMailboxSource, MailboxBuffers, MailboxSource, MailboxTab};
 use crate::pane::{PaneSource, TmuxPaneSource};
 use crate::splash;
+use crate::status_bar;
 use crate::statusline;
 use crate::theme::{detect_capabilities, Capabilities};
 use crate::triptych::{self, MainLayout, Pane};
@@ -202,6 +203,14 @@ pub struct App {
     /// `tmux_session` (e.g. `t-hello-manager`). See
     /// `crate::pane_resize`.
     pub last_synced_pane_sizes: std::collections::HashMap<String, (u16, u16)>,
+    /// T-209: live system handle for the bottom status bar's
+    /// CPU% + RAM% indicator. Refreshed in-place on the existing
+    /// 1-second App tick (see `refresh_with_default_sources` and the
+    /// run-loop tick at the top of `run()`); no background thread.
+    /// `default-features = false` + only the `system` feature is
+    /// enabled in the dep to keep the compile surface narrow. See
+    /// `crate::status_bar`.
+    pub sysinfo: sysinfo::System,
 }
 
 const MAX_DETAIL_LINES: usize = 2000;
@@ -248,6 +257,12 @@ impl App {
             spinner_frame: 0,
             tutorial_step: 0,
             last_synced_pane_sizes: std::collections::HashMap::new(),
+            // sysinfo's `new()` allocates but doesn't read any metrics;
+            // the first values are populated by the first refresh tick
+            // in `refresh_with_default_sources`. Until then the status
+            // bar reads zeros — operator sees the bar shape but the
+            // numbers stabilize after ~1 second.
+            sysinfo: sysinfo::System::new(),
         }
     }
 
@@ -1009,6 +1024,13 @@ fn refresh_with_default_sources<P: PaneSource>(app: &mut App, pane_source: &P) {
     }
     refresh_mailbox(app, &mailbox_source);
     refresh_approvals(app, &approval_source);
+    // T-209: refresh the live CPU/RAM numbers on the same 1-second
+    // cadence as the rest of App. `refresh_cpu_usage` + `refresh_memory`
+    // are the minimal pair — `refresh_all` would also probe disks,
+    // networks, processes, and components, none of which the status
+    // bar shows. Sub-millisecond cost on modern hardware.
+    app.sysinfo.refresh_cpu_usage();
+    app.sysinfo.refresh_memory();
     app.last_refresh = Instant::now();
 }
 
@@ -1107,9 +1129,17 @@ fn render_tutorial(area: Rect, buf: &mut Buffer, app: &App) {
 }
 
 fn draw_main(f: &mut Frame<'_>, area: Rect, app: &App) {
+    // T-209: bottom of the screen is now a two-row footer —
+    // existing keybindings statusline on top, new status bar
+    // (cwd-left + CPU/RAM-right; T-212 will fill the center slot
+    // per coordination with kian) below. Both 1 row tall.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(1), // existing keybindings statusline
+            Constraint::Length(1), // T-209 bottom status bar
+        ])
         .split(area);
     let buf = f.buffer_mut();
     match app.layout {
@@ -1124,6 +1154,7 @@ fn draw_main(f: &mut Frame<'_>, area: Rect, app: &App) {
         }
     }
     statusline::Statusline { app }.render(chunks[1], buf);
+    status_bar::StatusBar { app }.render(chunks[2], buf);
 }
 
 fn draw_approvals_modal(f: &mut Frame<'_>, area: Rect, app: &App) {
@@ -1762,9 +1793,15 @@ pub fn render_to_buffer(app: &App, width: u16, height: u16) -> Buffer {
 }
 
 fn render_main(app: &App, area: Rect, buf: &mut Buffer) {
+    // T-209: two-row footer — keep this in lockstep with `draw_main`
+    // (snapshot tests render via this fn, the runtime via the other).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(1), // existing keybindings statusline
+            Constraint::Length(1), // T-209 bottom status bar
+        ])
         .split(area);
     match app.layout {
         crate::triptych::MainLayout::Triptych => {
@@ -1778,6 +1815,7 @@ fn render_main(app: &App, area: Rect, buf: &mut Buffer) {
         }
     }
     statusline::Statusline { app }.render(chunks[1], buf);
+    status_bar::StatusBar { app }.render(chunks[2], buf);
 }
 
 fn render_quit_confirm(area: Rect, buf: &mut Buffer) {
