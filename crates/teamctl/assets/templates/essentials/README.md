@@ -20,9 +20,10 @@ This `.team/` was scaffolded by `teamctl init --template essentials`. You get tw
 
 ## Day-to-day
 
-- Talk to the builder when you want to add, retire, or reshape an agent. It edits `projects/main.yaml` and `roles/` directly, then reloads so the change is live.
+- Talk to the builder when you want to add, retire, or reshape an agent. It edits `projects/main.yaml`, role files under `roles/`, and documents env vars in `.env.example` directly — then reloads so the change is live.
 - Edit `projects/main.yaml` and `roles/*.md` by hand any time you prefer — both you and the builder share write access.
-- Avoid editing `projects/ops.yaml` — that's the builder's own scope, and reshaping it can leave you without a helper.
+- Top-level changes (broker, supervisor, interface blocks in `team-compose.yaml`) stay yours alone. The builder reads `team-compose.yaml` to answer questions but won't edit it; for those changes the docs are the canonical surface.
+- Avoid editing `projects/ops.yaml` or `roles/builder.md` — that's the builder's own scope, and reshaping it can leave you without a helper.
 
 ## Stop
 
