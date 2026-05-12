@@ -104,5 +104,9 @@ workers:
     role_prompt: roles/dog.md
     permission_mode: auto
     reports_to: deacon
+    # Dog is deacon's tool, not a town-tier participant. Outbound
+    # traffic goes only through `can_dm: [deacon]`; no broadcast
+    # surface — matches Gas Town's "dogs are dispatched by the
+    # deacon, not equals on the town floor" model.
     can_dm: [deacon]
-    can_broadcast: [town]
+    can_broadcast: []

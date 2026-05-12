@@ -20,6 +20,8 @@ Seven agents in one project. Town-tier roles (mayor + deacon + dog) handle cross
 
 Operator talks to `mayor` on Telegram. Mayor routes work down the org chart.
 
+**Model stratification.** Manager-tier agents (mayor, crew, witness, deacon) run Claude Opus; worker-tier agents (refinery, polecat, dog) run Claude Sonnet. teamctl's per-agent `model:` field maps Gas Town's own stratification cleanly — coordination roles get the more expensive thinker, execution roles get the faster one. This is the "docker-compose for agents" pitch made concrete: same shape, two different model knobs, one config file.
+
 ## Mapping cheat-sheet
 
 The translation from Gas Town primitives to teamctl primitives:
