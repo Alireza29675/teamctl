@@ -103,6 +103,7 @@ fn synth_agent(id: &str, state: AgentState, unread: u32, pending: u32) -> AgentI
         pending_approvals: pending,
         is_manager: false,
         display_name: None,
+        rate_limit_resets_at: None,
     }
 }
 

@@ -1941,6 +1941,7 @@ mod tests {
             pending_approvals: 0,
             is_manager: false,
             display_name: None,
+            rate_limit_resets_at: None,
         }
     }
 
