@@ -8,18 +8,16 @@
 //!   1-second App refresh tick (see `app::REFRESH_INTERVAL`). No
 //!   background thread — sysinfo's per-tick refresh is sub-millisecond.
 //!
-//! Slot allocation reserves a CENTER region for a future per-agent
-//! runtime indicator (kian's T-212 — claude rate-limit window, per-
-//! agent token telemetry, etc.). T-209 ships with the center empty;
-//! T-212 slots in by extending the layout constraints + adding a
-//! render branch. See the `// T-212 will fill the center slot per
-//! coordination with kian` marker below.
+//! - **Center:** the focused agent's claude rate-limit window when
+//!   active, formatted as `limit 5m 12s` (T-212). Hides when the
+//!   focused agent has no active window; swaps with focus.
 //!
-//! Truncation priority on narrow terminals: **path wins, CPU/RAM
-//! elides**. The issue's done-when is explicit about this — operators
+//! Truncation priority on narrow terminals: **path > per-agent
+//! center > CPU/RAM** (T-209 done-when, extended by T-212). Operators
 //! who can't see WHERE the team is running lose more than operators
-//! who can't see live CPU%. Matches the statusline module's
-//! right-anchor-elides-first pattern from `statusline.rs`.
+//! who can't see the per-agent indicator, who in turn lose more than
+//! operators who can't see live CPU%. Matches the statusline
+//! module's right-anchor-elides-first pattern from `statusline.rs`.
 
 use std::path::Path;
 

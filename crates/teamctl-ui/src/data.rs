@@ -287,8 +287,7 @@ fn mailbox_counts(mailbox: &Path) -> Result<MailboxCounts> {
              GROUP BY agent_id
          )",
     ) {
-        if let Ok(rows) =
-            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
         {
             for row in rows.flatten() {
                 counts.rate_limit.insert(row.0, row.1);
