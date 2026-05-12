@@ -488,6 +488,7 @@ mod tests {
             pending_approvals: 0,
             is_manager: true,
             display_name: Some("Sage (Visionary)".into()),
+            rate_limit_resets_at: None,
         };
         let team = TeamSnapshot {
             root: std::path::PathBuf::from("/tmp"),

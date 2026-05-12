@@ -55,6 +55,14 @@ pub struct AgentInfo {
     /// approvals, compose modal). When `None`, label falls back to
     /// `id`. The id stays canonical for routing/tmux/CLI.
     pub display_name: Option<String>,
+    /// T-212: most recent rate-limit reset timestamp (unix epoch
+    /// seconds) for this agent, sourced from the `rate_limits` table
+    /// populated by `teamctl rl-watch`. `None` when rl-watch has
+    /// never recorded a `resets_at` for this agent. The TUI status
+    /// bar formats this against `now()` via
+    /// [`format_rate_limit_window`] to render "5m 12s" / "1h 23m" —
+    /// past timestamps render as `None` (no active limit).
+    pub rate_limit_resets_at: Option<f64>,
 }
 
 /// Return the operator-facing label for `agent_id`: the agent's
@@ -153,6 +161,7 @@ impl TeamSnapshot {
             let id = h.id();
             let unread_mail = counts.unread.get(&id).copied().unwrap_or(0);
             let pending_approvals = counts.pending.get(&id).copied().unwrap_or(0);
+            let rate_limit_resets_at = counts.rate_limit.get(&id).copied();
             agents.push(AgentInfo {
                 id,
                 agent: h.agent.into(),
@@ -163,6 +172,7 @@ impl TeamSnapshot {
                 pending_approvals,
                 is_manager: h.is_manager,
                 display_name,
+                rate_limit_resets_at,
             });
         }
 
@@ -201,6 +211,12 @@ impl TeamSnapshot {
 struct MailboxCounts {
     unread: HashMap<String, u32>,
     pending: HashMap<String, u32>,
+    /// T-212: per-agent latest `rate_limits.resets_at` (unix epoch
+    /// seconds). Only the most recent rate-limit row per agent that
+    /// has a non-null `resets_at` lands here — rows with no parsed
+    /// reset time are still recorded by `rl-watch` for forensics
+    /// but don't drive UI.
+    rate_limit: HashMap<String, f64>,
 }
 
 /// Single sweep of the mailbox to populate per-agent counters. Read
@@ -250,7 +266,62 @@ fn mailbox_counts(mailbox: &Path) -> Result<MailboxCounts> {
         counts.pending.insert(row.0, row.1.max(0) as u32);
     }
 
+    // T-212: latest rate-limit reset per agent. The `rate_limits`
+    // table is populated by `teamctl rl-watch`. We pick the most
+    // recent row per agent (by `id`, which is monotonically
+    // increasing per the schema in team-core::mailbox), and only
+    // when `resets_at` is non-null — null-resets-at rows are still
+    // logged by rl-watch for debugging the parser but don't drive
+    // UI state. Past-`resets_at` filtering happens at format time
+    // in [`format_rate_limit_window`] so we don't need a `now()`
+    // dependency in this query.
+    //
+    // Table missing (rl-watch never ran on this mailbox) →
+    // `prepare()` errors and we degrade silently to empty map,
+    // matching the surrounding "no data is fine" pattern.
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT agent_id, resets_at FROM rate_limits
+         WHERE id IN (
+             SELECT MAX(id) FROM rate_limits
+             WHERE resets_at IS NOT NULL
+             GROUP BY agent_id
+         )",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+        {
+            for row in rows.flatten() {
+                counts.rate_limit.insert(row.0, row.1);
+            }
+        }
+    }
+
     Ok(counts)
+}
+
+/// T-212: format a rate-limit reset timestamp as a short label for
+/// the status bar. Returns `None` when the limit is in the past, at
+/// the current instant, or unset — the indicator hides in those
+/// cases. For active limits, formats as `42s` (under a minute),
+/// `5m 12s` (under an hour), or `1h 23m` (an hour or more).
+/// Operator-facing string; not for parsing.
+pub fn format_rate_limit_window(resets_at: Option<f64>, now_unix: f64) -> Option<String> {
+    let resets_at = resets_at?;
+    let remaining = resets_at - now_unix;
+    if remaining <= 0.0 {
+        return None;
+    }
+    let secs = remaining as u64;
+    if secs >= 3600 {
+        let hours = secs / 3600;
+        let mins = (secs % 3600) / 60;
+        Some(format!("{hours}h {mins}m"))
+    } else if secs >= 60 {
+        let mins = secs / 60;
+        let s = secs % 60;
+        Some(format!("{mins}m {s}s"))
+    } else {
+        Some(format!("{secs}s"))
+    }
 }
 
 /// Single-cell glyph for an agent's primary state — derived from the
@@ -301,6 +372,7 @@ mod tests {
             pending_approvals: pending,
             is_manager: false,
             display_name: None,
+            rate_limit_resets_at: None,
         }
     }
 
@@ -325,5 +397,63 @@ mod tests {
         // `!` and `?` are unchanged across the fallback boundary.
         assert_eq!(state_glyph(&info(AgentState::Running, 0, 1), true), "!");
         assert_eq!(state_glyph(&info(AgentState::Unknown, 0, 0), true), "?");
+    }
+
+    // T-212: format_rate_limit_window covers the value-shape rules
+    // the status-bar slot will render against. The SQL-extension
+    // path is exercised by integration tests at the snapshot layer
+    // (matching the existing untested-at-this-layer pattern for
+    // unread/pending) — the formatter is the part with branchy
+    // logic worth pinning.
+
+    #[test]
+    fn format_rate_limit_window_returns_none_when_unset() {
+        assert_eq!(format_rate_limit_window(None, 1000.0), None);
+    }
+
+    #[test]
+    fn format_rate_limit_window_returns_none_when_already_past() {
+        assert_eq!(format_rate_limit_window(Some(500.0), 1000.0), None);
+    }
+
+    #[test]
+    fn format_rate_limit_window_returns_none_at_exact_now() {
+        assert_eq!(format_rate_limit_window(Some(1000.0), 1000.0), None);
+    }
+
+    #[test]
+    fn format_rate_limit_window_under_minute_renders_seconds() {
+        assert_eq!(
+            format_rate_limit_window(Some(1042.0), 1000.0),
+            Some("42s".into())
+        );
+        assert_eq!(
+            format_rate_limit_window(Some(1059.0), 1000.0),
+            Some("59s".into())
+        );
+    }
+
+    #[test]
+    fn format_rate_limit_window_under_hour_renders_minutes_and_seconds() {
+        assert_eq!(
+            format_rate_limit_window(Some(1060.0), 1000.0),
+            Some("1m 0s".into())
+        );
+        assert_eq!(
+            format_rate_limit_window(Some(1312.0), 1000.0),
+            Some("5m 12s".into())
+        );
+    }
+
+    #[test]
+    fn format_rate_limit_window_at_or_over_hour_renders_hours_and_minutes() {
+        assert_eq!(
+            format_rate_limit_window(Some(4600.0), 1000.0),
+            Some("1h 0m".into())
+        );
+        assert_eq!(
+            format_rate_limit_window(Some(5980.0), 1000.0),
+            Some("1h 23m".into())
+        );
     }
 }

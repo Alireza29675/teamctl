@@ -582,6 +582,7 @@ mod tests {
             pending_approvals: 0,
             is_manager: false,
             display_name: Some("Dev 1 (Drafter)".into()),
+            rate_limit_resets_at: None,
         };
         let team = TeamSnapshot {
             root: std::path::PathBuf::from("/tmp"),
