@@ -1,0 +1,30 @@
+# Example: gastown-in-teamctl. Gas Town's seven-role shape expressed
+# as a teamctl team.
+#
+# This is a positioning artifact ("teamctl is docker-compose for
+# agents"), not a runnable clone of Gas Town. The roles are wired with
+# teamctl primitives; the README walks the mapping cheat-sheet
+# Gas Town primitive → teamctl primitive.
+#
+# Single-project layout for v1 simplicity. Gas Town's two-level
+# architecture (Town hosting shared infra; Rigs hosting per-project
+# work) maps cleanly to teamctl's multi-project layout. Operators
+# scaling beyond one Rig split this into multiple project files and
+# wire a bridge between them. The README's "Scaling out" section
+# walks that.
+
+version: 2
+
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+supervisor:
+  type: tmux
+  tmux_prefix: gt-
+
+# Telegram is configured on the `mayor` manager in
+# projects/gastown.yaml. Run `teamctl bot setup` to wire it.
+
+projects:
+  - file: projects/gastown.yaml

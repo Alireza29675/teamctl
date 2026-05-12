@@ -1,0 +1,112 @@
+# projects/gastown.yaml. Gas Town's seven-role shape in one project.
+#
+# Mapping cheat-sheet lives in `../../README.md`. Quick legend:
+#   Town-tier (cross-rig in Gas Town):
+#     mayor:   operator-facing chief concierge
+#     deacon:  cross-rig patrol daemon
+#     dog:     deacon's maintenance helper. Gas Town has several
+#              named Dogs (Doctor, Reaper, Compactor, …); the
+#              example ships one generic `dog` worker, and the
+#              README documents the simplification.
+#   Rig-tier (per-project in Gas Town):
+#     crew:    long-lived named human-collaborator agent
+#     witness: rig-level supervisor over Polecats + Refinery
+#     refinery: merge-queue agent
+#     polecat: worker that picks up hooked work
+
+version: 2
+
+project:
+  id: gastown
+  name: Gas Town (style example)
+  cwd: ./workspace
+
+channels:
+  # Town-tier coordination: mayor + deacon meet here.
+  - name: town
+    members: [mayor, deacon]
+  # Rig-tier coordination: the per-rig roles broadcast here.
+  - name: rig
+    members: [crew, witness, refinery, polecat]
+  # Cross-tier broadcast for anything everyone should see.
+  - name: all
+    members: "*"
+
+managers:
+  mayor:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/mayor.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    # Mayor talks to everyone the operator might route through it:
+    # crew + witness on the rig side, deacon on the town side.
+    can_dm: [crew, witness, deacon]
+    can_broadcast: [town, all]
+    # Run `teamctl bot setup` to populate the Telegram env vars.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_MAYOR_TOKEN
+        chat_ids_env: TEAMCTL_TG_MAYOR_CHATS
+
+  crew:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/crew.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    reports_to: mayor
+    can_dm: [mayor, witness, refinery, polecat]
+    can_broadcast: [rig, all]
+
+  witness:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/witness.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    reports_to: mayor
+    can_dm: [mayor, crew, refinery, polecat]
+    can_broadcast: [rig, all]
+
+  deacon:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/deacon.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    reports_to: mayor
+    can_dm: [mayor, dog]
+    can_broadcast: [town, all]
+
+workers:
+  refinery:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/refinery.md
+    permission_mode: auto
+    reports_to: witness
+    can_dm: [witness, crew]
+    can_broadcast: [rig]
+
+  polecat:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/polecat.md
+    permission_mode: auto
+    reports_to: witness
+    can_dm: [witness, crew]
+    can_broadcast: [rig]
+
+  dog:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt: roles/dog.md
+    permission_mode: auto
+    reports_to: deacon
+    # Dog is deacon's tool, not a town-tier participant. Outbound
+    # traffic goes only through `can_dm: [deacon]`; no broadcast
+    # surface, matching Gas Town's "dogs are dispatched by the
+    # deacon, not equals on the town floor" model.
+    can_dm: [deacon]
+    can_broadcast: []
