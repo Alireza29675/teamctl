@@ -4,6 +4,28 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-05-12
+
+### Added
+
+- Bottom status bar in `teamctl ui` — left side shows the team-root path, right side shows live CPU% + RAM%, with a center slot reserved for per-agent surfaces. Uses the `sysinfo` crate trimmed to a system-only feature set. (#209, #217)
+- Per-agent claude rate-limit indicator in the bottom-bar center slot — shows `limit Xh Ym` / `limit Xm Ys` for the focused agent when claude has signalled a rate-limit window. Preview-gated behind `TEAMCTL_UI_RATE_LIMIT_INDICATOR=1` (any non-empty value opts in; default OFF; read once at TUI start). (#212, #218)
+- CI now runs a dedicated `macos-latest` cell so darwin-flavor regressions get caught at PR time, plus a `bash --posix -O compat32 -n` parse-check on the existing Linux runner that surfaces the bash-3.2 class of wrapper-script bugs without waiting on a macOS minute. Both motivated by the T-190 regression that bit 0.8.0 on macOS. (#192, #193, #205)
+
+### Changed
+
+- `teamctl init` retires the `solo` template. New three-option picker: **Guided** (interactive conversation, default for interactive runs), **Essentials** (two-project layout — blank `main.yaml` plus an `ops` project with a `builder` agent that has scoped authority over `main`; default for `--yes`), and **Blank** (kept as the minimal scaffold). `--template guided --yes` rejects cleanly. ADR-0004 carries a supersede note. New cookbook walkthrough on `teamctl.run`. (#206, #216)
+- `teamctl update` now reinstalls `teamctl-ui` alongside `teamctl`, `team-mcp`, and `team-bot` on the cargo-install path. The four crate names are centralised as a single constant so the bug class can't recur silently. Stale 3-crate command references in docs and the Claude Code init template were swept in the same wave. (#188, #204, #207)
+- `teamctl ui` splash screen now has a single blank line between the ASCII logo and the version/team-status line so the layout is less cramped. (#208, #214)
+- `teamctl ui` reflows the focused agent's tmux pane size to match the `Detail` rect on every frame (cache-gated so steady-state frames don't fork tmux). The claude TUI now visibly tracks teamctl-ui resizes. Scoped to the Triptych layout; Wall + MailboxFirst sweeps will land separately. (#199, #210)
+
+### Fixed
+
+- `teamctl whatsnew` no longer dumps the cargo-dist per-crate install tables verbatim after the curated release prose; the renderer now detects the `# <crate> <semver>` heading injected by cargo-dist and truncates there. (#197, #200)
+- `teamctl whatsnew --since <ver>` no longer emits a redundant `v<from> → v<to>` range frame plus per-version subheader when the resolved range contains a single version. (#198, #200)
+- `teamctl whatsnew` no longer renders a double blank line under the frame when the body is empty or got truncated to empty by the cargo-dist heading detection. (#201, #203)
+- `team-mcp` channel-notify watcher no longer hits a lost-wake race against macOS scheduling. `tokio::sync::Notify::notify_waiters` was swapped for `notify_one` so the `notifications/initialized` signal buffers a permit if the watcher hasn't parked yet. Added a Linux-deterministic regression pin via a test-only env var. (#215)
+
 ## [0.8.1] — 2026-05-11
 
 ### Fixed
