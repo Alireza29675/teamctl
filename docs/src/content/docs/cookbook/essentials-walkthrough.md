@@ -25,6 +25,7 @@ You get:
 ├── roles/
 │   └── builder.md             # builder's voice + boundaries
 ├── .env.example
+├── .gitignore
 └── README.md
 ```
 
