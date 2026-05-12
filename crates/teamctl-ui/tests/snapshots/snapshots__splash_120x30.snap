@@ -10,7 +10,6 @@ expression: buffer_to_string(&buf)
                                                                                                                         
                                                                                                                         
                                                                                                                         
-                                                                                                                        
                    ___           ___           ___           ___           ___           ___           ___              
                   /\  \         /\  \         /\  \         /\__\         /\  \         /\  \         /\__\             
                   \:\  \       /::\  \       /::\  \       /::|  |       /::\  \        \:\  \       /:/  /             
@@ -22,5 +21,6 @@ expression: buffer_to_string(&buf)
                 \/__/         \:\ \/__/        /:/  /        /:/  /     \:\  \        \/__/         \:\  \              
                                \:\__\         /:/  /        /:/  /       \:\__\                      \:\__\             
                                 \/__/         \/__/         \/__/         \/__/                       \/__/             
+                                                                                                                        
                                         v0.8.1  ·  (no team loaded)  ·  0 agents                                        
                                           Press `?` for help · `t` for tutorial
