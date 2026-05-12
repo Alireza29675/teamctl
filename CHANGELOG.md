@@ -4,6 +4,12 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.8.4] — 2026-05-12
+
+### Removed
+
+- `/teamctl:release` skill is no longer shipped via the Claude Code plugin. It was an internal release-authoring tool, not a user-facing feature; previously bundled in `plugins/claude-code/skills/release/` by mistake. Moved to `.claude/skills/release/SKILL.md` (project-local, not part of the plugin install). Users of the `teamctl` plugin won't see it after their next `teamctl update`. (#228 follow-up)
+
 ## [0.8.3] — 2026-05-12
 
 ### Added
