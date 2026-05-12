@@ -27,7 +27,7 @@ No celebration prose, no walls. If `teamctl` is missing, choose an install path 
 - **Linux, WSL, or macOS without brew**: propose `curl -fsSL https://teamctl.run/install | sh`. Confirm before running.
 - **If brew or the curl installer doesn't fit** (sandboxed shell, locked-down corp env, build-from-source preference), use the cargo fallback verbatim:
 
-  > Brew and the curl installer don't fit here. Building from source is the path: `cargo install teamctl team-mcp team-bot` if you've got Rust; otherwise install `rustup` first (https://rustup.rs).
+  > Brew and the curl installer don't fit here. Building from source is the path: `cargo install teamctl teamctl-ui team-mcp team-bot` if you've got Rust; otherwise install `rustup` first (https://rustup.rs).
 
 Run the chosen command yourself when the user confirms and the harness allows it; otherwise hand the user the exact line to paste. Either way, verify with `teamctl --version` after install and report the version inline. If the version probe fails, name the error in one line and offer to retry or switch install path — don't restart the stage.
 

@@ -19,7 +19,7 @@ teamctl update --method brew  # override autodetect
 | Detection                                           | Update command                                  |
 |-----------------------------------------------------|-------------------------------------------------|
 | Path contains `Cellar/teamctl/` or `linuxbrew`      | `brew update && brew upgrade teamctl`           |
-| Path under `~/.cargo/bin/`                          | `cargo install teamctl team-mcp team-bot --force` |
+| Path under `~/.cargo/bin/`                          | `cargo install teamctl teamctl-ui team-mcp team-bot --force` |
 | Anything else (default — shell installer)           | `curl -fsSL https://teamctl.run/install \| sh`  |
 
 The command then surfaces the installer's own output (download
