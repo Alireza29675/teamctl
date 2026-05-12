@@ -424,28 +424,23 @@ fn upsert_manager_telegram(
         .split_once(':')
         .ok_or_else(|| anyhow!("manager must be `<project>:<role>`"))?;
 
-    // Locate the project file path via global.projects[].file.
+    // Locate the project file path via global.projects[].file. Use the
+    // documented `compose.global.projects[i] ↔ compose.projects[i]`
+    // ordering invariant (preserved by `Compose::load`) to read
+    // `project.id` from the parsed in-memory state rather than
+    // re-reading each candidate file from disk. T-238: the old disk
+    // re-read silently failed on a file we'd just written through
+    // `team_core::yaml_edit::save` in a previous loop iteration
+    // (serde_yaml's strict parser disagreeing with yaml_edit's
+    // roundtrip on YAML quirks), producing a misleading "project not
+    // found" on the second manager when both lived in the same file.
     let proj_ref = compose
         .global
         .projects
         .iter()
-        .find(|r| {
-            // Match the parsed project at the same index by reading the
-            // file's `project.id` would require re-parsing; cheaper: try
-            // each candidate file and pick the one whose project.id
-            // matches.
-            let p = compose.root.join(&r.file);
-            std::fs::read_to_string(&p)
-                .ok()
-                .and_then(|raw| serde_yaml::from_str::<serde_yaml::Value>(&raw).ok())
-                .and_then(|v| {
-                    v.get("project")
-                        .and_then(|p| p.get("id"))
-                        .and_then(|id| id.as_str())
-                        .map(|s| s == project_id)
-                })
-                .unwrap_or(false)
-        })
+        .zip(compose.projects.iter())
+        .find(|(_, p)| p.project.id == project_id)
+        .map(|(r, _)| r)
         .ok_or_else(|| anyhow!("project `{project_id}` not found in compose"))?;
 
     let path = compose.root.join(&proj_ref.file);
@@ -819,6 +814,67 @@ mod tests {
         assert!(got.contains("TEAMCTL_TG_PM_TOKEN=newtok"));
         assert!(!got.contains("oldtok"));
         assert!(got.contains("TEAMCTL_TG_PM_CHATS=12345"));
+    }
+
+    #[test]
+    fn upsert_manager_telegram_succeeds_for_consecutive_managers_in_same_project() {
+        // T-238 regression: `teamctl bot setup` walks every manager in
+        // the compose, and `upsert_manager_telegram` writes the
+        // telegram block per manager via `team_core::yaml_edit::save`.
+        // The pre-fix project-lookup re-read each candidate file from
+        // disk with `serde_yaml::from_str` to match by `project.id`;
+        // after the first iteration's write through yaml_edit, a
+        // strict re-read of the same file could silently fail
+        // (`.unwrap_or(false)` in the find-closure), so the second
+        // manager's lookup hit no match and bailed with "project not
+        // found in compose" even though both managers lived in the
+        // file the loop had just edited.
+        //
+        // Pins the second-iteration shape: build a minimal `.team/`
+        // with two managers in one project, load the compose, call
+        // upsert for each in sequence, and assert both calls succeed
+        // AND the file ends with both telegram blocks.
+        let dir = tempfile::tempdir().unwrap();
+        let team = dir.path().join(".team");
+        std::fs::create_dir_all(team.join("projects")).unwrap();
+        std::fs::create_dir_all(team.join("roles")).unwrap();
+        std::fs::write(
+            team.join("team-compose.yaml"),
+            "version: 2\n\
+             broker:\n  type: sqlite\n  path: state/mailbox.db\n\
+             supervisor:\n  type: tmux\n  tmux_prefix: a-\n\
+             projects:\n  - file: projects/p.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            team.join("projects/p.yaml"),
+            "version: 2\n\
+             project:\n  id: p\n  name: P\n  cwd: .\n\
+             managers:\n\
+             \x20\x20alpha:\n    runtime: claude-code\n    role_prompt: roles/alpha.md\n\
+             \x20\x20beta:\n    runtime: claude-code\n    role_prompt: roles/beta.md\n",
+        )
+        .unwrap();
+        std::fs::write(team.join("roles/alpha.md"), "alpha\n").unwrap();
+        std::fs::write(team.join("roles/beta.md"), "beta\n").unwrap();
+
+        let compose = Compose::load(&team).expect("compose loads cleanly");
+
+        upsert_manager_telegram(&compose, "p:alpha", "ALPHA_TOKEN", "ALPHA_CHATS")
+            .expect("first manager upsert succeeds");
+
+        upsert_manager_telegram(&compose, "p:beta", "BETA_TOKEN", "BETA_CHATS")
+            .expect("second manager upsert in same project must succeed");
+
+        let got = std::fs::read_to_string(team.join("projects/p.yaml")).unwrap();
+        assert!(
+            got.contains("ALPHA_TOKEN") && got.contains("ALPHA_CHATS"),
+            "first manager's telegram block must survive the second write:\n{got}"
+        );
+        assert!(
+            got.contains("BETA_TOKEN") && got.contains("BETA_CHATS"),
+            "second manager's telegram block must land:\n{got}"
+        );
     }
 
     #[test]
