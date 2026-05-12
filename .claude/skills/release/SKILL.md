@@ -24,7 +24,8 @@ Six beats, in order.
 
 The release body is the **most-screenshotted artifact** of any version cut. It lives on github.com long after you've forgotten it. Get it right.
 
-- **Match precedent rhythm.** Before surfacing, read the last shipped body side-by-side. Match: word count per paragraph (20-25 target for triplet ¶s), sentence count per paragraph (2 max), first-word-is-user-action (*"Send a voice note"* not *"`teamctl init` retired..."*), one-thought-per-bullet (no semicolon-stacked sub-facts). If your draft feels heavier on the tongue than the precedent, the rhythm is off.
+- **Shorter is better.** Owner directive (msg 2027): *"the shorter descriptions the better."* When in doubt, cut the second sentence. One short clause beats two competent ones. The reader's eye should glide; if it stumbles on density, you wrote too much.
+- **Match precedent rhythm.** Before surfacing, read the last shipped body side-by-side. Match: word count per paragraph (20-25 target for triplet ¶s), sentence count per paragraph (2 max, often 1), first-word-is-user-action (*"Send a voice note"* not *"`teamctl init` retired..."*), one-thought-per-bullet (no semicolon-stacked sub-facts). If your draft feels heavier on the tongue than the precedent, the rhythm is off.
 - **Two screens, not five.** A whole body should fit roughly one phone scroll. Anything longer fails the screenshot test.
 - **Plain American English.** No marketing speak (*"unlock"*, *"empower"*, *"reimagine"*). Show what changed; trust the reader.
 - **One opener sentence is plenty.** *"teamctl learned three new tricks this release."* beats *"We're excited to announce..."*. A bridge sentence connects headline to body; one is enough.
@@ -122,7 +123,7 @@ Example: v0.8.1 release body (single bash 3.2 hotfix on macOS).
 ## Tier 2 bullet rules (applies to triplet and bullets shapes)
 
 - One visual line per bullet. The colon prevents prose drift.
-- One thought per bullet. No semicolon-stacked sub-facts. Two short clauses max.
+- One thought per bullet, ideally **one short clause**. Cut the second sentence when in doubt. No semicolon-stacked sub-facts.
 - Backticks for command names and code identifiers.
 - 3-5 bullets is the sweet spot for triplet shape; 3-7 for bullets shape. More than that and you're back to engineering catalog.
 
