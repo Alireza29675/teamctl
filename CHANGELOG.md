@@ -4,6 +4,18 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-05-12
+
+### Added
+
+- `examples/gastown-in-teamctl/` — a positioning artifact expressing Gas Town's seven-role formation (mayor / crew / refinery / witness / polecats / deacon / dog) as a teamctl team. README walks the mapping from Gas Town's opinionated frame to teamctl's unopinionated declarative layer, including the reinterpretations (polecats as a fixed pool, beads-vs-mailbox as a deliberate architectural trade-off, formulas as a vision-track gap). Credits Steve Yegge's original Medium piece. (#229, #230)
+- `teamctl ui` Agents pane now renders `reports_to` relationships as a nested tree with Unicode glyphs (and ASCII fallback under `NO_COLOR` / monochrome terminals). Selection stays sticky-on-id; flat teams render byte-identically. (#211, #225)
+
+### Changed
+
+- `teamctl ui` mailbox Sent tab now shows `[→recipient]` instead of the redundant `[sender]` (always self for the focused agent). Recipient resolves to display_name for agents, `#name` for channels, and the verbatim id for user surfaces like `user:telegram`. Other tabs unchanged. (#231, #232)
+- `/teamctl:release` plugin skill grew durable shape variants (major / minor / patch templates) and a verify-handle thanks rule, so future releases pull a tighter shape and never ship a guessed contributor handle. (#228)
+
 ## [0.8.2] — 2026-05-12
 
 ### Added
