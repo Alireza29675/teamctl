@@ -28,7 +28,7 @@ PR description.
 - **Reload context from the bead.** The work item (a `bead` in
   Gas Town terms, a mailbox row + linked GH issue here) carries
   the spec. Read it once, derive your plan, execute.
-- **Hand off clean.** When done, `MERGE_READY` to witness — your
+- **Hand off clean.** When done, `MERGE_READY` to witness; your
   branch is the artifact, the merge is refinery's job.
 - **Surface failures plainly.** Tests red? Tell witness with the
   exact error. Don't editorialize.
@@ -60,5 +60,5 @@ history on a feature branch, abandoning a hooked item.
 
 - Never violate GUPP. If you're hooked, you run.
 - Never push to main directly. Hand to refinery.
-- Never silently abandon a work item — escalate to witness.
-- Never invent activity — idle when nothing's hooked.
+- Never silently abandon a work item; escalate to witness.
+- Never invent activity; idle when nothing's hooked.

@@ -1,18 +1,18 @@
-# projects/gastown.yaml — Gas Town's seven-role shape in one project.
+# projects/gastown.yaml. Gas Town's seven-role shape in one project.
 #
 # Mapping cheat-sheet lives in `../../README.md`. Quick legend:
 #   Town-tier (cross-rig in Gas Town):
-#     mayor   — operator-facing chief concierge
-#     deacon  — cross-rig patrol daemon
-#     dog     — deacon's maintenance helper (Gas Town has several
-#               named Dogs — Doctor, Reaper, Compactor, …; the
-#               example ships one generic `dog` worker; the README
-#               documents the simplification)
+#     mayor:   operator-facing chief concierge
+#     deacon:  cross-rig patrol daemon
+#     dog:     deacon's maintenance helper. Gas Town has several
+#              named Dogs (Doctor, Reaper, Compactor, …); the
+#              example ships one generic `dog` worker, and the
+#              README documents the simplification.
 #   Rig-tier (per-project in Gas Town):
-#     crew    — long-lived named human-collaborator agent
-#     witness — rig-level supervisor over Polecats + Refinery
-#     refinery — merge-queue agent
-#     polecat — worker that picks up hooked work
+#     crew:    long-lived named human-collaborator agent
+#     witness: rig-level supervisor over Polecats + Refinery
+#     refinery: merge-queue agent
+#     polecat: worker that picks up hooked work
 
 version: 2
 
@@ -39,7 +39,7 @@ managers:
     role_prompt: roles/mayor.md
     permission_mode: auto
     autonomy: low_risk_only
-    # Mayor talks to everyone the operator might route through it —
+    # Mayor talks to everyone the operator might route through it:
     # crew + witness on the rig side, deacon on the town side.
     can_dm: [crew, witness, deacon]
     can_broadcast: [town, all]
@@ -106,7 +106,7 @@ workers:
     reports_to: deacon
     # Dog is deacon's tool, not a town-tier participant. Outbound
     # traffic goes only through `can_dm: [deacon]`; no broadcast
-    # surface — matches Gas Town's "dogs are dispatched by the
+    # surface, matching Gas Town's "dogs are dispatched by the
     # deacon, not equals on the town floor" model.
     can_dm: [deacon]
     can_broadcast: []

@@ -61,4 +61,4 @@ verification.
 - Never merge a branch that failed verification.
 - Never bypass the bisect on a red batch.
 - Never force-push to main.
-- Never invent activity — idle when the queue is empty.
+- Never invent activity; idle when the queue is empty.

@@ -2,7 +2,7 @@
 
 A teamctl team that expresses [Gas Town](https://github.com/gastownhall/gastown)'s seven-role shape in teamctl primitives.
 
-This is a positioning artifact: teamctl is the meta-layer that lets you write a Gas Town in YAML. The example demonstrates the shape; operators who want to run it at Gas Town's scale will scale the agents themselves.
+This example shows Gas Town's seven roles mapped to teamctl primitives. teamctl is the meta-layer that lets you write a Gas Town in YAML; the example demonstrates the shape, and operators who want to run it at Gas Town's scale will scale the agents themselves.
 
 ```
 mayor (Claude Opus)              ← Telegram: mayor bot
@@ -20,7 +20,7 @@ Seven agents in one project. Town-tier roles (mayor + deacon + dog) handle cross
 
 Operator talks to `mayor` on Telegram. Mayor routes work down the org chart.
 
-**Model stratification.** Manager-tier agents (mayor, crew, witness, deacon) run Claude Opus; worker-tier agents (refinery, polecat, dog) run Claude Sonnet. teamctl's per-agent `model:` field maps Gas Town's own stratification cleanly — coordination roles get the more expensive thinker, execution roles get the faster one. This is the "docker-compose for agents" pitch made concrete: same shape, two different model knobs, one config file.
+**Model stratification.** Manager-tier agents (mayor, crew, witness, deacon) run Claude Opus; worker-tier agents (refinery, polecat, dog) run Claude Sonnet. teamctl's per-agent `model:` field maps Gas Town's own stratification cleanly: coordination roles get the more expensive thinker, execution roles get the faster one. This is the "docker-compose for agents" pitch made concrete: same shape, two different model knobs, one config file.
 
 ## Mapping cheat-sheet
 
@@ -38,15 +38,15 @@ The translation from Gas Town primitives to teamctl primitives:
 | **Beads** | Mailbox messages + GitHub issues | **Different surface, similar function.** See "Beads as a different surface, not a missing primitive" below. |
 | **Epics** | Parent-child issue links on GitHub | Approximated. No native hierarchy primitive in teamctl. |
 | **Molecules** | The Loop section of each role prompt + chained DMs between agents | Reinterpreted. Multi-step workflows live in role-prompt prose + agent-to-agent handoffs. |
-| **Formulas** | Skills (`plugins/claude-code/commands/*.md`) — partial coverage only | **Known v1 limit.** Skills are procedural prompts; formulas are templates that compile into chained workflow graphs at invocation. Composition isn't preserved in v1. |
-| **GUPP** | "Read inbox first thing on every tick" — prompt-enforced | Behavioral; no structural enforcement layer in teamctl. The polecat role prompt names GUPP explicitly. |
+| **Formulas** | Skills (`plugins/claude-code/commands/*.md`); partial coverage only | **Known v1 limit.** Skills are procedural prompts; formulas are templates that compile into chained workflow graphs at invocation. Composition isn't preserved in v1. |
+| **GUPP** | "Read inbox first thing on every tick"; prompt-enforced | Behavioral; no structural enforcement layer in teamctl. The polecat role prompt names GUPP explicitly. |
 | **`gt sling`** | `dm` MCP tool / `teamctl send` | Same effect, different ergonomics. |
 | **`gt mayor attach`** | `tmux a -t gt-gastown-mayor` | Direct tmux. |
 | **`gt feed`** | `teamctl ui` (TUI) | Approximated. |
 
 ## Beads as a different surface, not a missing primitive
 
-Gas Town tracks work as a VCS artifact — beads are atomic units stored in Dolt (SQL), versioned in git, audit-trailed in the repo. teamctl tracks work as server-side state — mailbox messages in SQLite plus GitHub issues for the long-lived items.
+Gas Town tracks work as a VCS artifact: beads are atomic units stored in Dolt (SQL), versioned in git, audit-trailed in the repo. teamctl tracks work as server-side state: mailbox messages in SQLite plus GitHub issues for the long-lived items.
 
 Both are honest. The trade-offs:
 
@@ -57,7 +57,7 @@ teamctl picked the GitHub path because the UX dividend is real and the audit tra
 
 ## Formulas: the known v1 limit
 
-Gas Town's formulas are TOML templates that compile into chained workflow graphs at invocation time — `gt prime` shows a polecat its steps inline, lifted from the formula and customized to the bead. teamctl's closest adjacent is skills (`/teamctl:init`, the role-prompt-style guide, etc.) but skills are procedural prompts, not templates that compose.
+Gas Town's formulas are TOML templates that compile into chained workflow graphs at invocation time. `gt prime` shows a polecat its steps inline, lifted from the formula and customized to the bead. teamctl's closest adjacent is skills (`/teamctl:init`, the role-prompt-style guide, etc.) but skills are procedural prompts, not templates that compose.
 
 For v1 of this example, formula-driven workflows are reinterpreted as prose in each role's Loop section. Composition (the formula-of-formulas pattern) is deliberately not preserved. Bringing native formula primitives into teamctl is a vision-track conversation, not a blocker for this example.
 
@@ -65,9 +65,9 @@ For v1 of this example, formula-driven workflows are reinterpreted as prose in e
 
 Gas Town spawns polecats on demand and nukes them on `gt done`. The model is per-task isolation: each work item gets a fresh worktree, a fresh session, a fresh sandbox.
 
-teamctl agents are long-lived under tmux. The example ships a fixed pool of polecat workers that idle between tasks. GUPP — *"If there is work on your hook, YOU MUST RUN IT"* — is preserved in the polecat role prompt: the polecat reads its inbox, sees hooked work, starts immediately. The "fresh sandbox per task" property is approximated by the agent reloading its mental model from the work item itself, but a clean filesystem-level sandbox per task isn't part of v1.
+teamctl agents are long-lived under tmux. The example ships a fixed pool of polecat workers that idle between tasks. GUPP is preserved in the polecat role prompt: *"If there is work on your hook, YOU MUST RUN IT"* lives in the Loop section, so the polecat reads its inbox, sees hooked work, starts immediately. The "fresh sandbox per task" property is approximated by the agent reloading its mental model from the work item itself, but a clean filesystem-level sandbox per task isn't part of v1.
 
-Operators who want true on-demand spawn can split this example into multi-rig and use teamctl's existing supervisor primitives to manage the pool size dynamically — that's a scaling pattern, not a missing primitive.
+Operators who want true on-demand spawn can split this example into multi-rig and use teamctl's existing supervisor primitives to manage the pool size dynamically. That's a scaling pattern, not a missing primitive.
 
 ## Scaling out: one rig to many
 
@@ -107,6 +107,6 @@ After any edit, `teamctl reload gastown` picks up the change.
 
 ## Not a competition
 
-This is "here's how teamctl expresses this pattern," not "teamctl vs Gas Town." Gas Town is its own thing; the maintainers have chosen primitives that fit their thesis. teamctl is the meta-layer that lets you write a Gas Town in YAML — among many other shapes.
+This is "here's how teamctl expresses this pattern," not "teamctl vs Gas Town." Gas Town is its own thing; the maintainers have chosen primitives that fit their thesis. teamctl is the meta-layer that lets you write a Gas Town in YAML, among many other shapes.
 
 If you're running a real Gas Town, run Gas Town. This example is for operators who want to understand teamctl by reading something they already recognize.

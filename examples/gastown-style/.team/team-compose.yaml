@@ -1,4 +1,4 @@
-# Example: gastown-style — Gas Town's seven-role shape expressed as a
+# Example: gastown-style. Gas Town's seven-role shape expressed as a
 # teamctl team.
 #
 # This is a positioning artifact ("teamctl is docker-compose for
@@ -8,7 +8,7 @@
 #
 # Single-project layout for v1 simplicity. Gas Town's two-level
 # architecture (Town hosting shared infra; Rigs hosting per-project
-# work) maps cleanly to teamctl's multi-project layout — operators
+# work) maps cleanly to teamctl's multi-project layout. Operators
 # scaling beyond one Rig split this into multiple project files and
 # wire a bridge between them. The README's "Scaling out" section
 # walks that.
