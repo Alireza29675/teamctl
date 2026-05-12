@@ -334,6 +334,15 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
     if msg.voice().is_some() && state.stt.is_some() && state.manager.is_some() {
         return handle_voice(&bot, &msg, &state).await;
     }
+    // T-236: voice arrived but STT isn't configured on this manager-scoped
+    // bot. Reply with a config hint rather than silently dropping —
+    // operator otherwise can't tell whether the voice was received,
+    // intentionally ignored, or their config is broken. Unscoped bots
+    // (`state.manager.is_none()`) keep today's silent fall-through; their
+    // inbound handling is intentionally minimal and out of scope here.
+    if msg.voice().is_some() && state.stt.is_none() && state.manager.is_some() {
+        return handle_voice_stt_missing(&bot, &msg).await;
+    }
     // Capture the inbound Telegram message id on every mailbox row we
     // write. T-086-B feeds it to `react_to_user.telegram_msg_id` for
     // emoji reactions. T-168 also has the store look it up server-side
@@ -1804,6 +1813,35 @@ async fn handle_voice(bot: &Bot, msg: &Message, state: &State) -> ResponseResult
     }
 
     bot.send_message(msg.chat.id, decision.user_reply)
+        .reply_parameters(reply_to)
+        .await?;
+    Ok(())
+}
+
+/// T-236: body of the operator-facing reply when voice arrives on a
+/// manager-scoped bot that has no `speech_to_text` runtime configured.
+/// Pure function so the unit test in this file can assert the
+/// done-when content (voice-glyph, cause-named, two-fix-paths, docs
+/// pointer) without spinning up a Telegram mock. Plain text matches
+/// the existing voice-reply parse-mode (`handle_voice` sends without
+/// `.parse_mode()`); backticks render literally and operators are
+/// technical enough to parse them as `code quotes`.
+fn voice_stt_missing_reply() -> &'static str {
+    "🎙 Voice isn't configured for this agent yet.\n\n\
+     To enable, either run `/teamctl:adjust` in your project's Claude Code \
+     to configure it conversationally, or add `interfaces.telegram.speech_to_text` \
+     to the agent's project YAML manually.\n\n\
+     Docs: https://teamctl.run/guides/telegram-bot/#voice-messages-optional"
+}
+
+/// T-236: inbound voice handler used when STT isn't configured. Caller
+/// has already verified `msg.voice()` is `Some`, the bot is manager-
+/// scoped, AND `state.stt.is_none()`. Mirrors `handle_voice`'s reply
+/// pattern (threaded under the operator's voice message) so the
+/// operator sees the response nested where they spoke.
+async fn handle_voice_stt_missing(bot: &Bot, msg: &Message) -> ResponseResult<()> {
+    let reply_to = ReplyParameters::new(msg.id);
+    bot.send_message(msg.chat.id, voice_stt_missing_reply())
         .reply_parameters(reply_to)
         .await?;
     Ok(())
@@ -3321,6 +3359,41 @@ mod tests {
         assert_eq!(
             VOICE_INBOX_PREFIX,
             "🎙 (transcribed voice, may have misspellings):"
+        );
+    }
+
+    // ── T-236 voice-STT-missing config hint ────────────────────────
+
+    #[test]
+    fn voice_stt_missing_reply_carries_operator_actionable_hints() {
+        // Done-when contract (issue #236): when voice arrives on a
+        // manager-scoped bot without STT configured, the reply must
+        // convey (a) confirmation the voice was received (operator's
+        // primary confusion), (b) why nothing's happening, (c) two
+        // clear paths to fix it — `/teamctl:adjust` (conversational)
+        // AND manual project YAML — and (d) a docs pointer. Pin each
+        // piece so wording can evolve without dropping a contract.
+        let body = voice_stt_missing_reply();
+        assert!(
+            body.starts_with("🎙"),
+            "reply must lead with the voice glyph so the operator sees \
+             this is about their voice message: {body}"
+        );
+        assert!(
+            body.contains("Voice isn't configured"),
+            "reply must name the cause so the operator knows what to fix: {body}"
+        );
+        assert!(
+            body.contains("/teamctl:adjust"),
+            "reply must surface the conversational fix path: {body}"
+        );
+        assert!(
+            body.contains("interfaces.telegram.speech_to_text"),
+            "reply must surface the YAML key for the manual fix path: {body}"
+        );
+        assert!(
+            body.contains("https://teamctl.run/"),
+            "reply must include a docs pointer the operator can open: {body}"
         );
     }
 }
