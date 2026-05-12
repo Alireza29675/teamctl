@@ -20,14 +20,13 @@ That's it. The installer puts `teamctl`, `team-mcp`, `team-bot`, and `teamctl-ui
 
 ## Start a team
 
-Inside your project directory, with Claude Code installed:
+Inside your project directory:
 
 ```bash
-cd /path/to/your/project
-claude /teamctl:init
+teamctl init
 ```
 
-The plugin walks you through a real conversation (not a template menu) that surfaces the *domains* in your work and proposes a team shape around them. By the time you're done, `.team/team-compose.yaml` is on disk and the team is running in `tmux`.
+`teamctl init` walks you through a real conversation (not a template menu) that surfaces the *domains* in your work and proposes a team shape around them. By the time you're done, `.team/team-compose.yaml` is on disk and the team is running in `tmux`.
 
 If you'd rather hand-author the team yourself, read the [handbook](https://teamctl.run/concepts/teams/) first. It's the cognitive frame the guided flow would have walked you through.
 
