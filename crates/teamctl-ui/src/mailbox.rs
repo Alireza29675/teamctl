@@ -90,14 +90,23 @@ pub struct MessageRow {
     pub sent_at: f64,
 }
 
-/// Format a single row for the mailbox pane. Kept terse: `[from]
-/// text` on one line — no timestamps, no recipient (the tab tells
-/// you the recipient class). Multi-line bodies are flattened with a
-/// space so a single message stays one row in the pane. `team` is
-/// consulted via `agent_label` so senders with a `display_name` show
-/// their human label; unknown senders (cross-project, system) fall
-/// back to the canonical id verbatim.
-pub fn render_row(row: &MessageRow, team: &crate::data::TeamSnapshot) -> String {
+/// Format a single row for the mailbox pane. Kept terse: prefix in
+/// brackets + one-line body. Multi-line bodies are flattened with a
+/// space so a single message stays one row in the pane.
+///
+/// Prefix is tab-aware (T-231):
+///
+/// - **Inbox / Channel / Wire** → `[<senderName>]`. Sender is the
+///   useful disambiguator for received rows; resolved via
+///   [`crate::data::agent_label`] so `display_name` carries when
+///   set.
+/// - **Sent** → `[→<recipientName>]`. Sender on a Sent row is
+///   always the focused agent (that's the filter), so showing it is
+///   redundant. Operators want to see WHO the agent talked to;
+///   recipient resolution goes through
+///   [`crate::data::recipient_label`] which handles agent,
+///   `channel:`, and `user:` recipient shapes.
+pub fn render_row(row: &MessageRow, team: &crate::data::TeamSnapshot, tab: MailboxTab) -> String {
     let one_line: String = row
         .text
         .replace('\n', " ")
@@ -105,8 +114,16 @@ pub fn render_row(row: &MessageRow, team: &crate::data::TeamSnapshot) -> String 
         .chars()
         .take(180)
         .collect();
-    let sender = crate::data::agent_label(team, &row.sender);
-    format!("[{}] {}", sender, one_line)
+    let prefix = match tab {
+        MailboxTab::Sent => {
+            let recipient = crate::data::recipient_label(team, &row.recipient);
+            format!("→{recipient}")
+        }
+        MailboxTab::Inbox | MailboxTab::Channel | MailboxTab::Wire => {
+            crate::data::agent_label(team, &row.sender).to_string()
+        }
+    };
+    format!("[{}] {}", prefix, one_line)
 }
 
 /// Lookup contract: each method returns rows newer than `after_id`
@@ -462,11 +479,14 @@ mod tests {
     fn render_row_flattens_newlines_and_truncates() {
         let team = empty_team();
         let r = row(1, "p:m", "p:dev", "first\nsecond\nthird");
-        assert_eq!(render_row(&r, &team), "[p:m] first second third");
+        assert_eq!(
+            render_row(&r, &team, MailboxTab::Inbox),
+            "[p:m] first second third"
+        );
 
         let long: String = "x".repeat(300);
         let r = row(1, "s", "r", &long);
-        let rendered = render_row(&r, &team);
+        let rendered = render_row(&r, &team, MailboxTab::Inbox);
         // 5 chars ("[s] ") + at most 180 chars of body = 185.
         assert!(rendered.chars().count() <= 185);
     }
@@ -498,7 +518,91 @@ mod tests {
             channels: vec![],
         };
         let r = row(1, "p:sage", "p:hugo", "ping");
-        assert_eq!(render_row(&r, &team), "[Sage (Visionary)] ping");
+        assert_eq!(
+            render_row(&r, &team, MailboxTab::Inbox),
+            "[Sage (Visionary)] ping"
+        );
+    }
+
+    // T-231: tab-aware prefix — Sent shows recipient, others show
+    // sender. These pin the contract the operator-visible UX rests on.
+
+    #[test]
+    fn render_row_sent_tab_shows_recipient_with_arrow() {
+        // Sent rows have the focused agent as sender (constant);
+        // recipient is the disambiguating column. Verify the arrow
+        // glyph + recipient appear in place of the sender.
+        let team = empty_team();
+        let r = row(1, "p:me", "p:dev", "ack");
+        assert_eq!(render_row(&r, &team, MailboxTab::Sent), "[→p:dev] ack");
+    }
+
+    #[test]
+    fn render_row_sent_tab_resolves_recipient_display_name() {
+        // Same display-name resolution as the Inbox path — the
+        // recipient's label, not the raw id, when the team snapshot
+        // has a display_name for them.
+        use crate::data::{AgentInfo, TeamSnapshot};
+        use team_core::supervisor::AgentState;
+        let agent = AgentInfo {
+            id: "p:hugo".into(),
+            agent: "hugo".into(),
+            project: "p".into(),
+            tmux_session: "a-p-hugo".into(),
+            state: AgentState::Running,
+            unread_mail: 0,
+            pending_approvals: 0,
+            is_manager: true,
+            display_name: Some("Hugo (PM)".into()),
+            rate_limit_resets_at: None,
+            reports_to: None,
+        };
+        let team = TeamSnapshot {
+            root: std::path::PathBuf::from("/tmp"),
+            team_name: "t".into(),
+            agents: vec![agent],
+            channels: vec![],
+        };
+        let r = row(1, "p:sage", "p:hugo", "ping");
+        assert_eq!(render_row(&r, &team, MailboxTab::Sent), "[→Hugo (PM)] ping");
+    }
+
+    #[test]
+    fn render_row_sent_tab_renders_channel_recipient_with_hash() {
+        // Broadcast-to-channel rows have `recipient = channel:<id>`.
+        // The Sent prefix should render as `→#<short>` — operators
+        // recognize `#dev`, not `channel:teamctl:dev`.
+        let team = empty_team();
+        let r = row(1, "p:me", "channel:teamctl:dev", "rolling 0.8.3");
+        assert_eq!(
+            render_row(&r, &team, MailboxTab::Sent),
+            "[→#dev] rolling 0.8.3"
+        );
+    }
+
+    #[test]
+    fn render_row_sent_tab_renders_user_recipient_verbatim() {
+        // Telegram-bound `reply_to_user` rows have `recipient = user:telegram`.
+        // No special prefix-stripping — operators already recognize
+        // the `user:*` shape and dropping the prefix would lose the
+        // "this went to the operator" signal.
+        let team = empty_team();
+        let r = row(1, "p:mgr", "user:telegram", "PR url");
+        assert_eq!(
+            render_row(&r, &team, MailboxTab::Sent),
+            "[→user:telegram] PR url"
+        );
+    }
+
+    #[test]
+    fn render_row_non_sent_tabs_still_show_sender() {
+        // Inbox / Channel / Wire prefix is the sender — the recipient
+        // change is Sent-only, no behaviour drift for the other tabs.
+        let team = empty_team();
+        let r = row(1, "p:from", "p:me", "yo");
+        assert_eq!(render_row(&r, &team, MailboxTab::Inbox), "[p:from] yo");
+        assert_eq!(render_row(&r, &team, MailboxTab::Channel), "[p:from] yo");
+        assert_eq!(render_row(&r, &team, MailboxTab::Wire), "[p:from] yo");
     }
 
     #[test]

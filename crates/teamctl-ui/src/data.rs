@@ -85,6 +85,39 @@ pub fn agent_label<'a>(team: &'a TeamSnapshot, agent_id: &'a str) -> &'a str {
         .unwrap_or(agent_id)
 }
 
+/// Return the operator-facing label for a `MessageRow.recipient`.
+/// Recipients come in three shapes:
+///
+/// - `<project>:<agent>` — an agent id. Resolves via [`agent_label`]
+///   to the agent's display name (or canonical id when unset).
+/// - `channel:<project>:<name>` — a broadcast target. Strips the
+///   `channel:` prefix and renders as `#<name>` (matches the
+///   precedent in `compose::ComposeTarget::label` + the
+///   MailboxFirst-layout channel list).
+/// - `user:<handle>` (e.g. `user:telegram`) — an operator-facing
+///   bridge. Renders verbatim; operators recognize the shape and
+///   stripping the prefix would lose useful context.
+///
+/// Owned `String` return (rather than the `&str` shape of
+/// [`agent_label`]) because the channel-recipient path constructs
+/// `#<name>` at call time. Cheap allocation in a single-row render;
+/// 180-char body cap dominates.
+pub fn recipient_label(team: &TeamSnapshot, recipient_id: &str) -> String {
+    if let Some(rest) = recipient_id.strip_prefix("channel:") {
+        // `rest` is `<project>:<name>` — last `:`-segment is the
+        // short channel name (`all`, `dev`, …). When the recipient
+        // has no `:` separator (malformed), fall through to using
+        // `rest` verbatim — better to show garbage we can grep than
+        // hide it.
+        let short = rest.rsplit_once(':').map(|(_, n)| n).unwrap_or(rest);
+        return format!("#{short}");
+    }
+    // Agent or `user:*` — agent_label handles both (agent_label
+    // falls back to the verbatim id when there's no team-snapshot
+    // entry, which is the right shape for `user:*` rows too).
+    agent_label(team, recipient_id).to_string()
+}
+
 /// One channel exposed in `team-compose.yaml`. Used by PR-UI-6's
 /// per-channel broadcast picker and by the Mailbox-first layout's
 /// channel list. `id` is `<project>:<name>` (matches the broker's
@@ -627,5 +660,66 @@ mod tests {
             format_rate_limit_window(Some(5980.0), 1000.0),
             Some("1h 23m".into())
         );
+    }
+
+    // T-231: recipient_label resolution matrix.
+
+    fn empty_team() -> TeamSnapshot {
+        TeamSnapshot::empty(std::path::PathBuf::from("/tmp"))
+    }
+
+    #[test]
+    fn recipient_label_returns_agent_id_when_no_display_name() {
+        let team = empty_team();
+        assert_eq!(recipient_label(&team, "p:dev"), "p:dev");
+    }
+
+    #[test]
+    fn recipient_label_returns_display_name_when_set() {
+        use team_core::supervisor::AgentState;
+        let agent = AgentInfo {
+            id: "p:hugo".into(),
+            agent: "hugo".into(),
+            project: "p".into(),
+            tmux_session: "a-p-hugo".into(),
+            state: AgentState::Running,
+            unread_mail: 0,
+            pending_approvals: 0,
+            is_manager: true,
+            display_name: Some("Hugo (PM)".into()),
+            rate_limit_resets_at: None,
+            reports_to: None,
+        };
+        let team = TeamSnapshot {
+            root: std::path::PathBuf::from("/tmp"),
+            team_name: "t".into(),
+            agents: vec![agent],
+            channels: vec![],
+        };
+        assert_eq!(recipient_label(&team, "p:hugo"), "Hugo (PM)");
+    }
+
+    #[test]
+    fn recipient_label_renders_channel_with_hash_prefix() {
+        let team = empty_team();
+        assert_eq!(recipient_label(&team, "channel:teamctl:dev"), "#dev");
+        assert_eq!(recipient_label(&team, "channel:teamctl:all"), "#all");
+    }
+
+    #[test]
+    fn recipient_label_handles_malformed_channel_recipient() {
+        // Defensive — if a `channel:` prefix has no inner `:`,
+        // fall through to using the rest verbatim rather than panic.
+        let team = empty_team();
+        assert_eq!(recipient_label(&team, "channel:malformed"), "#malformed");
+    }
+
+    #[test]
+    fn recipient_label_renders_user_recipient_verbatim() {
+        // `user:*` shapes (operator-facing bridges) render with their
+        // prefix intact — operators recognize the form and stripping
+        // it would lose useful context.
+        let team = empty_team();
+        assert_eq!(recipient_label(&team, "user:telegram"), "user:telegram");
     }
 }

@@ -223,9 +223,18 @@ fn render_channel_feed(buf: &mut Buffer, area: Rect, app: &App) {
     }
     let cap = inner.height as usize;
     let start = filtered.len().saturating_sub(cap);
+    // T-231: MailboxFirst's channel-feed is conceptually the
+    // Channel tab — pass it through so the prefix stays sender-based
+    // (matches Triptych's Channel-tab render).
     let lines: Vec<Line<'_>> = filtered[start..]
         .iter()
-        .map(|r| Line::raw(crate::mailbox::render_row(r, &app.team)))
+        .map(|r| {
+            Line::raw(crate::mailbox::render_row(
+                r,
+                &app.team,
+                crate::mailbox::MailboxTab::Channel,
+            ))
+        })
         .collect();
     Paragraph::new(lines).render(inner, buf);
 }
