@@ -2,9 +2,9 @@
 
 ![Welcome to Gas Town, by Steve Yegge](https://miro.medium.com/v2/resize:fit:1400/format:webp/1*ReBwrC1sc9USnhvYXcrd4A.jpeg)
 
-A teamctl team that expresses [Gas Town](https://github.com/gastownhall/gastown)'s seven-role shape in teamctl primitives. Gas Town is [Steve Yegge](https://steve-yegge.medium.com)'s formation for sustained multi-agent work; he laid out the vision in [Welcome to Gas Town](https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04). Read his post first if you want the full thesis; this example is the YAML-shaped echo.
+A teamctl team that expresses [Gas Town](https://github.com/gastownhall/gastown)'s seven-role shape in teamctl primitives. Gas Town is [Steve Yegge](https://steve-yegge.medium.com)'s opinionated frame for sustained multi-agent work; he laid out the vision in [Welcome to Gas Town](https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04). Read his post first if you want the full thesis; this example is the YAML-shaped echo.
 
-This is an attempt at expressing the formation in teamctl, not a full-parity port. Gas Town runs a Go control plane with native primitives for hooks, beads, formulas, molecules; teamctl runs a docker-compose-shaped declarative layer. The example demonstrates the role shape and the ACL hierarchy; some of Gas Town's deeper primitives are reinterpreted in role-prompt prose (see the cheat-sheet below). Operators who want to run a Gas Town will scale the agents themselves; operators who want to understand teamctl by reading something they already recognize will find this familiar.
+This is an attempt at expressing Gas Town's frame in teamctl, not a full-parity port. Gas Town is opinionated: it commits to specific roles, a specific propulsion principle, and a specific work-as-VCS data model, all implemented in a Go control plane. teamctl is unopinionated infrastructure: it provides a declarative compose layer and lets operators describe whichever frame they're after, Gas Town's or otherwise. The example demonstrates Gas Town's role shape and ACL hierarchy in teamctl's vocabulary; some of Gas Town's deeper primitives are reinterpreted in role-prompt prose (see the cheat-sheet below). Operators who want to run a Gas Town will scale the agents themselves; operators who want to understand teamctl by reading something they already recognize will find this familiar.
 
 ```
 mayor (Claude Opus)              ← Telegram: mayor bot
@@ -107,10 +107,10 @@ The mayor routes to polecat (via witness if you want the supervisor in the loop)
 
 After any edit, `teamctl reload gastown` picks up the change.
 
-## Two layers, same formation
+## Opinionated frame, unopinionated framework
 
-Gas Town is a formation: a vocabulary of roles and a propulsion principle that turns those roles into sustained work. teamctl aims to be the layer that lets you write that formation declaratively, in YAML, alongside other formations.
+Gas Town is an opinionated frame for multi-agent work: a specific take on which roles matter, how they relate, and the propulsion principle that keeps them moving. teamctl is unopinionated infrastructure: a declarative framework operators use to express frames like Gas Town in YAML, alongside other frames they want to compose.
 
-The two layers are complementary. Gas Town implements the formation directly in Go, with native primitives for hooks, beads, formulas, molecules. teamctl describes the formation in compose, then orchestrates the runtime that runs it. Operators wanting the depth of Gas Town's control plane should run Gas Town; operators wanting to compose Gas Town's shape alongside other shapes in a single declarative stack will find teamctl the right home.
+The two layers are complementary. Gas Town implements its frame directly in Go, with native primitives for hooks, beads, formulas, molecules. teamctl describes any frame in compose, then orchestrates the runtime that runs it. Operators wanting the depth of Gas Town's control plane should run Gas Town; operators wanting to compose Gas Town's shape alongside other frames in a single declarative stack will find teamctl the right home.
 
 This example sits in the second world. It's the YAML you'd write today if you wanted to describe Gas Town in teamctl's vocabulary. As teamctl's primitives evolve, the gap closes.
