@@ -21,7 +21,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::app::App;
-use crate::data::{state_glyph, AgentInfo};
+use crate::data::{state_glyph, tree_row_meta, AgentInfo, TreeRowMeta};
 use crate::mailbox::{render_row, MailboxTab};
 use crate::theme::ColorMode;
 
@@ -171,25 +171,64 @@ fn render_agents(buf: &mut Buffer, area: Rect, app: &App) {
     }
 
     let ascii = matches!(app.capabilities.color, ColorMode::Monochrome);
+    // T-211: pair each row with tree-render metadata so `agent_line`
+    // can draw `├─` / `└─` glyphs for `reports_to` children. Teams
+    // with no `reports_to` usage produce all-depth-0 metas and the
+    // existing flat-render output is byte-identical (no prefix bytes
+    // for depth 0).
+    let metas = tree_row_meta(&app.team.agents);
     let lines: Vec<Line<'_>> = app
         .team
         .agents
         .iter()
+        .zip(metas.iter())
         .enumerate()
-        .map(|(i, info)| agent_line(info, Some(i) == app.selected_agent, ascii, app))
+        .map(|(i, (info, meta))| agent_line(info, *meta, Some(i) == app.selected_agent, ascii, app))
         .collect();
     let para = Paragraph::new(lines).alignment(Alignment::Left);
     para.render(inner, buf);
 }
 
-fn agent_line<'a>(info: &'a AgentInfo, selected: bool, ascii: bool, app: &App) -> Line<'a> {
+/// Render the indent + branch glyph for a tree row at the given
+/// depth. Depth 0 produces a single leading space — same as today's
+/// flat-list shape. Depth 1 produces ` ├─ ` / ` └─ ` (or ` |- ` /
+/// `` `- `` in ASCII), with a matching leading space so the branch
+/// glyph sits one indent past the depth-0 leading column (owner
+/// alignment review, tg msg 1892). Depth >= 2 isn't a v1 goal per
+/// the issue's non-goal list; the renderer clamps to the depth-1
+/// shape behind a single extra indent so a chained schema (if one
+/// ever slips past validation) at least lays out top-to-bottom
+/// without crashing.
+fn tree_prefix(meta: TreeRowMeta, ascii: bool) -> String {
+    let branch = match (meta.is_last_sibling, ascii) {
+        (false, false) => "├─",
+        (true, false) => "└─",
+        (false, true) => "|-",
+        (true, true) => "`-",
+    };
+    match meta.depth {
+        0 => " ".to_string(),
+        1 => format!(" {branch} "),
+        // Defensive clamp for any chain past v1's schema scope.
+        _ => format!("   {branch} "),
+    }
+}
+
+fn agent_line<'a>(
+    info: &'a AgentInfo,
+    meta: TreeRowMeta,
+    selected: bool,
+    ascii: bool,
+    app: &App,
+) -> Line<'a> {
     let glyph = state_glyph(info, ascii);
     // T-160: roster prefers the operator's display_name when set,
     // falling back to the YAML key (`info.agent`) — the canonical id
     // would over-prefix the project and is reserved for cross-project
     // surfaces like the detail header and wall-tile title.
     let label = info.display_name.as_deref().unwrap_or(&info.agent);
-    let display = format!(" {glyph}  {label}");
+    let prefix = tree_prefix(meta, ascii);
+    let display = format!("{prefix}{glyph}  {label}");
     let style = if selected {
         Style::default()
             .fg(app.capabilities.accent())

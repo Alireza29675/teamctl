@@ -63,6 +63,13 @@ pub struct AgentInfo {
     /// [`format_rate_limit_window`] to render "5m 12s" / "1h 23m" —
     /// past timestamps render as `None` (no active limit).
     pub rate_limit_resets_at: Option<f64>,
+    /// T-211: short agent name (the YAML key in the manager's project)
+    /// this agent reports to. `None` for top-level agents (no parent)
+    /// — they render at depth 0 in the Agents pane. When `Some`, the
+    /// renderer nests this row under its manager with a tree glyph.
+    /// Schema validation (`team-core/src/validate.rs`) guarantees the
+    /// referenced name resolves to an existing agent.
+    pub reports_to: Option<String>,
 }
 
 /// Return the operator-facing label for `agent_id`: the agent's
@@ -155,6 +162,7 @@ impl TeamSnapshot {
         let mut agents = Vec::new();
         for h in compose.agents() {
             let display_name = h.spec.display_name.clone();
+            let reports_to = h.spec.reports_to.clone();
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
             let state = supervisor.state(&spec).unwrap_or(AgentState::Unknown);
@@ -173,6 +181,7 @@ impl TeamSnapshot {
                 is_manager: h.is_manager,
                 display_name,
                 rate_limit_resets_at,
+                reports_to,
             });
         }
 
@@ -183,6 +192,16 @@ impl TeamSnapshot {
             (false, true) => std::cmp::Ordering::Less,
             _ => std::cmp::Ordering::Equal,
         });
+
+        // T-211: reorder into tree-DFS so the roster reads top-down
+        // (manager → that manager's reports → next manager → …).
+        // Selection stays index-based + sticky-on-id (`replace_team`
+        // hunts by id), so nav still walks the visible order without
+        // any selection-state refactor. Teams with no `reports_to`
+        // usage degenerate to the prior order — every agent stays at
+        // depth 0 and the Vec is byte-identical to the post-sort
+        // shape above.
+        agents = into_tree_dfs_order(agents);
 
         let mut channels = Vec::new();
         for project in &compose.projects {
@@ -205,6 +224,158 @@ impl TeamSnapshot {
             channels,
         })
     }
+}
+
+/// Per-row metadata the Agents pane renderer needs to draw the
+/// `reports_to` tree (T-211). Computed by [`tree_row_meta`] over a
+/// `Vec<AgentInfo>` that's already in tree-DFS order (i.e. produced
+/// by [`into_tree_dfs_order`] during `TeamSnapshot::load`). Lives
+/// next to the agents Vec rather than on `AgentInfo` itself because
+/// it's purely view-layer state — the data struct stays clean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeRowMeta {
+    /// Depth from the top of the tree. Top-level agents (no
+    /// `reports_to`) are depth 0; their direct reports are depth 1.
+    /// V1 schema is one-level (worker → manager); a defensive depth
+    /// >= 2 case falls back to depth 1 in the renderer.
+    pub depth: usize,
+    /// True iff this row is the last child of its parent in render
+    /// order (or, for depth 0, the last top-level agent). Drives the
+    /// `└─` vs `├─` glyph choice in the renderer.
+    pub is_last_sibling: bool,
+}
+
+/// Reorder `agents` into depth-first tree order: each top-level
+/// (`reports_to == None`) agent is followed by its direct reports
+/// in their pre-existing order, recursively. The input order
+/// (managers-first sorted by id within each group, then workers)
+/// is preserved at each tier — this only **interleaves** workers
+/// under their manager rather than putting them all in a flat
+/// post-managers block.
+///
+/// Teams with no `reports_to` usage are passed through unchanged.
+/// Orphan rows (reports_to references a missing agent — should be
+/// caught by validation but checked defensively) are appended at
+/// the end.
+pub fn into_tree_dfs_order(agents: Vec<AgentInfo>) -> Vec<AgentInfo> {
+    if agents.iter().all(|a| a.reports_to.is_none()) {
+        return agents; // Fast path: no tree, no reorder.
+    }
+    // Scope the parent lookup to (project, agent_name) since
+    // `reports_to` resolves within the project per validate.rs:185.
+    let name_to_index: HashMap<(&str, &str), usize> = agents
+        .iter()
+        .enumerate()
+        .map(|(i, a)| ((a.project.as_str(), a.agent.as_str()), i))
+        .collect();
+    let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut top_level: Vec<usize> = Vec::new();
+    for (i, a) in agents.iter().enumerate() {
+        let parent_idx = a
+            .reports_to
+            .as_deref()
+            .and_then(|p| name_to_index.get(&(a.project.as_str(), p)).copied());
+        match parent_idx {
+            Some(p) => children.entry(p).or_default().push(i),
+            None => top_level.push(i),
+        }
+    }
+    let mut emitted = vec![false; agents.len()];
+    let mut order: Vec<usize> = Vec::with_capacity(agents.len());
+    fn walk(
+        i: usize,
+        children: &HashMap<usize, Vec<usize>>,
+        emitted: &mut [bool],
+        order: &mut Vec<usize>,
+    ) {
+        if emitted[i] {
+            return; // Defensive: also breaks any cycle past validation.
+        }
+        emitted[i] = true;
+        order.push(i);
+        if let Some(kids) = children.get(&i) {
+            for &k in kids {
+                walk(k, children, emitted, order);
+            }
+        }
+    }
+    for &i in &top_level {
+        walk(i, &children, &mut emitted, &mut order);
+    }
+    // Defensive: schema validation rejects cycles + dangling parents,
+    // but if anything slipped past we'd rather render it at the end
+    // than drop it from the roster entirely.
+    for (i, &was_emitted) in emitted.iter().enumerate() {
+        if !was_emitted {
+            order.push(i);
+        }
+    }
+    let mut indexed: Vec<Option<AgentInfo>> = agents.into_iter().map(Some).collect();
+    order
+        .into_iter()
+        .filter_map(|i| indexed[i].take())
+        .collect()
+}
+
+/// Compute per-row tree metadata for an `agents` slice that's already
+/// in DFS order (post-[`into_tree_dfs_order`]). The renderer pairs
+/// this 1:1 with the Vec to draw `├─` / `└─` glyphs.
+pub fn tree_row_meta(agents: &[AgentInfo]) -> Vec<TreeRowMeta> {
+    if agents.iter().all(|a| a.reports_to.is_none()) {
+        // Fast path: every row is its own top-level entry. `is_last_sibling`
+        // is true for the last top-level row only (drives no glyph at
+        // depth 0 today, but keeps the contract honest for any future
+        // depth-0 separator).
+        let n = agents.len();
+        return (0..n)
+            .map(|i| TreeRowMeta {
+                depth: 0,
+                is_last_sibling: i + 1 == n,
+            })
+            .collect();
+    }
+    let name_to_index: HashMap<(&str, &str), usize> = agents
+        .iter()
+        .enumerate()
+        .map(|(i, a)| ((a.project.as_str(), a.agent.as_str()), i))
+        .collect();
+    // Resolved parent index per agent, or None for top-level / orphan.
+    let parents: Vec<Option<usize>> = agents
+        .iter()
+        .map(|a| {
+            a.reports_to
+                .as_deref()
+                .and_then(|p| name_to_index.get(&(a.project.as_str(), p)).copied())
+        })
+        .collect();
+    // Depth: 0 for top-level / orphan, else parent's depth + 1.
+    // V1 schema is one-level so a single forward pass suffices —
+    // DFS order guarantees parents precede children.
+    let mut depth = vec![0usize; agents.len()];
+    for i in 0..agents.len() {
+        if let Some(p) = parents[i] {
+            depth[i] = depth[p] + 1;
+        }
+    }
+    // is_last_sibling: per parent (or `None` bucket for top-level),
+    // the highest-index row in that bucket is the last.
+    let mut last_in_bucket: HashMap<Option<usize>, usize> = HashMap::new();
+    for (i, p) in parents.iter().enumerate() {
+        last_in_bucket
+            .entry(*p)
+            .and_modify(|stored| {
+                if i > *stored {
+                    *stored = i;
+                }
+            })
+            .or_insert(i);
+    }
+    (0..agents.len())
+        .map(|i| TreeRowMeta {
+            depth: depth[i],
+            is_last_sibling: last_in_bucket.get(&parents[i]).copied() == Some(i),
+        })
+        .collect()
 }
 
 #[derive(Debug, Default)]
@@ -373,6 +544,7 @@ mod tests {
             is_manager: false,
             display_name: None,
             rate_limit_resets_at: None,
+            reports_to: None,
         }
     }
 
