@@ -30,6 +30,7 @@ impl Widget for Splash<'_> {
             .constraints([
                 Constraint::Min(0),     // top spacer
                 Constraint::Length(11), // logo (10 lines of art + 1 padding)
+                Constraint::Length(1),  // gap between logo and version line
                 Constraint::Length(1),  // version + team line
                 Constraint::Length(1),  // hint line
                 Constraint::Min(0),     // bottom spacer
@@ -46,6 +47,8 @@ impl Widget for Splash<'_> {
             .alignment(Alignment::Center)
             .render(chunks[1], buf);
 
+        // chunks[2] is the gap row (intentionally unrendered).
+
         let count = self.app.team.agents.len();
         let team_line = format!(
             "v{}  ·  {}  ·  {} agent{}",
@@ -56,11 +59,11 @@ impl Widget for Splash<'_> {
         );
         Paragraph::new(team_line)
             .alignment(Alignment::Center)
-            .render(chunks[2], buf);
+            .render(chunks[3], buf);
 
         Paragraph::new("Press `?` for help · `t` for tutorial")
             .style(muted)
             .alignment(Alignment::Center)
-            .render(chunks[3], buf);
+            .render(chunks[4], buf);
     }
 }
