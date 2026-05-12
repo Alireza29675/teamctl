@@ -1,6 +1,6 @@
 ---
 name: release
-description: Use when writing a public-facing GitHub release announcement for a new version. Produces the curated short body users see on the releases page: triplet/verb headline (e.g. *"listen, look, attach"*), two-tier body (three triplet paragraphs + quiet-wins bullets), emoji anchors, cut philosophy. Separates the writer's surface from engineering's technical cascade (version bump, CHANGELOG.md dating, tag push, gh release create, cargo-dist or equivalent + smoke tests).
+description: Use when writing a public-facing GitHub release announcement for a new version. Produces the curated short body users see on the releases page. Picks a shape that fits the release size (triplet for major, bullets for polish, single paragraph for hotfix). Separates the writer's surface from engineering's technical cascade (version bump, CHANGELOG.md dating, tag push, gh release create, cargo-dist or equivalent + smoke tests).
 ---
 
 # Release body
@@ -14,9 +14,9 @@ This skill stops at a ratified body. The technical cascade (version bumps, CHANG
 Six beats, in order.
 
 1. **Read the merge surface.** `git log --oneline <last-tag>..origin/main` and `gh pr list --state merged --search "merged:>=<date>"` to gather the PRs that landed. Read `CHANGELOG.md` `[Unreleased]` if engineering keeps one; that's the exhaustive surface, you'll write the curated short version.
-2. **Sort into tiers.** Tier 1: the 2-3 changes that genuinely change what a user can DO (verbs, not nouns). Tier 2: 3-5 quiet wins. Cut: engineering-only changes (test deflakes, build hygiene, internal refactors). Hold: known-broken features; never lead the public with a foot-gun.
-3. **Headline.** Triplet of verbs that names what's new (*"listen, look, attach"*, *"capture, route, ship"*). Owner-style colon form: `vX.Y.Z: <triplet>`. Em-dashes banned.
-4. **Body.** Three short paragraphs (one per triplet verb), then a bulleted "quiet wins" block (Tier 2), then thanks (outside contributors) and a closer link out to the full changelog.
+2. **Sort into tiers.** Tier 1: the changes that genuinely change what a user can DO (verbs, not nouns). Tier 2: the quiet wins. Cut: engineering-only changes (test deflakes, build hygiene, internal refactors). Hold: known-broken features; never lead the public with a foot-gun.
+3. **Pick the shape.** Count weighty Tier-1 features. Three means **triplet shape**. Zero to two means **bullets shape**. A single fix means **hotfix shape**. See *Shape variants* below. The shape determines headline and body structure.
+4. **Read the last shipped body side-by-side.** Match its rhythm: word count per paragraph, sentence count, bullet density. Drift on rhythm is the most common reason a body comes back "not nice" despite hitting the right structure.
 5. **Surface to ratify.** Pass the draft to whoever ratifies user-facing copy (owner, lead, you-yesterday). Include named variant questions so the ratify is one-round.
 6. **Hand off the technical cascade.** Once ratified, pass the approved body to engineering to wire into `gh release create`. The placeholder checklist below is theirs to execute.
 
@@ -24,60 +24,107 @@ Six beats, in order.
 
 The release body is the **most-screenshotted artifact** of any version cut. It lives on github.com long after you've forgotten it. Get it right.
 
-- **Verb headlines beat noun headlines.** *listen, look, attach* tells the reader what they can DO. *voice, files, focus* is fine but weaker.
-- **Two screens, not five.** Headline plus triplet plus 5-bullet block plus closer equals one scroll on a phone. Anything longer fails the screenshot test.
-- **Emoji anchors.** One emoji per triplet verb, one per Tier 2 bullet. Used for scanability, not decoration.
+- **Match precedent rhythm.** Before surfacing, read the last shipped body side-by-side. Match: word count per paragraph (20-25 target for triplet ¶s), sentence count per paragraph (2 max), first-word-is-user-action (*"Send a voice note"* not *"`teamctl init` retired..."*), one-thought-per-bullet (no semicolon-stacked sub-facts). If your draft feels heavier on the tongue than the precedent, the rhythm is off.
+- **Two screens, not five.** A whole body should fit roughly one phone scroll. Anything longer fails the screenshot test.
 - **Plain American English.** No marketing speak (*"unlock"*, *"empower"*, *"reimagine"*). Show what changed; trust the reader.
+- **One opener sentence is plenty.** *"teamctl learned three new tricks this release."* beats *"We're excited to announce..."*. A bridge sentence connects headline to body; one is enough.
+- **Verb headlines beat noun headlines (when you use a triplet).** *listen, look, attach* tells the reader what they can DO. *voice, files, focus* is fine but weaker.
+- **Emoji anchors.** One emoji per triplet paragraph or Tier 2 bullet. Used for scanability, not decoration.
 - **Cut engineering-only changes.** Test deflakes, CI hygiene, internal refactors don't land in the public body. They're in `CHANGELOG.md`.
 - **Em-dashes banned.** Use colons, semicolons, or a fresh sentence. The em-dash invites prose drift; release bodies are short on purpose.
-- **One opener sentence is plenty.** *"teamctl learned three new tricks this release."* beats *"We're excited to announce..."*.
-- **Thanks outside contributors by handle.** Co-authored-by lines in commits earn a `🙏 Thanks to @handle` line at the bottom.
-- **Closer points out, not in.** *"For the full picture: site.run/changelog"* or *"Full diff: vX.Y.Z...vA.B.C"*. Don't enumerate every PR in the body itself.
+- **Thanks outside contributors by handle (standing rule).** Every release with external Co-Authored-By trailers gets a `🙏 Thanks to @<handle> ...` line at the bottom. **Verify the handle from source**, never from a display-name guess:
+  - Commit trailer: `git log --format='%(trailers:key=Co-authored-by)' <range>`. Handle is between `+` and `@` in `<id+handle@users.noreply.github.com>`.
+  - PR author: `gh pr view <N> --json author --jq '.author.login'`.
+  - Owner-supplied profile URL: `github.com/<handle>` → `<handle>`.
+  - "Hamed Fathi" the display name does NOT imply `@HamedFathi` the handle. When unsure, ask.
 
-## The two-tier model
+## Shape variants
 
-### Tier 1: the triplet
+Pick the shape before drafting. The release's substance dictates the shape, not the other way around. Forcing a triplet onto a polish release is the most common drift.
 
-The three changes that **change what a user can do**. Each gets a short bold paragraph: one verb-anchored sentence, then 1-2 sentences of substance.
+### Triplet shape (0.8.0-style)
 
-Example structure (from teamctl v0.8.0):
+Use when three genuinely user-facing, weighty new features shipped. Each anchors a paragraph.
+
+Structure:
 
 ```
-🎙️ **Listen.** Send a voice note to your manager in Telegram. Groq transcribes it, your team reads it like any other message.
+<bridge sentence>
 
-👀 **Look.** The TUI grew up. Mouse-wheel scrolls the focused pane, `Ctrl+E` forwards keys straight into the agent's tmux pane, claude renders at full pane size instead of 80×24, and the Triptych layout no longer fights you.
+<emoji> **Verb1.** <paragraph 1, 20-25 words, 2 sentences max, user-anchored>
 
-📎 **Attach.** Drop a file path in the TUI compose pane and your agent reads the file when the message lands. Bring your own malware scanner if you want a gate; defaults work out of the box.
+<emoji> **Verb2.** <paragraph 2>
+
+<emoji> **Verb3.** <paragraph 3>
+
+And a few quiet wins underneath:
+
+- <emoji> **<name>**: <one-thought clause>.
+- ... (3-5 bullets total)
+
+🙏 Thanks to @<handle> for outside contributions.
 ```
+
+Title: `vX.Y.Z: <verb1>, <verb2>, <verb3>`. Em-dashes banned, so colon form.
+
+Example: v0.8.0 release body (`listen, look, attach`).
 
 Rules for picking the triplet:
 
-- Each item must answer *"what can a user now do that they couldn't last release?"*
+- Each verb must answer *"what can a user now do that they couldn't last release?"*
 - If a change isn't user-facing, it doesn't make Tier 1.
-- Verbs in the headline triplet match the bold-lead verbs in the body.
+- Verbs in the headline match the bold-lead verbs in the body.
 - If you have more than three Tier-1 candidates, fold the weakest into Tier 2.
+- If you have fewer than three, switch to the bullets shape.
 
-### Tier 2: the quiet wins
+### Bullets shape (polish / patch releases)
 
-3-5 changes that matter but aren't headline-grabbers. Bullets, emoji anchors, colon-separated `**name**: short description` form.
+Use when fewer than three weighty Tier-1 features shipped. Polish releases, smaller patches, infrastructure wins that have user-visible impact but don't each carry a paragraph.
 
-Example structure:
+Structure:
 
 ```
-And a few quiet wins underneath:
+<bridge sentence framing what the release is about>
 
-- 📬 **Lazy inbox**: agents see notification stubs instead of a firehose, so they stay on task.
-- 💬 **Conversational `init`**: template picker out, domain-discovery conversation in.
-- 🧱 **Stackable role prompts**: `role_prompt` now accepts a list of markdown files.
-- 🔄 **Smarter `teamctl update`**: refreshes the Claude Code plugin alongside the binaries.
-- 📖 **A docs rewrite worth a fresh look**: new README, new examples, fresh concept pages.
+- <emoji> **<name>**: <one-thought clause>.
+- <emoji> **<name>**: <one-thought clause>.
+- ... (3-7 bullets total)
+
+🙏 Thanks to @<handle> for outside contributions.
 ```
 
-Rules for Tier 2:
+Title: `vX.Y.Z: <short descriptive phrase>` or just `vX.Y.Z`. No forced three-word triplet.
+
+When to choose this over the triplet: if you find yourself stretching for a third weighty verb, or if every triplet candidate is *"polish"* rather than *"new capability"*, drop the triplet and use bullets. Owner-ratified guidance: *"all of the releases should not be this large and you don't need to always pick three words"* (tg 1908).
+
+### Hotfix shape (0.8.1-style)
+
+Use when the release is essentially a single fix.
+
+Structure:
+
+```
+<X.Y.Z> fixes <what>.
+
+<emoji> **<Fix-name>.** <one-paragraph description: what was broken, what changed>.
+
+<emoji> <Companion-fix-name if any>. <short paragraph>.
+
+<one-line upgrade instruction if relevant>.
+
+🙏 Thanks to <whoever helped diagnose>.
+```
+
+Title: `vX.Y.Z` or `vX.Y.Z: <fix nickname>`. No triplet.
+
+Example: v0.8.1 release body (single bash 3.2 hotfix on macOS).
+
+## Tier 2 bullet rules (applies to triplet and bullets shapes)
 
 - One visual line per bullet. The colon prevents prose drift.
+- One thought per bullet. No semicolon-stacked sub-facts. Two short clauses max.
 - Backticks for command names and code identifiers.
-- 3-5 bullets is the sweet spot. More than 5 and you're back to engineering catalog.
+- 3-5 bullets is the sweet spot for triplet shape; 3-7 for bullets shape. More than that and you're back to engineering catalog.
 
 ## What to cut
 
@@ -103,17 +150,17 @@ After the body is ratified, the technical cascade is engineering's job. This ski
 - [ ] **Tag push.** Triggers cargo-dist or equivalent release pipeline.
 - [ ] **`gh release create vX.Y.Z`** with the ratified body. Install tables and asset uploads are auto-generated by cargo-dist (or the equivalent in your stack).
 - [ ] **Smoke test.** Fresh-machine install via the release URL. Verify binaries report the new version.
-- [ ] **Docs-site changelog page sync** (if applicable). The closer link should resolve.
 - [ ] **Announcement** (if applicable). Mastodon, BlueSky, Twitter, Slack channels.
 
 Hand the ratified body and this checklist to engineering. The skill is done when the body is approved.
 
 ## When the body is wrong
 
-Two common failure modes, and how to fix:
+Three common failure modes, and how to fix:
 
-- **"Feels shattered" / "doesn't flow".** Usually means you wrote 5+ separate short paragraphs without grouping. Fix: collapse Tier 2 into the bulleted block; the triplet stays as three paragraphs but the rest folds.
-- **"Reads like a changelog".** You included every PR. Cut to Tier 1 + 5 bullets max. The rest goes in `CHANGELOG.md`.
+- **"Feels shattered" / "doesn't flow".** Usually 5+ separate short paragraphs without grouping. Fix: collapse Tier 2 into the bulleted block; the triplet stays as three paragraphs but the rest folds.
+- **"Reads like a changelog".** You included every PR. Cut to Tier 1 plus 5 bullets max. The rest goes in `CHANGELOG.md`.
+- **"Not nice" / "we had a convention".** Structure right, rhythm wrong. Run the side-by-side diff against the last shipped body: word count per paragraph, sentence count, bullet density, first-word-is-user-action. If your draft feels heavier on the tongue than the precedent, the rhythm is off.
 
 ## Pruning
 
