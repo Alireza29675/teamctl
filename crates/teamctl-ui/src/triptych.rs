@@ -528,9 +528,11 @@ fn render_mailbox_body(buf: &mut Buffer, area: Rect, app: &App) {
     // Tail to whatever fits — same shape as the detail pane.
     let cap = area.height as usize;
     let start = rows.len().saturating_sub(cap);
+    // T-231: pass the active tab so render_row can pick the right
+    // prefix (sender for Inbox/Channel/Wire, recipient for Sent).
     let lines: Vec<Line<'_>> = rows[start..]
         .iter()
-        .map(|r| Line::raw(render_row(r, &app.team)))
+        .map(|r| Line::raw(render_row(r, &app.team, app.mailbox_tab)))
         .collect();
     Paragraph::new(lines).render(area, buf);
 }
