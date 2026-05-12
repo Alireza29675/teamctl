@@ -1,5 +1,5 @@
-# Example: gastown-style. Gas Town's seven-role shape expressed as a
-# teamctl team.
+# Example: gastown-in-teamctl. Gas Town's seven-role shape expressed
+# as a teamctl team.
 #
 # This is a positioning artifact ("teamctl is docker-compose for
 # agents"), not a runnable clone of Gas Town. The roles are wired with
