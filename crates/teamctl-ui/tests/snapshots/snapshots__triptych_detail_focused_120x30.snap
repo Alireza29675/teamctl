@@ -29,6 +29,6 @@ expression: buffer_to_string(&buf)
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
-│                          ││                                                                                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
 Tab cycle panes  ·  Ctrl+E stream keys · / filter · w wall · @ send · q quit                         ? help · t tutorial
+                                                                                                   CPU 0% · RAM 0.0/0 GB

@@ -15,7 +15,6 @@ expression: buffer_to_string(&buf)
 │                                                          ││                                                          │
 │                                                          ││                                                          │
 │                                                          ││                                                          │
-│                                                          ││                                                          │
 └──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘
 ┌ * writing:worker-2 ──────────────────────────────────────┐┌ x writing:critic ────────────────────────────────────────┐
 │(focus this tile to stream)                               ││(focus this tile to stream)                               │
@@ -32,3 +31,4 @@ expression: buffer_to_string(&buf)
 │                                                          ││                                                          │
 └──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘
 Tab cycle panes  ·  / search · ⏎ open · @ send · q quit                                              ? help · t tutorial
+/fixture                                                                                           CPU 0% · RAM 0.0/0 GB
