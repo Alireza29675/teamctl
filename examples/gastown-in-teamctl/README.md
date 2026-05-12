@@ -111,6 +111,6 @@ After any edit, `teamctl reload gastown` picks up the change.
 
 Gas Town is a formation: a vocabulary of roles and a propulsion principle that turns those roles into sustained work. teamctl aims to be the layer that lets you write that formation declaratively, in YAML, alongside other formations.
 
-The two layers are complementary. Gas Town implements the formation directly in Go, with native primitives for hooks, beads, formulas, molecules. teamctl describes the formation in compose, then orchestrates whatever runtime expresses it. Operators wanting the depth of Gas Town's control plane should run Gas Town; operators wanting to compose Gas Town's shape alongside other shapes in a single declarative stack will find teamctl the right home.
+The two layers are complementary. Gas Town implements the formation directly in Go, with native primitives for hooks, beads, formulas, molecules. teamctl describes the formation in compose, then orchestrates the runtime that runs it. Operators wanting the depth of Gas Town's control plane should run Gas Town; operators wanting to compose Gas Town's shape alongside other shapes in a single declarative stack will find teamctl the right home.
 
 This example sits in the second world. It's the YAML you'd write today if you wanted to describe Gas Town in teamctl's vocabulary. As teamctl's primitives evolve, the gap closes.
