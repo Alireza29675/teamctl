@@ -160,7 +160,20 @@ async fn main() -> Result<()> {
         match serde_json::from_str::<rpc::Request>(trimmed) {
             Ok(req) => {
                 if req.method == "notifications/initialized" {
-                    initialized.notify_waiters();
+                    // `notify_one()` (not `notify_waiters()`): tokio's
+                    // `notify_waiters` only wakes tasks that are *already*
+                    // parked on `.notified().await`; if the spawned watcher
+                    // task hasn't been polled yet (freshly `tokio::spawn`'d,
+                    // tokio scheduling delay), the wake fires into the void
+                    // and the watcher blocks forever. macOS runners under
+                    // load surfaced this as a flake on
+                    // `immediate_message_delivers_full_body_inline` —
+                    // 30s budget elapsed with zero notifications because
+                    // the watcher never unblocked. `notify_one()` stores a
+                    // permit when no waiter is ready, so a late-polled
+                    // watcher consumes the buffered permit on its first
+                    // `.notified().await` and proceeds.
+                    initialized.notify_one();
                 }
                 if let Some(resp) = rpc::dispatch(&ctx, req).await {
                     let buf = serde_json::to_vec(&resp)?;
@@ -216,7 +229,19 @@ fn spawn_channel_watcher(
         }
     };
 
+    // Test-only barrier (kept out of prod paths because the env var is
+    // unset there): widens the "initialized arrives before watcher parks"
+    // race window deterministically so a regression test can pin the
+    // `notify_one` (buffered-permit) contract on the caller side.
+    let pre_notify_sleep_ms: u64 = std::env::var("TEAM_MCP_TEST_WATCHER_PRE_NOTIFY_SLEEP_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+
     tokio::spawn(async move {
+        if pre_notify_sleep_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(pre_notify_sleep_ms)).await;
+        }
         initialized.notified().await;
         let mut last_seen = initial_last_seen;
 

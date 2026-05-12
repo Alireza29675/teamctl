@@ -374,6 +374,74 @@ fn row_written_before_initialized_still_emits_notification() {
     dev.shutdown();
 }
 
+/// Race regression: when `notifications/initialized` arrives BEFORE the
+/// spawned watcher task has reached `.notified().await`, the wake must
+/// still land — otherwise the watcher blocks forever and no channel
+/// notifications ever fire. macOS runners under load surfaced this as
+/// a 30s timeout on `immediate_message_delivers_full_body_inline`.
+///
+/// `notify_waiters()` only wakes already-parked tasks (no buffering);
+/// the fix swapped to `notify_one()` which stores a permit when no
+/// waiter is ready, so a late-polled watcher consumes the buffered
+/// permit on its first `.notified().await` and proceeds.
+///
+/// We widen the race window deterministically via
+/// `TEAM_MCP_TEST_WATCHER_PRE_NOTIFY_SLEEP_MS` (a test-only env var
+/// the watcher reads to sleep before parking). Pre-fix, this test
+/// hangs out the full RPC_BUDGET and fails; post-fix it passes in
+/// well under a second.
+#[test]
+fn initialized_before_watcher_parks_still_emits_notification() {
+    use rusqlite::Connection;
+
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let bin = team_mcp_bin();
+
+    // 500ms barrier inside the spawned watcher BEFORE
+    // `.notified().await`. Far longer than the main-loop round-trip
+    // for `initialize` + `notifications/initialized`, so the wake
+    // definitively lands while the watcher hasn't parked yet.
+    let mut dev = Peer::spawn_with_env(
+        &bin,
+        "hello:dev",
+        &mailbox,
+        &[("TEAM_MCP_TEST_WATCHER_PRE_NOTIFY_SLEEP_MS", "500")],
+    );
+    dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
+    // Send `initialized` immediately. The watcher's spawned task is
+    // still inside the 500ms pre-await sleep, so the notification
+    // fires into a non-waiting task — the regression case.
+    dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+
+    // Insert a row that the watcher must surface once it parks +
+    // consumes the buffered permit.
+    let conn = Connection::open(&mailbox).unwrap();
+    team_core::mailbox::ensure(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO messages
+            (project_id, sender, recipient, text, sent_at, delivery_mode)
+         VALUES ('hello', 'user:telegram', 'hello:dev',
+                 'arrived after a delayed watcher park', strftime('%s','now'),
+                 'immediate')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let notif = dev
+        .lines
+        .wait_for_method("notifications/claude/channel", RPC_BUDGET)
+        .expect("watcher must emit even when initialized arrives before park");
+    assert_eq!(
+        notif["params"]["content"], "arrived after a delayed watcher park",
+        "the post-park row must surface as a channel notification"
+    );
+
+    dev.shutdown();
+}
+
 /// T-104: a row inserted with `delivery_mode='immediate'` (the path the
 /// bot takes when an operator prefixes the message with `/readnow `)
 /// must land inline as the full body, with no `meta.lazy` flag.
