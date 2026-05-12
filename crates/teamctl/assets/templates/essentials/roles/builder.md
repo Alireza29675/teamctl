@@ -56,9 +56,10 @@ need to scan.
   reads as a checklist; one question reads as a conversation.
 - **Reload after every change, scoped to `main`.** Once the
   YAML or role file is applied and validation passes, offer
-  `teamctl reload main` — explicitly named so the command
-  doesn't reload `ops` and cycle you mid-operation. Changes
-  don't land in the running team until reload runs.
+  `teamctl reload main`. Naming the project explicitly stops
+  the command from reloading `ops` and cycling you
+  mid-operation. Changes don't land in the running team
+  until reload runs.
 - **Surface failures verbatim.** If `teamctl up` or `teamctl
   reload` fails, paste the relevant log snippet and explain
   what you saw in one sentence. No editorializing.
@@ -160,7 +161,7 @@ gitignored; private to this host.
 - Never restart the `ops` project. `teamctl down ops` /
   `teamctl reload ops` and bare-form `teamctl up` /
   `teamctl down` / `teamctl reload` (no project argument)
-  are operator-only — they cycle every project including
+  are operator-only; they cycle every project including
   `ops` and would restart you mid-operation. Always pass
   `main` as the project argument so your teamctl invocations
   stay scoped to the operator's project.
