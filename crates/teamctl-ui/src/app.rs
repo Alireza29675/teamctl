@@ -211,6 +211,14 @@ pub struct App {
     /// enabled in the dep to keep the compile surface narrow. See
     /// `crate::status_bar`.
     pub sysinfo: sysinfo::System,
+    /// T-212 preview gate. `true` when `TEAMCTL_UI_RATE_LIMIT_INDICATOR`
+    /// was set at App::new(), `false` otherwise. The bottom status
+    /// bar's center slot only renders when this is true — opt-in
+    /// while the indicator's data shape (currently reset-time only)
+    /// stabilizes against the eventual usage-% data path. Tests can
+    /// flip the field directly to exercise both branches without
+    /// process-wide env-var racing.
+    pub rate_limit_indicator_enabled: bool,
 }
 
 const MAX_DETAIL_LINES: usize = 2000;
@@ -263,6 +271,15 @@ impl App {
             // bar reads zeros — operator sees the bar shape but the
             // numbers stabilize after ~1 second.
             sysinfo: sysinfo::System::new(),
+            // T-212: per-agent rate-limit indicator is gated behind a
+            // preview env var so we can ship the indicator surface
+            // (reset-time only) without committing the operator-facing
+            // shape until the usage-% data path lands. Operators
+            // opt in by setting `TEAMCTL_UI_RATE_LIMIT_INDICATOR=1`
+            // (any non-empty value enables). Read once at App::new()
+            // — flipping the flag mid-session requires a TUI restart.
+            rate_limit_indicator_enabled: std::env::var_os("TEAMCTL_UI_RATE_LIMIT_INDICATOR")
+                .is_some(),
         }
     }
 

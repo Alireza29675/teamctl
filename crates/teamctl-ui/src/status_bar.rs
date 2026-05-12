@@ -9,8 +9,11 @@
 //!   background thread — sysinfo's per-tick refresh is sub-millisecond.
 //!
 //! - **Center:** the focused agent's claude rate-limit window when
-//!   active, formatted as `limit 5m 12s` (T-212). Hides when the
-//!   focused agent has no active window; swaps with focus.
+//!   active, formatted as `limit 5m 12s` (T-212). Gated behind the
+//!   `TEAMCTL_UI_RATE_LIMIT_INDICATOR=1` preview env var — opt-in
+//!   while the indicator's shape stabilizes against the future
+//!   usage-% data path. Hides when the focused agent has no active
+//!   window; swaps with focus.
 //!
 //! Truncation priority on narrow terminals: **path > per-agent
 //! center > CPU/RAM** (T-209 done-when, extended by T-212). Operators
@@ -74,27 +77,38 @@ impl Widget for StatusBar<'_> {
         buf.set_string(area.x, area.y, &path_rendered, Style::default().fg(muted));
 
         // T-212: per-agent rate-limit indicator in the center slot.
-        // Renders ONLY when the focused agent has an active rate-limit
-        // window (`format_rate_limit_window` returns `Some` — past or
-        // unset windows yield `None` and the slot stays blank).
+        // Gated behind the `rate_limit_indicator_enabled` preview
+        // flag (env: `TEAMCTL_UI_RATE_LIMIT_INDICATOR=1`) so the
+        // operator-facing shape can stabilize alongside the
+        // eventual usage-% data path before the indicator opts in
+        // for everyone. When the flag is off, the slot stays blank
+        // regardless of agent state — path + metrics layout is
+        // unchanged from T-209 baseline.
+        //
+        // When enabled, renders ONLY when the focused agent has an
+        // active rate-limit window (`format_rate_limit_window`
+        // returns `Some` — past or unset windows yield `None`).
         // Truncation priority per the contract with otis on T-209:
         // path > per-agent > metrics. We honor it by measure-and-fit
         // — the slot renders only if there's room between the path's
         // rendered right edge (+gutter) and the metrics' x position
         // (-gutter). When the terminal is too narrow, the indicator
         // simply doesn't render; path and metrics keep their slots.
-        let center_text: Option<String> = self
-            .app
-            .selected_agent
-            .and_then(|i| self.app.team.agents.get(i))
-            .and_then(|a| {
-                let now_unix = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs_f64())
-                    .unwrap_or(0.0);
-                format_rate_limit_window(a.rate_limit_resets_at, now_unix)
-            })
-            .map(|w| format!("limit {w}"));
+        let center_text: Option<String> = if self.app.rate_limit_indicator_enabled {
+            self.app
+                .selected_agent
+                .and_then(|i| self.app.team.agents.get(i))
+                .and_then(|a| {
+                    let now_unix = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(0.0);
+                    format_rate_limit_window(a.rate_limit_resets_at, now_unix)
+                })
+                .map(|w| format!("limit {w}"))
+        } else {
+            None
+        };
 
         let metrics_x_or_end = if metrics_will_render {
             area_w.saturating_sub(metrics_w)

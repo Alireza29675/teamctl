@@ -821,8 +821,13 @@ fn status_bar_renders_rate_limit_for_focused_agent_with_active_window() {
     // Focused agent has a rate-limit window ~1h in the future.
     // Status bar should render a `limit Xh Ym` token between the
     // path (left) and the CPU/RAM block (right).
+    //
+    // Preview gate (T-212): tests flip `rate_limit_indicator_enabled`
+    // directly on the App rather than racing on a process-wide env
+    // var. The production path reads the env var once at App::new().
     let mut app = fresh_app();
     app.dismiss_splash();
+    app.rate_limit_indicator_enabled = true;
     app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
     let mut agent = synth_agent("p:a", AgentState::Running, 0, 0);
     agent.rate_limit_resets_at = Some(unix_now_secs() + 3661.0); // 1h 1m 1s out
@@ -838,9 +843,33 @@ fn status_bar_renders_rate_limit_for_focused_agent_with_active_window() {
 }
 
 #[test]
+fn status_bar_omits_rate_limit_when_preview_flag_disabled() {
+    // Active rate-limit window present, but the preview flag is OFF
+    // (default). The center slot stays blank — this is the shape
+    // operators see by default until they opt in via
+    // `TEAMCTL_UI_RATE_LIMIT_INDICATOR=1`.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    // Default: rate_limit_indicator_enabled = false (env var unset).
+    app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
+    let mut agent = synth_agent("p:a", AgentState::Running, 0, 0);
+    agent.rate_limit_resets_at = Some(unix_now_secs() + 3661.0);
+    app.replace_team(fixture_team("test", vec![agent]));
+    app.selected_agent = Some(0);
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    let last_line = s.lines().last().expect("buffer not empty");
+    assert!(
+        !last_line.contains("limit "),
+        "preview-gated indicator rendered with flag off: {last_line:?}"
+    );
+}
+
+#[test]
 fn status_bar_omits_rate_limit_when_focused_agent_has_no_window() {
     let mut app = fresh_app();
     app.dismiss_splash();
+    app.rate_limit_indicator_enabled = true;
     app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
     // synth_agent defaults rate_limit_resets_at to None.
     let agent = synth_agent("p:a", AgentState::Running, 0, 0);
@@ -861,6 +890,7 @@ fn status_bar_omits_rate_limit_when_focused_agent_window_is_in_the_past() {
     // the limit has already expired, the indicator hides.
     let mut app = fresh_app();
     app.dismiss_splash();
+    app.rate_limit_indicator_enabled = true;
     app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
     let mut agent = synth_agent("p:a", AgentState::Running, 0, 0);
     agent.rate_limit_resets_at = Some(1.0);
@@ -882,6 +912,7 @@ fn status_bar_swaps_rate_limit_with_focused_agent() {
     // and disappear when focus moves to the unlimited one.
     let mut app = fresh_app();
     app.dismiss_splash();
+    app.rate_limit_indicator_enabled = true;
     app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
     let mut limited = synth_agent("p:limited", AgentState::Running, 0, 0);
     limited.rate_limit_resets_at = Some(unix_now_secs() + 600.0); // 10m
@@ -924,6 +955,7 @@ fn status_bar_omits_rate_limit_indicator_when_path_crowds_center_slot() {
     // must elide while path AND metrics both stay visible.
     let mut app = fresh_app();
     app.dismiss_splash();
+    app.rate_limit_indicator_enabled = true;
     app.team.root = std::path::PathBuf::from("/operator/dev/projects/teamctl-deep-nest/.team");
     let mut agent = synth_agent("p:a", AgentState::Running, 0, 0);
     agent.rate_limit_resets_at = Some(unix_now_secs() + 600.0);
