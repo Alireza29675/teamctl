@@ -29,6 +29,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Widget;
 
 use crate::app::App;
+use crate::data::format_rate_limit_window;
 
 /// Render the bottom status bar into the supplied `area`. Mirrors the
 /// `statusline::draw` entry-point shape so the call site is uniform.
@@ -74,11 +75,48 @@ impl Widget for StatusBar<'_> {
         // Render path at column 0.
         buf.set_string(area.x, area.y, &path_rendered, Style::default().fg(muted));
 
-        // T-212 will fill the center slot per coordination with kian
-        // (per-agent runtime indicator — claude rate-limit window,
-        // token telemetry). Reserved gap lives BETWEEN path and
-        // metrics; widening it into a third bordered slot is the
-        // T-212 refactor, not this PR.
+        // T-212: per-agent rate-limit indicator in the center slot.
+        // Renders ONLY when the focused agent has an active rate-limit
+        // window (`format_rate_limit_window` returns `Some` — past or
+        // unset windows yield `None` and the slot stays blank).
+        // Truncation priority per the contract with otis on T-209:
+        // path > per-agent > metrics. We honor it by measure-and-fit
+        // — the slot renders only if there's room between the path's
+        // rendered right edge (+gutter) and the metrics' x position
+        // (-gutter). When the terminal is too narrow, the indicator
+        // simply doesn't render; path and metrics keep their slots.
+        let center_text: Option<String> = self
+            .app
+            .selected_agent
+            .and_then(|i| self.app.team.agents.get(i))
+            .and_then(|a| {
+                let now_unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                format_rate_limit_window(a.rate_limit_resets_at, now_unix)
+            })
+            .map(|w| format!("limit {w}"));
+
+        let metrics_x_or_end = if metrics_will_render {
+            area_w.saturating_sub(metrics_w)
+        } else {
+            area_w
+        };
+        if let Some(text) = center_text {
+            let text_w = text.chars().count();
+            let path_actual_w = path_rendered.chars().count();
+            let center_left_bound = path_actual_w + gutter;
+            let center_right_bound = metrics_x_or_end.saturating_sub(gutter);
+            if center_right_bound > center_left_bound
+                && text_w <= center_right_bound - center_left_bound
+            {
+                let avail = center_right_bound - center_left_bound;
+                let pad = (avail - text_w) / 2;
+                let center_x = area.x + (center_left_bound + pad) as u16;
+                buf.set_string(center_x, area.y, &text, Style::default().fg(muted));
+            }
+        }
 
         if metrics_will_render {
             let metrics_x = area.x + (area_w as u16 - metrics_w as u16);

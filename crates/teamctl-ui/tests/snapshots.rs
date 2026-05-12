@@ -806,3 +806,146 @@ fn status_bar_elides_metrics_when_too_narrow_for_both_slots() {
         "expected CPU to elide on 30-col width: {last_line:?}"
     );
 }
+
+// ── T-212: per-agent rate-limit indicator (center slot) ──────────
+
+fn unix_now_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+#[test]
+fn status_bar_renders_rate_limit_for_focused_agent_with_active_window() {
+    // Focused agent has a rate-limit window ~1h in the future.
+    // Status bar should render a `limit Xh Ym` token between the
+    // path (left) and the CPU/RAM block (right).
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
+    let mut agent = synth_agent("p:a", AgentState::Running, 0, 0);
+    agent.rate_limit_resets_at = Some(unix_now_secs() + 3661.0); // 1h 1m 1s out
+    app.replace_team(fixture_team("test", vec![agent]));
+    app.selected_agent = Some(0);
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    let last_line = s.lines().last().expect("buffer not empty");
+    assert!(
+        last_line.contains("limit "),
+        "status bar missing rate-limit indicator: {last_line:?}"
+    );
+}
+
+#[test]
+fn status_bar_omits_rate_limit_when_focused_agent_has_no_window() {
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
+    // synth_agent defaults rate_limit_resets_at to None.
+    let agent = synth_agent("p:a", AgentState::Running, 0, 0);
+    app.replace_team(fixture_team("test", vec![agent]));
+    app.selected_agent = Some(0);
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    let last_line = s.lines().last().expect("buffer not empty");
+    assert!(
+        !last_line.contains("limit "),
+        "status bar rendered indicator with no active window: {last_line:?}"
+    );
+}
+
+#[test]
+fn status_bar_omits_rate_limit_when_focused_agent_window_is_in_the_past() {
+    // A `resets_at` from before now is treated the same as None —
+    // the limit has already expired, the indicator hides.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
+    let mut agent = synth_agent("p:a", AgentState::Running, 0, 0);
+    agent.rate_limit_resets_at = Some(1.0);
+    app.replace_team(fixture_team("test", vec![agent]));
+    app.selected_agent = Some(0);
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    let last_line = s.lines().last().expect("buffer not empty");
+    assert!(
+        !last_line.contains("limit "),
+        "status bar rendered indicator for expired window: {last_line:?}"
+    );
+}
+
+#[test]
+fn status_bar_swaps_rate_limit_with_focused_agent() {
+    // Two agents — one with an active window, one without. The
+    // indicator should appear when the limited agent is focused
+    // and disappear when focus moves to the unlimited one.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
+    let mut limited = synth_agent("p:limited", AgentState::Running, 0, 0);
+    limited.rate_limit_resets_at = Some(unix_now_secs() + 600.0); // 10m
+    let calm = synth_agent("p:calm", AgentState::Running, 0, 0);
+    app.replace_team(fixture_team("test", vec![limited, calm]));
+
+    app.selected_agent = Some(0);
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(
+        s.lines()
+            .last()
+            .map(|l| l.contains("limit "))
+            .unwrap_or(false),
+        "indicator missing when limited agent focused"
+    );
+
+    app.selected_agent = Some(1);
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(
+        !s.lines()
+            .last()
+            .map(|l| l.contains("limit "))
+            .unwrap_or(true),
+        "indicator persisted when focus moved to unlimited agent"
+    );
+}
+
+#[test]
+fn status_bar_omits_rate_limit_indicator_when_path_crowds_center_slot() {
+    // Truncation contract per coordination with otis on T-209:
+    // path > per-agent > metrics. Metrics elide first when the bar
+    // is too narrow; the indicator drops only when there's no room
+    // between the path's rendered right edge and the metrics x
+    // (or, when metrics have elided, the area's right edge).
+    //
+    // Set up a width where path + metrics fit comfortably but the
+    // path is wide enough to leave no center slot. The indicator
+    // must elide while path AND metrics both stay visible.
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.team.root = std::path::PathBuf::from("/operator/dev/projects/teamctl-deep-nest/.team");
+    let mut agent = synth_agent("p:a", AgentState::Running, 0, 0);
+    agent.rate_limit_resets_at = Some(unix_now_secs() + 600.0);
+    let mut team = fixture_team("test", vec![agent]);
+    team.root = app.team.root.clone();
+    app.replace_team(team);
+    app.selected_agent = Some(0);
+    // Path ~46 chars + metrics ~22 chars + 2 gutters = ~70. At 80
+    // cols, free space is ~10 — too tight for `limit 10m 0s` (12).
+    let buf = render_to_buffer(&app, 80, 20);
+    let s = buffer_to_string(&buf);
+    let last_line = s.lines().last().expect("buffer not empty");
+    assert!(
+        last_line.contains(".team"),
+        "status bar dropped the basename: {last_line:?}"
+    );
+    assert!(
+        last_line.contains("CPU "),
+        "status bar dropped CPU label: {last_line:?}"
+    );
+    assert!(
+        !last_line.contains("limit "),
+        "status bar should drop indicator before metrics when path crowds center: {last_line:?}"
+    );
+}
