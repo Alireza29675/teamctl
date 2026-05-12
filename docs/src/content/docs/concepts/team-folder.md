@@ -62,8 +62,8 @@ time it runs.
 ## Bootstrapping a new team
 
 ```
-teamctl init                   # interactive
-teamctl init --template solo --yes
+teamctl init                          # interactive (default: Guided)
+teamctl init --template essentials --yes
 teamctl init --template blank --yes --project my-thing
 ```
 

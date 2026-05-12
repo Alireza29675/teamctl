@@ -31,7 +31,7 @@ This means:
 A snapshot of one agent's state:
 
 ```bash
-teamctl inspect solo:manager
+teamctl inspect ops:builder
 ```
 
 The output includes the agent's project / role / runtime / model / role-prompt / supervisor state / tmux session / paths to its rendered env and MCP files, the last 10 messages it sent or received, and any recent rate-limit hits recorded by `rl-watch`. It does **not** report token spend — there is no `/cost` integration today, on any runtime. To see per-agent spend, read your provider's invoice or its CLI's own cost command (`/cost` inside a Claude Code session, equivalent for Codex / Gemini).

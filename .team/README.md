@@ -2,9 +2,9 @@
 
 This is the team that develops `teamctl` on `teamctl`. It ships
 inside the public `teamctl` repo as a real-world showcase of how
-we use the tool to build the tool. If you want a minimal starter,
-see [`teamctl init`](../README.md) (which scaffolds the `solo`
-template — one manager + one dev).
+we use the tool to build the tool. If you want a starter,
+see [`teamctl init`](../README.md) (which scaffolds the `guided`,
+`essentials`, or `blank` template — interactive flow picks for you).
 
 This `.team/` is intentionally larger than a starter team. It
 encodes the actual operating model that develops teamctl in

@@ -44,7 +44,10 @@ enum Command {
         /// Folder name to create. Doubles as the default project id.
         /// When omitted, scaffolds `.team/` directly in cwd.
         name: Option<String>,
-        /// Template name. Defaults to `solo`. Known: `solo`, `blank`.
+        /// Template name. Known: `guided`, `essentials`, `blank`. With
+        /// `--yes`, defaults to `essentials`; without, the interactive
+        /// picker defaults to `guided`. `--template guided --yes` is
+        /// an error — `guided` requires interactive confirmation.
         #[arg(long)]
         template: Option<String>,
         /// Project id override (default: derived from `name` or cwd).

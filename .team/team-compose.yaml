@@ -6,9 +6,11 @@
 # to learn how a working teamctl team is organised; comments are
 # pedagogical on purpose.
 #
-# For a minimal starter team, `cd` into your project and run
-# `teamctl init` (the `solo` template is closer to what most
-# operators will copy first).
+# For a starter team, `cd` into your project and run
+# `teamctl init` — the interactive picker defaults to `guided`
+# (LLM-led setup via Claude Code) and the `essentials` template
+# is the no-frills self-service alternative most operators will
+# copy first.
 #
 # Per-role ways-of-working convention (#126):
 #

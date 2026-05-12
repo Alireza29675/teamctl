@@ -1,0 +1,29 @@
+# projects/main.yaml — your project.
+#
+# Starts blank on purpose. Message the `builder` agent in the `ops`
+# project (Telegram, once you've wired the bot) and tell it what kind
+# of team you want. The builder will add managers, workers, channels,
+# and role files for you, then run `teamctl reload` so the change is
+# live.
+#
+# You can edit this file by hand any time — both you and the builder
+# share write access.
+
+version: 2
+
+project:
+  # `id` is the short handle used in `teamctl send <id>:<agent>`
+  # and in inter-agent DMs. Keep it kebab-case and stable.
+  id: {{project_id}}
+  # `name` is the human label shown in logs and dashboards.
+  name: {{project_name}}
+  # `cwd` is where each agent is launched from. `./workspace` keeps
+  # the agents' working tree separate from the team config; create
+  # that directory (or change the path) before running `teamctl up`.
+  cwd: ./workspace
+
+channels: []
+
+managers: {}
+
+workers: {}
