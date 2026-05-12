@@ -22,10 +22,11 @@ Set `TEAMCTL_LOG=debug` for verbose tracing.
 
 `teamctl init` writes a `.team/` folder seeded from one of the bundled templates. Run interactively to pick from a menu, or pass `--template <key>`:
 
-| Key     | Label      | What you get |
-|---------|------------|--------------|
-| `solo`  | Solo team  | One project, one manager, one dev worker, Claude Code on both. Ships a sample roles README and `.env.example`. Default if you pass `--yes` without `--template`. |
-| `blank` | Blank      | Minimal `team-compose.yaml` + an empty `projects/main.yaml`. No agents seeded. For users who want to wire everything by hand. |
+| Key          | Label      | What you get |
+|--------------|------------|--------------|
+| `guided`     | Guided     | Ships no files. Confirms intent, then execs `claude /teamctl:init` so the LLM-led conversational setup takes over. Default when you run `teamctl init` interactively. Incompatible with `--yes` (the confirm step is interactive); the CLI errors clearly if you combine the two. |
+| `essentials` | Essentials | Two projects out of the box: a blank `main` for the operator + an `ops` project with a single `builder` agent whose job is to scaffold and evolve `main` for you on Telegram. Ships a `README.md` walking through the bot setup. Default when you pass `--yes` without `--template`. |
+| `blank`      | Blank      | Minimal `team-compose.yaml` + an empty `projects/main.yaml`. No agents seeded. For users who want to wire everything by hand. |
 
 `--project <id>` overrides the auto-derived project id (the repo directory name). Re-running `init` in a directory that already has a `.team/` aborts to avoid clobbering work — delete or move it first.
 

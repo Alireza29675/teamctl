@@ -2,7 +2,7 @@
 title: ADR 0004 — `.team/` folder, first-run UX, and the management surface
 ---
 
-- Status: **accepted** (implemented in v0.2.0)
+- Status: **accepted** (implemented in v0.2.0); template list superseded by [#206](https://github.com/Alireza29675/teamctl/pull/206) — `solo` retired, replaced with `guided` + `essentials`. Rest of the ADR (`.team/` shape, supervisor/broker layout, CLI subcommand carve-out) stands.
 - Date: 2026-04-25
 - Author: Alireza
 - Reviewers:

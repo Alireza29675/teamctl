@@ -1,0 +1,30 @@
+# team-compose.yaml — top-level team declaration.
+#
+# Essentials ships two projects:
+#   - `main` is your team. It starts blank — the `builder` helps you
+#     populate it over time.
+#   - `ops` is the helper team. It has one agent, `builder`, whose
+#     job is to evolve `main` for you.
+#
+# Move/rename this file and `teamctl up` stops finding the team.
+
+version: 2
+
+# How agents talk. SQLite is the default; the path is relative to this
+# `.team/` folder. Each project gets isolated channels — `main` and
+# `ops` don't share traffic unless you wire an explicit bridge later.
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+# How agents run. Each agent gets its own tmux session named
+# `<prefix><project>-<agent>`. Change `tmux_prefix` from `a-` to
+# something unique if you want to run two teams on the same host.
+supervisor:
+  type: tmux
+  tmux_prefix: a-
+
+# Project files. Keep this list in sync with `projects/`.
+projects:
+  - file: projects/main.yaml
+  - file: projects/ops.yaml

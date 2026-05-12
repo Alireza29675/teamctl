@@ -178,8 +178,7 @@ fn version_flag_still_prints_version() {
 
 #[test]
 fn init_blank_template_scaffolds_minimal_tree() {
-    // The `solo` template is exercised by an existing happy-path test;
-    // this pins the `blank` template's surface so a future template
+    // Pins the `blank` template's surface so a future template
     // refactor can't silently drop its files. Asserts (a) every
     // declared file lands at `.team/<relpath>` and (b) the resulting
     // tree validates.
@@ -233,6 +232,115 @@ fn init_blank_template_scaffolds_minimal_tree() {
 }
 
 #[test]
+fn init_essentials_template_scaffolds_two_project_tree() {
+    // T-206: `essentials` ships a two-project layout — blank `main`
+    // for the operator + `ops` with the `builder` agent. Pins the
+    // file shape so a future template refactor can't silently drop
+    // any of the seven files, and asserts the tree validates so a
+    // typo in the builder's compose surfaces here.
+    let tmp = tempdir().unwrap();
+    let out = Command::new(bin())
+        .current_dir(tmp.path())
+        .args(["init", "starter", "--template", "essentials", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "init essentials stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let team_dir = tmp.path().join("starter/.team");
+    for relpath in [
+        "team-compose.yaml",
+        "projects/main.yaml",
+        "projects/ops.yaml",
+        "roles/builder.md",
+        ".env.example",
+        ".gitignore",
+        "README.md",
+    ] {
+        assert!(
+            team_dir.join(relpath).is_file(),
+            "essentials template must include {relpath}"
+        );
+    }
+
+    let validate = Command::new(bin())
+        .args(["--root", team_dir.to_str().unwrap(), "validate"])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "essentials template validate stderr: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+}
+
+#[test]
+fn init_yes_without_template_defaults_to_essentials() {
+    // T-206: the non-interactive default changed from `solo` to
+    // `essentials`. Pin the contract — `--yes` with no `--template`
+    // must land the operator on the `essentials` two-project shape,
+    // not the bare blank tree.
+    let tmp = tempdir().unwrap();
+    let out = Command::new(bin())
+        .current_dir(tmp.path())
+        .args(["init", "starter", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "init --yes (no template) stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let team_dir = tmp.path().join("starter/.team");
+    // The `ops` project file + `builder` role are essentials-only
+    // markers; their presence proves the default landed on
+    // essentials, not blank.
+    assert!(
+        team_dir.join("projects/ops.yaml").is_file(),
+        "--yes default must land essentials (projects/ops.yaml missing)"
+    );
+    assert!(
+        team_dir.join("roles/builder.md").is_file(),
+        "--yes default must land essentials (roles/builder.md missing)"
+    );
+}
+
+#[test]
+fn init_template_guided_with_yes_errors() {
+    // T-206: `guided` execs `claude /teamctl:init` after an
+    // interactive confirm-intent prompt, so it can't run under
+    // `--yes`. The CLI rejects the combo up front with a clear
+    // message rather than silently flipping to a different template.
+    let tmp = tempdir().unwrap();
+    let out = Command::new(bin())
+        .current_dir(tmp.path())
+        .args(["init", "starter", "--template", "guided", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "`--template guided --yes` must exit non-zero; stdout: {} stderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("guided") && stderr.contains("interactive"),
+        "expected error to name `guided` + `interactive`; got: {stderr}"
+    );
+    // And no `.team/` directory was created — the failure path
+    // doesn't leave a partial scaffold behind.
+    assert!(
+        !tmp.path().join("starter/.team").exists(),
+        "rejected --template guided --yes must not create a .team/ tree"
+    );
+}
+
+#[test]
 fn init_force_overwrites_existing_dot_team_cleanly() {
     // The refusal path (no `--force` → exit non-zero, leave existing
     // tree intact) is covered elsewhere. This pins the positive
@@ -240,10 +348,11 @@ fn init_force_overwrites_existing_dot_team_cleanly() {
     // files survive) and lays down the new template fresh.
     let tmp = tempdir().unwrap();
 
-    // First init.
+    // First init — seed with `essentials` so we have a richer tree
+    // (the `roles/builder.md` marker doubles as the wipe-check).
     let out = Command::new(bin())
         .current_dir(tmp.path())
-        .args(["init", "myteam", "--template", "solo", "--yes"])
+        .args(["init", "myteam", "--template", "essentials", "--yes"])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -275,11 +384,12 @@ fn init_force_overwrites_existing_dot_team_cleanly() {
     // The new template's structure is in place.
     assert!(team_dir.join("team-compose.yaml").is_file());
     assert!(team_dir.join("projects/main.yaml").is_file());
-    // The `solo` template's roles/manager.md must be gone (we
-    // overwrote with `blank` which has no roles/).
+    // The prior `essentials` template's roles/builder.md must be
+    // gone — `blank` has no roles/ so a stale file there would prove
+    // --force merged rather than replaced.
     assert!(
-        !team_dir.join("roles/manager.md").exists(),
-        "prior solo template's roles/manager.md should be wiped"
+        !team_dir.join("roles/builder.md").exists(),
+        "prior essentials template's roles/builder.md should be wiped"
     );
 }
 
@@ -800,8 +910,10 @@ fn context_subcommand_emits_deprecation_warning() {
 
 #[test]
 fn init_with_name_creates_team_folder_that_validates() {
-    // T-045: `teamctl init my-team --yes` should produce a tree that
-    // `teamctl --root my-team/.team validate` accepts.
+    // T-045 / T-206: `teamctl init my-team --yes` should produce a
+    // tree that `teamctl --root my-team/.team validate` accepts.
+    // Default template under `--yes` is `essentials` post-T-206 —
+    // two projects (`main` + `ops`) with a single `builder` agent.
     let tmp = tempdir().unwrap();
     let home = tempdir().unwrap();
 
@@ -823,8 +935,8 @@ fn init_with_name_creates_team_folder_that_validates() {
     for f in [
         "team-compose.yaml",
         "projects/main.yaml",
-        "roles/manager.md",
-        "roles/dev.md",
+        "projects/ops.yaml",
+        "roles/builder.md",
         ".env.example",
         ".gitignore",
         "README.md",
@@ -845,8 +957,10 @@ fn init_with_name_creates_team_folder_that_validates() {
         String::from_utf8_lossy(&validate.stderr)
     );
     let stdout = String::from_utf8_lossy(&validate.stdout);
+    // Essentials ships 2 projects (`main` + `ops`) and 1 agent
+    // (`builder`). The validate summary surfaces both counts.
     assert!(
-        stdout.contains("ok") && stdout.contains("2 agents"),
+        stdout.contains("ok") && stdout.contains("2 projects") && stdout.contains("1 agent"),
         "unexpected validate output: {stdout}"
     );
 }
