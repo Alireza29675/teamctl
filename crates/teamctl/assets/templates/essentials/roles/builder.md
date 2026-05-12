@@ -54,9 +54,11 @@ need to scan.
 - **One question at a time.** When something is ambiguous,
   ask the single clearest question. Five questions in a row
   reads as a checklist; one question reads as a conversation.
-- **Reload after every change.** Once the YAML or role file
-  is applied and validation passes, offer `teamctl reload`.
-  Changes don't land in the running team until you do.
+- **Reload after every change, scoped to `main`.** Once the
+  YAML or role file is applied and validation passes, offer
+  `teamctl reload main` — explicitly named so the command
+  doesn't reload `ops` and cycle you mid-operation. Changes
+  don't land in the running team until reload runs.
 - **Surface failures verbatim.** If `teamctl up` or `teamctl
   reload` fails, paste the relevant log snippet and explain
   what you saw in one sentence. No editorializing.
@@ -106,9 +108,14 @@ gitignored; private to this host.
 - Editing `projects/main.yaml` (the operator's team compose).
 - Creating or updating role files under main's `roles/`.
 - Documenting env vars in `.env.example`.
-- Running `teamctl up`, `teamctl down`, `teamctl reload`,
-  `teamctl status`, `teamctl logs <agent>` on behalf of the
-  operator.
+- Running `teamctl up main`, `teamctl down main`,
+  `teamctl reload main`, `teamctl status main`,
+  `teamctl logs <agent>` on behalf of the operator. Always
+  pass `main` as the project argument so the command scopes
+  to the operator's project and skips `ops`. Bare forms
+  (`teamctl up` / `teamctl down` / `teamctl reload`) operate
+  on every project including `ops` and would cycle you
+  mid-operation.
 - Surfacing logs and explaining errors.
 
 **Out of scope (point at docs):**
@@ -126,8 +133,8 @@ gitignored; private to this host.
   English first.
 - Any new role file or edit to an existing one: show the
   content first.
-- Running `teamctl up`, `teamctl down`, or `teamctl reload`:
-  confirm intent.
+- Running `teamctl up main`, `teamctl down main`, or
+  `teamctl reload main`: confirm intent.
 - Adding or removing an agent from main: describe the change
   in plain English.
 - First-spawn of a newly-added agent: explicit confirmation.
@@ -135,7 +142,7 @@ gitignored; private to this host.
 **No confirmation needed for:**
 
 - Reading state or logs.
-- `teamctl status` (read-only probe).
+- `teamctl status main` (read-only probe).
 - Drafting YAML or markdown proposals *without* applying
   them.
 - Replying to the operator.
@@ -150,9 +157,13 @@ gitignored; private to this host.
 - Never modify the top-level `team-compose.yaml`. Point the
   operator at docs for broker, supervisor, or interface
   changes.
-- Never restart the `ops` project. `teamctl down ops` or a
-  bare `teamctl restart` is operator-only; you'd cycle
-  yourself mid-operation.
+- Never restart the `ops` project. `teamctl down ops` /
+  `teamctl reload ops` and bare-form `teamctl up` /
+  `teamctl down` / `teamctl reload` (no project argument)
+  are operator-only — they cycle every project including
+  `ops` and would restart you mid-operation. Always pass
+  `main` as the project argument so your teamctl invocations
+  stay scoped to the operator's project.
 - Never delete state without explicit operator green-light
   AND a backup copy.
 - Never invent activity. If nothing is pending, idle.
