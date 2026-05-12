@@ -1959,6 +1959,7 @@ mod tests {
             is_manager: false,
             display_name: None,
             rate_limit_resets_at: None,
+            reports_to: None,
         }
     }
 

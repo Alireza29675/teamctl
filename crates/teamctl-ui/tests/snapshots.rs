@@ -104,7 +104,17 @@ fn synth_agent(id: &str, state: AgentState, unread: u32, pending: u32) -> AgentI
         is_manager: false,
         display_name: None,
         rate_limit_resets_at: None,
+        reports_to: None,
     }
+}
+
+/// T-211: build a worker agent that reports to a manager by short
+/// name (the YAML key, e.g. `mgr` not `p:mgr`). Used by the
+/// reports_to-tree fixture below.
+fn synth_worker_reporting_to(id: &str, manager_short_name: &str, state: AgentState) -> AgentInfo {
+    let mut info = synth_agent(id, state, 0, 0);
+    info.reports_to = Some(manager_short_name.into());
+    info
 }
 
 fn fixture_team(team_name: &str, agents: Vec<AgentInfo>) -> TeamSnapshot {
@@ -135,6 +145,41 @@ fn agents_panel_renders_glyphs_at_120x30() {
     ));
     let buf = render_to_buffer(&app, 120, 30);
     insta::assert_snapshot!("agents_panel_with_glyphs_120x30", buffer_to_string(&buf));
+}
+
+#[test]
+fn agents_panel_renders_reports_to_tree_at_120x30() {
+    // T-211: when at least one agent has `reports_to` set, the Agents
+    // sidebar nests reports under their manager with `├─` / `└─`
+    // tree glyphs. This fixture team has one manager + three workers
+    // reporting to it, plus a second manager standalone — the
+    // produced render shows the workers nested under their parent,
+    // and the lone manager at depth 0 with no tree glyph.
+    //
+    // Fixture is passed through `into_tree_dfs_order` to mirror
+    // production's `TeamSnapshot::load` reordering. Test input order
+    // (managers first, then workers) is the same shape `load()`
+    // produces post-sort.
+    use teamctl_ui::data::into_tree_dfs_order;
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    let mut mgr_a = synth_agent("writing:mgr-a", AgentState::Running, 0, 0);
+    mgr_a.is_manager = true;
+    let mut mgr_b = synth_agent("writing:mgr-b", AgentState::Running, 0, 0);
+    mgr_b.is_manager = true;
+    let agents = into_tree_dfs_order(vec![
+        mgr_a,
+        mgr_b,
+        synth_worker_reporting_to("writing:scribe", "mgr-a", AgentState::Running),
+        synth_worker_reporting_to("writing:critic", "mgr-a", AgentState::Stopped),
+        synth_worker_reporting_to("writing:scout", "mgr-a", AgentState::Unknown),
+    ]);
+    app.replace_team(fixture_team("writing-team", agents));
+    let buf = render_to_buffer(&app, 120, 30);
+    insta::assert_snapshot!(
+        "agents_panel_with_reports_to_tree_120x30",
+        buffer_to_string(&buf)
+    );
 }
 
 #[test]
