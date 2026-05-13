@@ -1,3 +1,4 @@
+pub mod adjust;
 pub mod approval;
 pub mod attach;
 pub mod bot;

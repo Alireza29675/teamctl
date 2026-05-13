@@ -1005,6 +1005,38 @@ fn init_refuses_existing_team_without_force() {
     );
 }
 
+// ── T-241: `teamctl adjust` wrapper ────────────────────────────────────
+
+#[test]
+fn adjust_yes_flag_errors_clearly_with_actionable_message() {
+    // T-241 DoD: `teamctl adjust --yes` must reject early with a
+    // clear, actionable error. Pinned end-to-end through the real
+    // binary so the clap surface + the runtime check are both
+    // exercised. Hermetic PATH so a stray `claude` on the dev box
+    // can't accidentally make this test pass by exec'ing instead of
+    // erroring.
+    let empty = tempdir().unwrap();
+    let out = Command::new(bin())
+        .env("PATH", empty.path())
+        .args(["adjust", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "adjust --yes must exit non-zero; stderr: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("interactive-only"),
+        "expected `interactive-only` in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--yes"),
+        "expected `--yes` in stderr, got: {stderr}"
+    );
+}
+
 // ── T-062: `teamctl ui` wrapper ────────────────────────────────────────
 
 #[test]
