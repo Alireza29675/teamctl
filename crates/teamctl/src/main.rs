@@ -61,6 +61,18 @@ enum Command {
         yes: bool,
     },
 
+    /// Confirm intent, then exec `claude /teamctl:adjust` to evolve an
+    /// existing `.team/` (hire, retire, modify, bot-setup, add project,
+    /// open a bridge). Interactive-only — the skill collects what it
+    /// needs from there.
+    Adjust {
+        /// Reserved for parity with other `teamctl` subcommands.
+        /// Rejected at runtime — the underlying skill is interactive
+        /// top-to-bottom, so `--yes` cannot meaningfully skip it.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+
     // ── Lifecycle ────────────────────────────────────────────────────
     /// Parse the compose tree and check invariants.
     Validate,
@@ -347,6 +359,9 @@ fn main() -> Result<()> {
     {
         return cmd::init::run(name, template, project, force, yes);
     }
+    if let Command::Adjust { yes } = cli.command {
+        return cmd::adjust::run(yes);
+    }
     if let Command::Ui { no_prompt, argv } = cli.command {
         return cmd::ui::run(no_prompt, argv);
     }
@@ -434,6 +449,7 @@ fn main() -> Result<()> {
         }
         Command::Context { .. } => unreachable!("handled above"),
         Command::Init { .. } => unreachable!("handled above"),
+        Command::Adjust { .. } => unreachable!("handled above"),
         Command::Sessions { .. } => unreachable!("handled above"),
         Command::Ui { .. } => unreachable!("handled above"),
         Command::Update { .. } => unreachable!("handled above"),

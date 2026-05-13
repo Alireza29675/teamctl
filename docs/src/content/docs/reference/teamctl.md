@@ -17,6 +17,7 @@ Set `TEAMCTL_LOG=debug` for verbose tracing.
 | Command | Effect |
 |---|---|
 | `teamctl init [--template <name>] [--project <id>] [-y/--yes]` | Scaffold a fresh `.team/` directory in the current repo. Interactive by default; `--yes` accepts defaults. See [Init templates](#init-templates) below. |
+| `teamctl adjust` | Confirm intent, then exec `claude /teamctl:adjust` to evolve an existing `.team/` (hire, retire, modify, bot-setup, add project, open a bridge). Interactive-only — `--yes` errors out; the skill collects what it needs from there. |
 
 ### Init templates
 
