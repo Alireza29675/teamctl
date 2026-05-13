@@ -1,11 +1,25 @@
 ---
 description: First-run teamctl onboarding — from no-teamctl-installed to a running supervised team in one conversation.
-allowed-tools: Bash, Read, Write, Edit
+allowed-tools: Bash, Read, Write, Edit, AskUserQuestion
 ---
 
 `/teamctl:init` is the first-run onboarding for teamctl. Seven stages: prerequisites and install (Stage 1), a discovery conversation that surfaces the user's domains (Stage 2), confirm the proposed org (Stage 3), scaffold `.team/` and reveal the YAML (Stage 4), bring it up (Stage 5), wire Telegram (Stage 6), point at the lifecycle commands (Stage 7).
 
-Read [RULES.md](../RULES.md) before each stage. Voice rails: 1-2 sentences per beat, "experienced reliable coworker", emojis sparingly. Body voice is runtime-neutral. *"Claude Code runtime"* is a fact about the agent and stays; *"Claude reads the file"* is voice drift and goes. Substrate constraints are non-negotiable. The flow is resumable and idempotent — re-running skips anything already done.
+Read [RULES.md](../RULES.md) and [INTERACTIVE.md](../INTERACTIVE.md) before each stage. RULES carries the architecture invariants; INTERACTIVE carries the UI invariants — when to reach for `AskUserQuestion`, the Apply/Modify/Reject gate, the headless-pane fallback, docs-as-ground-truth, voice control. Voice rails: 1-2 sentences per beat, "experienced reliable coworker", emojis sparingly. Body voice is runtime-neutral. *"Claude Code runtime"* is a fact about the agent and stays; *"Claude reads the file"* is voice drift and goes. Substrate constraints are non-negotiable. The flow is resumable and idempotent — re-running skips anything already done.
+
+## Preamble — detect interactive vs headless
+
+At the top of every invocation, decide which mode you're in:
+
+```bash
+if [ -n "$TEAMCTL_ROOT" ] && [ -n "$AGENT_ID" ]; then
+    echo "headless"
+else
+    echo "interactive"
+fi
+```
+
+`headless` means a supervised teamctl agent is calling this skill — `AskUserQuestion` is denied by the wrapper's `PreToolUse` hook (see [#189](https://github.com/Alireza29675/teamctl/issues/189)). Fall back to plain-text Q&A for the whole invocation per [INTERACTIVE.md §5](../INTERACTIVE.md). In practice `/teamctl:init` is overwhelmingly run from a fresh interactive `claude` session (there's no `.team/` yet), so the headless path here is mostly a defensive catch.
 
 > **The shape of Stage 2 matters.** This skill does not hand users a template menu. It walks them through a discovery conversation that surfaces the *domains* in their work — the things with their own state, history, and decisions that compound over time. The cut is by domain ownership, not by job function. Read [`docs/src/content/docs/concepts/teams.md`](../../../docs/src/content/docs/concepts/teams.md) before tuning Stage 2 prose; the methodology there is canonical.
 
@@ -17,19 +31,37 @@ Probe for prerequisites in this order: `tmux`, `git`, `claude`, `teamctl`. Use `
 ✓ tmux        ✓ git        ✓ claude        ✗ teamctl
 ```
 
-If all four check out, the prereq line plus one beat moves to Stage 2:
+If all four check out, the prereq line plus one beat moves to Stage 2 — fire as `AskUserQuestion`:
 
-> All four are in place. Ready to set up your team?
+```text
+question: "Ready to set up your team?"
+header: "Start?"
+options:
+  - label: "Yes, let's go"
+    description: "Move to Stage 2 — the discovery conversation."
+  - label: "Not yet"
+    description: "Exit. Re-run `/teamctl:init` whenever you're ready."
+```
 
-No celebration prose, no walls. If `teamctl` is missing, choose an install path by autodetect:
+No celebration prose, no walls. If `teamctl` is missing, autodetect the candidate install paths and pick with `AskUserQuestion` (hide options that don't fit the platform):
 
-- **macOS with `brew` on PATH**: propose `brew install teamctl`. Confirm before running.
-- **Linux, WSL, or macOS without brew**: propose `curl -fsSL https://teamctl.run/install | sh`. Confirm before running.
-- **If brew or the curl installer doesn't fit** (sandboxed shell, locked-down corp env, build-from-source preference), use the cargo fallback verbatim:
+```text
+question: "Install teamctl how?"
+header: "Install"
+options:
+  - label: "`brew install teamctl`"
+    description: "macOS with brew on PATH."
+  - label: "curl installer"
+    description: "Linux / WSL / macOS without brew."
+  - label: "`cargo install`"
+    description: "Sandboxed shells, locked-down corp envs, build-from-source preference."
+```
 
-  > Brew and the curl installer don't fit here. Building from source is the path: `cargo install teamctl teamctl-ui team-mcp team-bot` if you've got Rust; otherwise install `rustup` first (https://rustup.rs).
+If none fit, surface honestly:
 
-Run the chosen command yourself when the user confirms and the harness allows it; otherwise hand the user the exact line to paste. Either way, verify with `teamctl --version` after install and report the version inline. If the version probe fails, name the error in one line and offer to retry or switch install path — don't restart the stage.
+> Brew and the curl installer don't fit here. Building from source is the path: `cargo install teamctl teamctl-ui team-mcp team-bot` if you've got Rust; otherwise install `rustup` first (https://rustup.rs).
+
+Run the chosen command yourself when the user picks and the harness allows it; otherwise hand the user the exact line to paste. Either way, verify with `teamctl --version` after install and report the version inline. If the version probe fails, name the error in one line and offer to retry or switch install path — don't restart the stage.
 
 If `tmux`, `git`, or `claude` are the ones missing, name what's missing and the canonical install path for the user's platform (`brew install tmux`, the Claude Code installer, etc.). Don't pretend to install runtimes the plugin can't reasonably manage — surface the gap and pause.
 
@@ -129,11 +161,19 @@ Stop the discovery loop when the user has surfaced **2-5 candidates that pass bo
 
 ### 2e. Offer inspirations (optional, user-driven)
 
-After the user has named their own domains, offer to show how other teams have cut theirs:
+After the user has named their own domains, offer to show how other teams have cut theirs — fire as `AskUserQuestion`:
 
-> Want to see how other teams have cut their domains? I can show you four shapes from teams that have run on teamctl — not to pick from, just to compare yours against.
+```text
+question: "Want to see how other teams have cut their domains?"
+header: "Compare?"
+options:
+  - label: "Show me"
+    description: "Four legacy shapes as a single inline reference — to compare, not to pick from."
+  - label: "Skip"
+    description: "Advance to Stage 3."
+```
 
-If the user says yes, show the four legacy shapes (drawn from `examples/<folder>/.team/`) as a single inline reference, each with a one-line label describing what kind of work it fits:
+If the user picks `Show me`, render the four legacy shapes (drawn from `examples/<folder>/.team/`) as a single inline reference, each with a one-line label describing what kind of work it fits:
 
 > **OSS maintainer** — a maintainer + 4 workers (triage, bug-fix, docs, release-manager). Fits maintained open-source repos.
 >
@@ -182,12 +222,32 @@ If the user just hits enter, generate a sensible default from the surfaced domai
 
 From the surfaced domains, suggest:
 
-- **Manager** — the most operator-facing or coordination-shaped domain (the one the operator most often needs to talk to directly). If the user surfaced one obviously-coordination-shaped candidate, propose that. Otherwise, ask once: "Which of these domains do you want as the manager — the one you'll DM most often?"
+- **Manager** — the most operator-facing or coordination-shaped domain (the one the operator most often needs to talk to directly). If the user surfaced one obviously-coordination-shaped candidate, propose that. Otherwise, pick with `AskUserQuestion` (one option per candidate, ≤4; if more than 4, ask in prose: *"which of these domains do you want as the manager — the one you'll DM most often?"*).
 - **Workers** — every other surfaced domain becomes a worker reporting to the manager.
 
 If the user surfaced only **1 candidate**, propose a single-agent team (manager only, no workers). Single-agent teamctl teams are valid; the persistence and identity still earn the substrate.
 
-If the user surfaced **more than 5**, ask whether to consolidate (some domains might compose into a single agent) or to split into multiple projects (each project gets its own manager + workers). Both are valid; don't silently truncate.
+If the user surfaced **more than 5**, fire `AskUserQuestion` to pick the path:
+
+```text
+question: "You surfaced more than 5 domains — how to land?"
+header: "Land"
+options:
+  - label: "Consolidate"
+    description: "Some of these compose into a single agent. We'll walk them again and merge."
+  - label: "Split projects"
+    description: "Each project gets its own manager + workers. We'll scaffold N project YAMLs."
+```
+
+Both are valid; don't silently truncate.
+
+### Reasoning depth — what the proposal must cover
+
+Per [INTERACTIVE.md §7](../INTERACTIVE.md), the synthesis proposal carries three layers of reasoning **before** the gate:
+
+1. **Where the cut lives.** For each proposed agent, name which Gate (b) trigger fires (domain separation, focus separation, multiple opinions, synergy — from the user's own words in Stage 2). Apply the **ship-alone test**: can this agent ship its artifact alone? If no, surface that the cut is function-shaped and propose a domain-shaped alternative before continuing.
+2. **What sub-agents each agent will spawn.** Suggest 1–3 sub-agent shapes per agent (research passes, large refactors, parallel reads) — anchored on the agent's domain, not on generic templates. Persistent agents own domains; sub-agents handle fire-and-forget specialised work inside them.
+3. **What channels / workflows the agent participates in.** `can_dm` and `can_broadcast` from the synthesised reports-to relationships, plus the `all` channel by default. Manager is Telegram-bound; workers aren't. Cite [teams.md](../../../docs/src/content/docs/concepts/teams.md) and [channels.md](../../../docs/src/content/docs/concepts/channels.md) once each in the proposal prose.
 
 Render the org as a named ASCII tree. Manager on top with the "← you talk to this one on Telegram" annotation, workers fanning out below. Use the same shape the legacy stage used:
 
@@ -203,17 +263,27 @@ Render the org as a named ASCII tree. Manager on top with the "← you talk to t
   └─────────┘ └──────────────┘ └──────────────┘
 ```
 
-Closing line:
+Closing line above the gate:
 
 ```
-N Claude Code agents · Opus 4.7 · effort high. ship it?
+N Claude Code agents · Opus 4.7 · effort high.
 ```
 
-Where N is the surfaced count.
+Where N is the surfaced count. Then fire the **Apply/Modify/Reject gate** (the universal shape, [INTERACTIVE.md §4](../INTERACTIVE.md)):
 
-If the user confirms with "ship it", "yes", "go", or similar, advance to Stage 4. If they push back — wanting to rename an agent, swap a worker into the manager seat, drop a candidate — accept the edit inline and re-render the tree. The user can adjust freely here; they're confirming a synthesis, not picking from a menu. Once confirmed, advance.
+```text
+question: "Apply this team shape?"
+header: "Apply?"
+options:
+  - label: "Apply"
+    description: "Advance to Stage 4 — scaffold `.team/` and validate."
+  - label: "Modify"
+    description: "Tell me what to adjust (rename an agent, swap roles, drop a candidate) and I'll re-render the tree."
+  - label: "Reject"
+    description: "Discard. Step back to Stage 2 and re-sharpen the domains."
+```
 
-If the user wants larger changes (different team name, redo the whole synthesis), step back to Stage 2 and re-sharpen. Don't force a shape the user doesn't recognise.
+On `Modify`, accept the edit inline (free-form is fine here — the user is describing the change) and re-render the tree, then fire the gate again on the refined proposal. On `Reject`, step back to Stage 2 and re-sharpen — don't force a shape the user doesn't recognise.
 
 ## Stage 4 — Scaffold from synthesis, then reveal
 
@@ -273,11 +343,19 @@ Run `teamctl validate` from `<cwd>`. Exit 0 is the gate.
 
 If validate succeeds, advance to the reveal beat.
 
-If validate fails:
+If validate fails, surface the error **verbatim** — don't re-format, don't paraphrase, don't massage — then fire `AskUserQuestion`:
 
-> Hmm, validate flagged this: `<error verbatim>`. Want me to undo the `.team/` and stop, or leave it for you to inspect?
+```text
+question: "Validate flagged an error — how to recover?"
+header: "Recover"
+options:
+  - label: "Roll back"
+    description: "Undo `.team/` and stop. Validation failure here means a plugin bug; cleanest to abort."
+  - label: "Leave it"
+    description: "Keep `.team/` on disk so you can inspect; skip Stages 5-7."
+```
 
-Surface the error **verbatim** — don't re-format, don't paraphrase, don't massage. The user gets the rollback choice or the inspect choice; honour either. Validation failure here means a plugin bug; the honest surface is the recovery path.
+Honour either choice.
 
 ### Reveal beat
 
@@ -289,11 +367,19 @@ Voice rails apply (1-2 sentences, "experienced reliable coworker"). Don't pad wi
 
 ## Stage 5 — Run
 
-Single beat:
+Single beat — fire as `AskUserQuestion`:
 
-> Bring it up?
+```text
+question: "Bring the team up?"
+header: "Up?"
+options:
+  - label: "Bring it up"
+    description: "Run `teamctl up` from `<cwd>` and report sessions inline."
+  - label: "Not yet"
+    description: "Skip. You can run `teamctl up` whenever you're ready."
+```
 
-On confirm, run `teamctl up` from `<cwd>`. Parse the output for the agent count and the tmux-prefix-named sessions, then report inline:
+On `Bring it up`, run `teamctl up` from `<cwd>`. Parse the output for the agent count and the tmux-prefix-named sessions, then report inline:
 
 ```
 ✓ N sessions alive in tmux (<prefix><manager>, <prefix><wkr_1>, ...)
@@ -301,11 +387,19 @@ On confirm, run `teamctl up` from `<cwd>`. Parse the output for the agent count 
 
 Adapt the count and the names from the synthesised roster and the project-id's `tmux_prefix`. The bullet is the whole beat — no celebration paragraph after it.
 
-If `teamctl up` fails, surface the error verbatim and offer two paths forward — retry, or look at it together. Don't restart Stages 1-4. Voice rails: 1-2 sentences, "experienced reliable coworker," no apology spiral.
+If `teamctl up` fails, surface the error verbatim and fire `AskUserQuestion` — don't restart Stages 1-4:
 
-> `teamctl up` errored — here's what came back: `<error>`. Retry, or want to look at it together?
+```text
+question: "`teamctl up` errored — how to handle?"
+header: "Handle"
+options:
+  - label: "Retry"
+    description: "Re-run `teamctl up`. Best when the error reads like a transient hiccup."
+  - label: "Debug together"
+    description: "Walk the error with me. We'll look at logs and the YAML together."
+```
 
-The "look at it together" beat is teammate-flavored on purpose. The user picked a path; if the runtime hiccupped, you're the colleague who debugs it with them, not the wrapper that gives up.
+The "debug together" beat is teammate-flavored on purpose. The user picked a path; if the runtime hiccupped, you're the colleague who debugs it with them, not the wrapper that gives up.
 
 ## Stage 6 — Telegram + voice-customize
 
@@ -323,19 +417,25 @@ The tail clause — *"If anything breaks, run it again or skip and use `/teamctl
 
 ### Voice-customize sub-beat
 
-Continue immediately after the defer beat — don't block-wait for the user to finish the wizard. Voice-customize is local config (it edits `roles/<manager>.md`), interface-independent, and the user can keep both threads moving. For the manager (only managers — workers stay on the Stage-4 default voice):
+Continue immediately after the defer beat — don't block-wait for the user to finish the wizard. Voice-customize is local config (it edits `roles/<manager>.md`), interface-independent, and the user can keep both threads moving. For the manager (only managers — workers stay on the Stage-4 default voice), fire `AskUserQuestion`:
 
-> Want to customize `<manager>`'s voice, or use the default?
+```text
+question: "Customize `<manager>`'s voice?"
+header: "Voice"
+options:
+  - label: "Default"
+    description: "Slack-style, short, concise, emoji-friendly, 'experienced reliable coworker'. No regen."
+  - label: "Custom"
+    description: "Describe a tone / formality / emoji-use change; regenerate the role prompt."
+```
 
-**Default voice** (no regen): slack-style, short, concise, clear, emoji-friendly, proactive in sharing and checking with stakeholders, "experienced reliable coworker." Stage 4 already generated `roles/<manager>.md` with this voice; if the user picks default, you're done with voice for this manager.
-
-**Custom voice** (triggers regen): ask the user to describe what they want, anchored on dimensions, not examples:
+If the user picks `Custom`, follow up with the free-form prompt (this is open territory, not a finite set — `AskUserQuestion` doesn't fit here):
 
 > Describe the voice you want — a sentence or two is plenty. Tone, formality, emoji use — whatever you want different.
 
 Capture the overrides. Re-run the role-prompt-gen mechanism for THIS manager only, with the custom-voice override merged into section 3 (Voice) of the 8-section spine. Sections 1, 2, 4-8 stay as Stage 4 generated them. Overwrite `<cwd>/.team/roles/<manager>.md` with the regenerated prompt.
 
-If the synthesised team has more than one manager (rare in v1 — only when the user explicitly surfaced multiple operator-facing domains and split into separate projects), drop the long default-voice description on subsequent prompts. *"Want to customize `<other-manager>`'s voice too, or use the default?"* is enough.
+If the synthesised team has more than one manager (rare in v1 — only when the user explicitly surfaced multiple operator-facing domains and split into separate projects), drop the long default-voice description on subsequent prompts. *"Want to customize `<other-manager>`'s voice too?"* with the same Default / Custom shape is enough.
 
 ## Stage 7 — UI + lifecycle
 
