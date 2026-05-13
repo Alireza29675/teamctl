@@ -28,6 +28,12 @@ teamctl init
 
 `teamctl init` walks you through a real conversation (not a template menu) that surfaces the *domains* in your work and proposes a team shape around them. By the time you're done, `.team/team-compose.yaml` is on disk and the team is running in `tmux`.
 
+After running `teamctl init`, you'll be offered three options:
+
+- **Guided.** Walks you through team design conversationally via Claude Code (opens `/teamctl:init`). Best when you want help thinking through the shape.
+- **Essentials.** Scaffolds a starter team with a blank `main` project plus a `builder` agent who helps you evolve it. Best when you want a self-service helper bot from day one.
+- **Blank.** Gives you an empty compose tree. Best when you know exactly the shape you want and prefer hand-wiring.
+
 If you'd rather hand-author the team yourself, read the [handbook](https://teamctl.run/concepts/teams/) first. It's the cognitive frame the guided flow would have walked you through.
 
 ## Examples
