@@ -114,16 +114,28 @@ pub fn render_row(row: &MessageRow, team: &crate::data::TeamSnapshot, tab: Mailb
         .chars()
         .take(180)
         .collect();
-    let prefix = match tab {
+    match tab {
         MailboxTab::Sent => {
             let recipient = crate::data::recipient_label(team, &row.recipient);
-            format!("→{recipient}")
+            format!("[→{recipient}] {one_line}")
         }
-        MailboxTab::Inbox | MailboxTab::Channel | MailboxTab::Wire => {
-            crate::data::agent_label(team, &row.sender).to_string()
+        MailboxTab::Inbox | MailboxTab::Wire => {
+            let sender = crate::data::agent_label(team, &row.sender);
+            format!("[{sender}] {one_line}")
         }
-    };
-    format!("[{}] {}", prefix, one_line)
+        MailboxTab::Channel => {
+            // T-249: the Channel tab folds every subscribed channel
+            // into a single feed; without the channel name, operators
+            // can't tell `#all` from `#dev` from `#docs`. Two
+            // bracketed segments — channel, then sender — matching
+            // the disambiguator-first convention T-231 set on Sent.
+            // `recipient_label` already maps `channel:<p>:<n>` to
+            // `#<n>`, so the resolution lives in one place.
+            let channel = crate::data::recipient_label(team, &row.recipient);
+            let sender = crate::data::agent_label(team, &row.sender);
+            format!("[{channel}] [{sender}] {one_line}")
+        }
+    }
 }
 
 /// Lookup contract: each method returns rows newer than `after_id`
@@ -596,13 +608,75 @@ mod tests {
 
     #[test]
     fn render_row_non_sent_tabs_still_show_sender() {
-        // Inbox / Channel / Wire prefix is the sender — the recipient
-        // change is Sent-only, no behaviour drift for the other tabs.
+        // Inbox / Wire prefix is the sender. Channel has its own
+        // two-segment shape pinned in the T-249 tests below.
         let team = empty_team();
         let r = row(1, "p:from", "p:me", "yo");
         assert_eq!(render_row(&r, &team, MailboxTab::Inbox), "[p:from] yo");
-        assert_eq!(render_row(&r, &team, MailboxTab::Channel), "[p:from] yo");
         assert_eq!(render_row(&r, &team, MailboxTab::Wire), "[p:from] yo");
+    }
+
+    // T-249: Channel tab — two bracketed segments, channel then sender.
+    // The disambiguator the operator needs is "which channel was this
+    // posted in", because the tab folds every subscribed channel into
+    // a single feed.
+
+    #[test]
+    fn render_row_channel_tab_prefixes_channel_name_and_sender() {
+        let team = empty_team();
+        let r = row(1, "p:from", "channel:teamctl:dev", "yo");
+        assert_eq!(
+            render_row(&r, &team, MailboxTab::Channel),
+            "[#dev] [p:from] yo"
+        );
+    }
+
+    #[test]
+    fn render_row_channel_tab_resolves_sender_display_name() {
+        // Sender resolution mirrors the Inbox path — display_name
+        // when set on the team snapshot, raw id otherwise. Channel
+        // name resolution is independent.
+        use crate::data::{AgentInfo, TeamSnapshot};
+        use team_core::supervisor::AgentState;
+        let agent = AgentInfo {
+            id: "p:wren".into(),
+            agent: "wren".into(),
+            project: "p".into(),
+            tmux_session: "a-p-wren".into(),
+            state: AgentState::Running,
+            unread_mail: 0,
+            pending_approvals: 0,
+            is_manager: false,
+            display_name: Some("Wren (Engineer)".into()),
+            rate_limit_resets_at: None,
+            reports_to: None,
+        };
+        let team = TeamSnapshot {
+            root: std::path::PathBuf::from("/tmp"),
+            team_name: "t".into(),
+            agents: vec![agent],
+            channels: vec![],
+        };
+        let r = row(1, "p:wren", "channel:p:all", "hello");
+        assert_eq!(
+            render_row(&r, &team, MailboxTab::Channel),
+            "[#all] [Wren (Engineer)] hello"
+        );
+    }
+
+    #[test]
+    fn render_row_channel_tab_handles_malformed_channel_recipient() {
+        // Defensive — channel_feed SQL only returns rows shaped
+        // `channel:<channel_id>`, but if a malformed value ever
+        // lands (manual write, future schema shift), the row still
+        // renders without panic. Pins recipient_label's malformed
+        // fallback (matches T-231's parallel sent-tab test).
+        let team = empty_team();
+        let r = row(1, "p:from", "channel:malformed", "yo");
+        assert_eq!(
+            render_row(&r, &team, MailboxTab::Channel),
+            "[#malformed] [p:from] yo"
+        );
     }
 
     #[test]
