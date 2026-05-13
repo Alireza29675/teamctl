@@ -143,7 +143,7 @@ workers:
 | `runtime` | string | `claude-code` | Must match a `runtimes/<name>.yaml`. |
 | `model` | string | runtime default | Runtime-specific model id. |
 | `role_prompt` | path or list of paths | — | System prompt source. A single string keeps the current behavior — the file is passed straight to the runtime. A list concatenates the files in declared order (separated by an em-dash) into `state/role_prompts/<project>-<agent>.md` and points the runtime at that file. Re-materialized on every render, so editing any source file flows into the agent's prompt at the next `up` / `reload`. |
-| `permission_mode` | string | runtime default | e.g. `auto`, `plan`, `acceptAll`. |
+| `permission_mode` | string | runtime default | e.g. `auto`, `plan`, `acceptAll`. `attended` is teamctl-specific: marks the agent as having a human at the keyboard, so `teamctl` skips both `--dangerously-skip-permissions` and the default `PreToolUse` deny hook that blocks synchronous-prompt tools (`AskUserQuestion`, plan mode) on headless agents. |
 | `interfaces.telegram` | map | — | Manager-only. 1:1 Telegram bot for this manager (presence implies it receives Telegram forwards and may call `reply_to_user`). |
 | `autonomy` | string | `low_risk_only` | `full` · `low_risk_only` · `proposal_only`. |
 | `can_dm` | list | `[]` = unrestricted | Short-names this agent may DM. |
