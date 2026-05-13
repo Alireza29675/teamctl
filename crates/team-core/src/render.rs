@@ -3,6 +3,9 @@
 //! Outputs under `<root>/state/`:
 //! - `envs/<project>-<agent>.env`      — env vars for the agent wrapper.
 //! - `mcp/<project>-<agent>.json`      — MCP stdio config for the runtime.
+//! - `claude/<project>-<agent>.json`   — wrapper-managed Claude Code
+//!   settings (currently a `PreToolUse` deny hook for synchronous-prompt
+//!   tools that strand a headless pane). Claude-code agents only.
 //! - `role_prompts/<project>-<agent>.md` (multi-file role_prompt only) —
 //!   the ordered concatenation of every source file declared in the
 //!   role's `role_prompt: [...]` list. Re-materialized on every render
@@ -33,6 +36,17 @@ pub fn mcp_path(root: &Path, project: &str, agent: &str) -> PathBuf {
         .join(format!("{project}-{agent}.json"))
 }
 
+/// Absolute path to the wrapper-managed Claude Code settings file. The
+/// file carries the default `PreToolUse` deny hook for synchronous-prompt
+/// tools (`AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`) so a
+/// headless agent doesn't strand on a picker no one will answer. The
+/// wrapper applies it via `claude --settings <path>` for every
+/// claude-code agent except those in `permission_mode: attended`.
+pub fn claude_settings_path(root: &Path, project: &str, agent: &str) -> PathBuf {
+    root.join("state/claude")
+        .join(format!("{project}-{agent}.json"))
+}
+
 /// Absolute path to the materialized concatenation of a multi-file
 /// `role_prompt` list. Only ever written for the list form — single-file
 /// `role_prompt` keeps pointing at its source path directly.
@@ -50,6 +64,45 @@ pub fn render_agent(
     let env = render_env(compose, handle);
     let mcp = render_mcp(compose, handle, team_mcp_bin);
     (env, mcp)
+}
+
+/// Wrapper-managed Claude Code settings JSON for a single agent. Returns
+/// `Some(json)` for `claude-code` runtime regardless of `permission_mode`
+/// — the wrapper decides whether to apply it. Returns `None` for runtimes
+/// that don't read Claude settings (codex, gemini, …).
+///
+/// The current payload is a single `PreToolUse` deny hook covering the
+/// synchronous-prompt tools that today strand a headless pane:
+/// `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`. The `systemMessage`
+/// tells the model *why* the deny fired and points it at the `team` MCP
+/// tools as the headless-safe alternative — without that, the model just
+/// sees the call vanish and may retry. Matcher is a regex; extend it
+/// (rather than the hook count) when claude-code gains new synchronous-
+/// prompt tools.
+pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<String> {
+    let _ = compose;
+    if h.spec.runtime != "claude-code" {
+        return None;
+    }
+    // PreToolUse deny hook. Picked over `--disallowed-tools` so the
+    // model sees the deny + systemMessage (tighter learning loop) rather
+    // than the tool silently vanishing from its catalog.
+    let v = serde_json::json!({
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "AskUserQuestion|EnterPlanMode|ExitPlanMode",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\"},\"systemMessage\":\"Interactive prompts are disabled for teamctl agents. Use the `team` MCP tools to ask people or check in.\"}'"
+                        }
+                    ]
+                }
+            ]
+        }
+    });
+    Some(serde_json::to_string_pretty(&v).expect("json"))
 }
 
 fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
@@ -109,6 +162,12 @@ fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
         let session_name = crate::session::session_name(h.project, h.agent);
         s.push_str(&format!("CLAUDE_SESSION_ID={session_id}\n"));
         s.push_str(&format!("CLAUDE_SESSION_NAME={session_name}\n"));
+        // T-189: path to the wrapper-managed Claude settings file
+        // carrying the synchronous-prompt deny hook. Wrapper applies
+        // it via `--settings` except when `permission_mode: attended`
+        // (human at the keyboard wants the interactive tools back).
+        let settings = claude_settings_path(&compose.root, h.project, h.agent);
+        s.push_str(&format!("CLAUDE_SETTINGS={}\n", settings.display()));
     }
     s
 }
@@ -471,6 +530,69 @@ mod tests {
         let dest = role_prompt_concat_path(root, h.project, h.agent);
         let got = std::fs::read_to_string(&dest).unwrap();
         assert_eq!(got, "v2\n\n—\n\nMGR");
+    }
+
+    #[test]
+    fn claude_settings_present_for_claude_code() {
+        // T-189: claude-code agents get a wrapper-managed settings
+        // file with a PreToolUse deny hook for synchronous-prompt
+        // tools that would otherwise strand a headless pane.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let s = render_claude_settings(&c, h).expect("claude-code agent must get settings");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        let pre = &v["hooks"]["PreToolUse"][0];
+        assert_eq!(
+            pre["matcher"].as_str().unwrap(),
+            "AskUserQuestion|EnterPlanMode|ExitPlanMode"
+        );
+        let cmd = pre["hooks"][0]["command"].as_str().unwrap();
+        assert!(
+            cmd.contains(r#""permissionDecision":"deny""#),
+            "deny verdict missing from hook command: {cmd}"
+        );
+        assert!(
+            cmd.contains("Interactive prompts are disabled"),
+            "systemMessage missing from hook command: {cmd}"
+        );
+    }
+
+    #[test]
+    fn claude_settings_absent_for_non_claude_runtimes() {
+        // codex/gemini don't read claude settings; the file would be
+        // dead weight and a confusing artifact on disk.
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "codex".into();
+        let h = c.agents().next().unwrap();
+        assert!(render_claude_settings(&c, h).is_none());
+    }
+
+    #[test]
+    fn env_emits_claude_settings_path_for_claude_code() {
+        // T-189: wrapper reads CLAUDE_SETTINGS and passes it to claude
+        // via `--settings`. Path must resolve under the compose root.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(
+            env.contains("CLAUDE_SETTINGS=/teamctl/state/claude/hello-mgr.json\n"),
+            "env was: {env}"
+        );
+    }
+
+    #[test]
+    fn env_omits_claude_settings_for_non_claude_runtimes() {
+        // Only claude-code reads the settings file; other runtimes
+        // must not see the env var (avoids confusion if they ever add
+        // a same-named knob).
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "codex".into();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(
+            !env.contains("CLAUDE_SETTINGS="),
+            "non-claude runtime must not get settings path: {env}"
+        );
     }
 
     #[test]

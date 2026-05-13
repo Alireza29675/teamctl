@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
-use team_core::render::{env_path, mcp_path, render_agent, write_role_prompt_concat};
+use team_core::render::{
+    claude_settings_path, env_path, mcp_path, render_agent, render_claude_settings,
+    write_role_prompt_concat,
+};
 use team_core::supervisor::{AgentSpec, Supervisor, TmuxSupervisor};
 
 pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
@@ -103,13 +106,21 @@ pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
 pub fn render_project_public(compose: &Compose, project_id: &str) -> Result<()> {
     let envs_dir = compose.root.join("state/envs");
     let mcp_dir = compose.root.join("state/mcp");
+    let claude_dir = compose.root.join("state/claude");
     fs::create_dir_all(&envs_dir)?;
     fs::create_dir_all(&mcp_dir)?;
+    fs::create_dir_all(&claude_dir)?;
     let bin = super::team_mcp_bin().display().to_string();
     for h in compose.agents().filter(|h| h.project == project_id) {
         let (env, mcp) = render_agent(compose, h, &bin);
         fs::write(env_path(&compose.root, h.project, h.agent), env)?;
         fs::write(mcp_path(&compose.root, h.project, h.agent), mcp)?;
+        if let Some(settings) = render_claude_settings(compose, h) {
+            fs::write(
+                claude_settings_path(&compose.root, h.project, h.agent),
+                settings,
+            )?;
+        }
         // Mirror render_all_public: the scoped path must also
         // re-materialize multi-file role_prompt concat or a scoped
         // reload after a source-file edit boots the agent against a
@@ -220,13 +231,21 @@ fn ensure_claude_trust_inner(compose: &Compose, project_id: Option<&str>) -> Res
 pub fn render_all_public(compose: &Compose) -> Result<()> {
     let envs_dir = compose.root.join("state/envs");
     let mcp_dir = compose.root.join("state/mcp");
+    let claude_dir = compose.root.join("state/claude");
     fs::create_dir_all(&envs_dir)?;
     fs::create_dir_all(&mcp_dir)?;
+    fs::create_dir_all(&claude_dir)?;
     let bin = super::team_mcp_bin().display().to_string();
     for h in compose.agents() {
         let (env, mcp) = render_agent(compose, h, &bin);
         fs::write(env_path(&compose.root, h.project, h.agent), env)?;
         fs::write(mcp_path(&compose.root, h.project, h.agent), mcp)?;
+        if let Some(settings) = render_claude_settings(compose, h) {
+            fs::write(
+                claude_settings_path(&compose.root, h.project, h.agent),
+                settings,
+            )?;
+        }
         // Re-materialize multi-file role_prompt concat unconditionally
         // so any edit to a source file flows into the agent's prompt at
         // the next render — single-form is a no-op (back-compat).

@@ -26,6 +26,7 @@ fi
 : "${RUNTIME:=claude-code}"
 : "${MODEL:=}"
 : "${PERMISSION_MODE:=}"
+: "${CLAUDE_SETTINGS:=}"
 : "${MCP_CONFIG:=}"
 : "${SYSTEM_PROMPT_PATH:=}"
 : "${CLAUDE_PROJECT_DIR:=.}"
@@ -169,13 +170,26 @@ while :; do
                 fi
             fi
             [ -n "$CLAUDE_SESSION_NAME" ] && set -- "$@" -n "$CLAUDE_SESSION_NAME"
-            [ -n "$PERMISSION_MODE" ] && set -- "$@" --permission-mode "$PERMISSION_MODE"
-            # Autonomous agents have no human at the keyboard, so any
-            # permission prompt deadlocks the pane. Skip them at the
-            # claude layer; teamctl's HITL gate (request_approval via
-            # team-mcp + the agent's `autonomy:` field) is the proper
-            # human-in-loop ring instead.
-            set -- "$@" --dangerously-skip-permissions
+            # T-189: `permission_mode: attended` is the opt-out for the
+            # headless-default footgun protections. When attended, a
+            # human is at the keyboard and can answer interactive
+            # prompts, so we skip:
+            #   - `--dangerously-skip-permissions` (let claude prompt),
+            #   - `--settings <hook-deny>` (let interactive tools run),
+            #   - `--permission-mode attended` (claude doesn't recognize
+            #     "attended" — it's a teamctl-level mode).
+            # Any other permission_mode (or unset) means headless: we
+            # ship the deny hook so AskUserQuestion / plan-mode pickers
+            # don't strand the pane, and pass --dangerously-skip-
+            # permissions so the runtime doesn't block on its own
+            # permission dialog.
+            if [ "$PERMISSION_MODE" = "attended" ]; then
+                :
+            else
+                [ -n "$PERMISSION_MODE" ] && set -- "$@" --permission-mode "$PERMISSION_MODE"
+                set -- "$@" --dangerously-skip-permissions
+                [ -n "$CLAUDE_SETTINGS" ] && set -- "$@" --settings "$CLAUDE_SETTINGS"
+            fi
             [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
             # T-048: per-agent reasoning effort. Source order is YAML
             # (rendered into this env file) > workspace `.env` (env
