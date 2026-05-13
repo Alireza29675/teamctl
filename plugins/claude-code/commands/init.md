@@ -12,7 +12,11 @@ Read [RULES.md](../RULES.md) and [INTERACTIVE.md](../INTERACTIVE.md) before each
 At the top of every invocation, decide which mode you're in:
 
 ```bash
-[ -n "$TEAMCTL_ROOT" ] && [ -n "$AGENT" ] && echo "headless" || echo "interactive"
+if [ -n "$TEAMCTL_ROOT" ] && [ -n "$AGENT_ID" ]; then
+    echo "headless"
+else
+    echo "interactive"
+fi
 ```
 
 `headless` means a supervised teamctl agent is calling this skill — `AskUserQuestion` is denied by the wrapper's `PreToolUse` hook (see [#189](https://github.com/Alireza29675/teamctl/issues/189)). Fall back to plain-text Q&A for the whole invocation per [INTERACTIVE.md §5](../INTERACTIVE.md). In practice `/teamctl:init` is overwhelmingly run from a fresh interactive `claude` session (there's no `.team/` yet), so the headless path here is mostly a defensive catch.

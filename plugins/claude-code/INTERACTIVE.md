@@ -78,10 +78,14 @@ If `/teamctl:adjust` or `/teamctl:init` is invoked from inside such a pane (a te
 **Detection — at the top of every invocation, run:**
 
 ```bash
-[ -n "$TEAMCTL_ROOT" ] && [ -n "$AGENT" ] && echo "headless" || echo "interactive"
+if [ -n "$TEAMCTL_ROOT" ] && [ -n "$AGENT_ID" ]; then
+    echo "headless"
+else
+    echo "interactive"
+fi
 ```
 
-Both env vars are set by `agent-wrapper.sh` for supervised agents and absent in a normal user `claude` session. If the probe prints `headless`, set the invocation mode to **plain-text** and don't call `AskUserQuestion` even once.
+Both env vars are written into the agent's env-file by `teamctl render` (`AGENT_ID` = `<project>:<agent>`) and read into the spawned claude session by `agent-wrapper.sh`; they're absent in a normal user `claude` session. If the probe prints `headless`, set the invocation mode to **plain-text** and don't call `AskUserQuestion` even once.
 
 **Fallback shape — plain-text Q&A.** Render every question as a numbered prose prompt the model can answer inline:
 

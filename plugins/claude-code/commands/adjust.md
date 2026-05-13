@@ -12,10 +12,14 @@ Read [RULES.md](../RULES.md) and [INTERACTIVE.md](../INTERACTIVE.md) before each
 At the top of every invocation, decide which mode you're in:
 
 ```bash
-[ -n "$TEAMCTL_ROOT" ] && [ -n "$AGENT" ] && echo "headless" || echo "interactive"
+if [ -n "$TEAMCTL_ROOT" ] && [ -n "$AGENT_ID" ]; then
+    echo "headless"
+else
+    echo "interactive"
+fi
 ```
 
-`headless` means a supervised teamctl agent (set by `agent-wrapper.sh`) is calling this skill — `AskUserQuestion` is denied by the wrapper's `PreToolUse` hook (see [#189](https://github.com/Alireza29675/teamctl/issues/189)). Fall back to plain-text Q&A for the whole invocation per [INTERACTIVE.md §5](../INTERACTIVE.md). `interactive` means a normal user `claude` session — use `AskUserQuestion` everywhere a finite-set pick fits.
+`headless` means a supervised teamctl agent (env-file rendered by `teamctl render`, sourced by `agent-wrapper.sh`) is calling this skill — `AskUserQuestion` is denied by the wrapper's `PreToolUse` hook (see [#189](https://github.com/Alireza29675/teamctl/issues/189)). Fall back to plain-text Q&A for the whole invocation per [INTERACTIVE.md §5](../INTERACTIVE.md). `interactive` means a normal user `claude` session — use `AskUserQuestion` everywhere a finite-set pick fits.
 
 ## Action picker — at the top of every invocation
 
