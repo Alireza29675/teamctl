@@ -21,4 +21,8 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_OTTO_TOKEN
         chat_ids_env: TEAMCTL_TG_OTTO_CHATS
+        speech_to_text:
+          provider: groq
+          api_key_env: GROQ_API_KEY
+          model: whisper-large-v3
 workers: {}

@@ -58,6 +58,10 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_HUGO_TOKEN
         chat_ids_env: TEAMCTL_TG_HUGO_CHATS
+        speech_to_text:
+          provider: groq
+          api_key_env: GROQ_API_KEY
+          model: whisper-large-v3
   ada:
     display_name: Ada (Engineer)
     runtime: claude-code
@@ -78,6 +82,10 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_ADA_TOKEN
         chat_ids_env: TEAMCTL_TG_ADA_CHATS
+        speech_to_text:
+          provider: groq
+          api_key_env: GROQ_API_KEY
+          model: whisper-large-v3
   wren:
     display_name: Wren (Engineer)
     runtime: claude-code
@@ -98,6 +106,10 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_WREN_TOKEN
         chat_ids_env: TEAMCTL_TG_WREN_CHATS
+        speech_to_text:
+          provider: groq
+          api_key_env: GROQ_API_KEY
+          model: whisper-large-v3
   otis:
     display_name: Otis (Engineer)
     runtime: claude-code
@@ -118,6 +130,10 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_OTIS_TOKEN
         chat_ids_env: TEAMCTL_TG_OTIS_CHATS
+        speech_to_text:
+          provider: groq
+          api_key_env: GROQ_API_KEY
+          model: whisper-large-v3
   kian:
     display_name: Kian (Engineer)
     runtime: claude-code
@@ -138,6 +154,10 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_KIAN_TOKEN
         chat_ids_env: TEAMCTL_TG_KIAN_CHATS
+        speech_to_text:
+          provider: groq
+          api_key_env: GROQ_API_KEY
+          model: whisper-large-v3
   nico:
     display_name: Nico (Engineer)
     runtime: claude-code
@@ -158,6 +178,10 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_NICO_TOKEN
         chat_ids_env: TEAMCTL_TG_NICO_CHATS
+        speech_to_text:
+          provider: groq
+          api_key_env: GROQ_API_KEY
+          model: whisper-large-v3
   neda:
     display_name: Neda (Comms)
     runtime: claude-code
