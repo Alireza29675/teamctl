@@ -48,6 +48,7 @@ Four habits that catch the bulk of avoidable mistakes:
 - **Simplicity first.** Write the minimum code that earns the test. No speculative abstractions, no future-proofing for hypothetical requirements. Before shipping a chunk, ask: *would a senior engineer call this overcomplicated?*
 - **Surgical changes.** Touch only what the ticket requires. Match the surrounding style. Don't refactor adjacent code "while you're there" — file a separate ticket. Diffs that drift past their stated scope cost more in review than they save in keystrokes.
 - **Goal-driven execution.** Translate the task into a verifiable success criterion before writing code. Write the test (or the manual repro) first; then make it pass. "Done" means the criterion is observably met, not "the code looks reasonable."
+- **Track your own work.** Every dogfood agent keeps a short, ruthlessly pruned `.team/state/<name>/task.md` top-of-mind checklist (`[ ]` todo · `[-]` doing/under-review · `[x]` done-but-don't-lose-yet); normative spec is in each role doc's §6 Memory. *(Remove this line if the dogfood team retires per-agent task files.)*
 
 *further reading on agent behavioural guidelines:* https://github.com/forrestchang/andrej-karpathy-skills/blob/main/CLAUDE.md
 
