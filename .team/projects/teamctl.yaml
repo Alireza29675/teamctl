@@ -25,6 +25,7 @@ managers:
     can_dm:
     - hugo
     - neda
+    - vera
     can_broadcast:
     - all
     interfaces:
@@ -173,6 +174,26 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_NEDA_TOKEN
         chat_ids_env: TEAMCTL_TG_NEDA_CHATS
+        speech_to_text:
+          provider: groq
+          api_key_env: GROQ_API_KEY
+          model: whisper-large-v3
+  vera:
+    display_name: Vera (DX Research)
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt: roles/vera.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    can_dm:
+    - sage
+    - neda
+    can_broadcast:
+    - all
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_VERA_TOKEN
+        chat_ids_env: TEAMCTL_TG_VERA_CHATS
         speech_to_text:
           provider: groq
           api_key_env: GROQ_API_KEY
