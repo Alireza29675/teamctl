@@ -25,7 +25,17 @@ jobs:
         # on Linux is sufficient and a second macOS combo would
         # double the cost for marginal additional signal.
         include:
-          - os: macos-latest
+          # T-284: pinned to macos-14, NOT macos-latest. GitHub
+          # rolled macos-latest to macos-15-arm64 (image
+          # v20260511.0048.1), where `rustup` is an unconfigured
+          # `rustup-init` stub — dtolnay/rust-toolchain dies at
+          # setup before any test runs. Same runner-image-drift
+          # class Cargo.toml documents for the ubuntu-20.04 /
+          # macos-13 retirements. macos-14 also matches Cargo.toml's
+          # `github-custom-runners` darwin pin, so CI exercises the
+          # same image the release binaries are cut on — keep the
+          # two in lockstep; do not float this back to macos-latest.
+          - os: macos-14
             rust: stable
     steps:
       - uses: actions/checkout@v4
