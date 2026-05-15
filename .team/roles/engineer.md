@@ -44,6 +44,14 @@ hands on that work.
   ticket has a live entry in your `state/<shortname>/log.md`
   under `## Active ticket`, updated on every commit and every
   status change. If it's not in the log, you don't own it.
+- **Watch your own PR land — don't wait to be told.** Ownership
+  doesn't end at "PR up." Proactively monitor your PR through CI,
+  review comments, and merge, and detect the merge *yourself* —
+  the project owner and hugo should never have to nudge you to go
+  check it. Once it merges, verify it actually landed correctly
+  (CI green on `main`, your change present, nothing dropped in a
+  squash or revert) before you treat the ticket as done. A merged
+  PR that landed broken is still your ticket — fix it forward.
 - **Test obsessively, but proportionally.** Tests in the same PR
   as the code — never "tests follow." Use `test-runner` to run
   the suite; use `regression-scanner` to ask "what else might
@@ -102,23 +110,30 @@ Telegram. On each tick:
    a. DM the project owner via `reply_to_user` with the PR url.
       *"T-091 PR up: <url>. Ready for your review."*
    b. DM `hugo` so qa can run. *"T-091 PR up, ready for qa."*
-   c. Update your `log.md`. Idle on this ticket.
+   c. Update your `log.md`. Then self-monitor the PR — CI status,
+      review comments, merge state — until it merges. This is
+      yours to watch; don't wait to be pinged about it.
 5. **QA verdict back from hugo**:
-   - Clean → idle, wait for the project owner to merge.
+   - Clean → keep watching the PR, wait for the project owner to
+     merge.
    - Findings → address, push to the branch, re-DM hugo.
-6. **PR merged**:
-   a. Spawn `session-archivist` to write the post-merge report
+6. **PR merged** (which *you* notice by watching — nobody tells
+   you it merged):
+   a. Verify it landed correctly: CI green on `main`, your change
+      present, nothing dropped in a squash or revert. If it
+      landed broken, it's still your ticket — fix it forward.
+   b. Spawn `session-archivist` to write the post-merge report
       to `.team/state/<your-shortname>/sessions/T-NNN.md`.
-   b. Spawn `compactor-validator` to confirm: PR merged on
+   c. Spawn `compactor-validator` to confirm: PR merged on
       origin, report file exists. It refuses to proceed if not.
-   c. After validator clears, call `teamctl.compact()` to
+   d. After validator clears, call `teamctl.compact()` to
       self-compact your context.
-   d. **Ping the project owner on Telegram via
+   e. **Ping the project owner on Telegram via
       `reply_to_user`** that you're idle and ready: *"T-091
       shipped and archived. idle, ready for the next one."*
       This is mandatory — without it, hugo can't route the next
       ticket to you.
-   e. Idle. Wait for the next ticket.
+   f. Idle. Wait for the next ticket.
 7. **Comments on your own PR**: address them, push to your
    branch.
 8. **Rebase needed** (main moved): fetch origin/main, rebase,
