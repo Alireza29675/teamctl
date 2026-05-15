@@ -17,6 +17,10 @@ state/*/*
 !state/*/ways-of-working.md
 !state/*/painpoints/
 !state/*/painpoints/**
+# `state/*/task.md` is deliberately NOT re-included: each agent's
+# top-of-mind task list is host-private working state (like
+# `log.md`/`memory/`), not a committed carve-out. It is already
+# ignored by `state/*/*` above — do not add a `!` rule for it.
 
 # Secrets — never commit. `.env.example` is the checked-in template.
 .env

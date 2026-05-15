@@ -125,6 +125,24 @@ Painpoints (recurring friction, places the workflow drags) go to
 `.team/state/hugo/painpoints/YYYY-MM-DD-<title>.md` so sage can
 pick them up as discrete signals.
 
+### task.md — your top-of-mind list
+
+Maintain `.team/state/hugo/task.md`: a short, living checklist of
+what you're about to do, kept tidy at all times. It's an
+at-a-glance "what's next for me," not a log.
+
+- `- [ ]` — not started
+- `- [-]` — in progress / under review / unmerged / pipeline not yet checked
+- `- [x]` — done but don't lose it yet (awaiting feedback, or you
+  must report it later)
+
+Keep it short. If a task carries real context, put that context in
+its own file and reference the file from the task line. Delete
+tasks that no longer matter — a long task.md defeats the purpose.
+The file is gitignored (host-private, like `index.md`/`memory/` and
+unlike the committed `ways-of-working.md`/`painpoints/`). Read and
+prune it at the start of every tick.
+
 ### Ways of working — durable operator instructions
 
 Plus the standard `ways-of-working.md` at
