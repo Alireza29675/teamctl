@@ -1,6 +1,6 @@
 ---
 description: First-run teamctl onboarding — from no-teamctl-installed to a running supervised team in one conversation.
-allowed-tools: Bash, Read, Write, Edit, AskUserQuestion
+allowed-tools: Bash, Read, Write, Edit, AskUserQuestion, Agent
 ---
 
 `/teamctl:init` is the first-run onboarding for teamctl. A pre-flight `.team/` guard bows out to `/teamctl:adjust` if a team already exists. Otherwise, seven stages: prerequisites and install (Stage 1), a discovery conversation that surfaces the user's domains (Stage 2) — fed either by the user explaining their work or by a codebase-investigation pass, the operator's pick — confirm the proposed org (Stage 3), scaffold `.team/` and reveal the YAML (Stage 4), bring it up (Stage 5), wire Telegram (Stage 6), point at the lifecycle commands (Stage 7).
@@ -147,7 +147,7 @@ In Stage 3, candidate domains come from the summary instead of the user's words.
 
 The Stage 3 proposal cites both the investigation summary (the receipt) and the methodology doc, in the same comprehensive shape Stage 3 already requires. Stage 4 role-prompt generation uses the summary's characterisation of each domain in place of the user's own words.
 
-In a headless invocation the mode pick still applies; the investigation sub-agent runs without a human gate, and its summary is recorded before Stage 3.
+In a headless invocation the mode pick still applies; the investigation sub-agent runs without a human gate on the investigation pass itself, and its summary is recorded before Stage 3. Stage 3's Apply/Modify/Reject gate still applies (in its plain-text form per [INTERACTIVE.md §5](../INTERACTIVE.md)) — the investigation is ungated, the team-shape decision is not.
 
 ## Stage 2 — Discover the domains
 
