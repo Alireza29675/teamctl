@@ -55,13 +55,13 @@ If `.team/` does **not** exist, advance to Stage 1.
 
 ## Stage 1 — Detect & install
 
-Probe for prerequisites in this order: `tmux`, `git`, `gh`, `claude`, `teamctl`. Use `command -v` (or `which`) under `Bash`, one probe per tool. Report inline as a tight bullet:
+Probe for prerequisites in this order: `tmux`, `git`, `claude`, `teamctl`. Use `command -v` (or `which`) under `Bash`, one probe per tool. Report inline as a tight bullet:
 
 ```
-✓ tmux        ✓ git        ✓ gh        ✓ claude        ✗ teamctl
+✓ tmux        ✓ git        ✓ claude        ✗ teamctl
 ```
 
-If all five check out, the prereq line plus one beat moves to Stage 2 — fire as `AskUserQuestion`:
+If all four check out, the prereq line plus one beat moves to Stage 2 — fire as `AskUserQuestion`:
 
 ```text
 question: "Ready to set up your team?"
@@ -93,7 +93,7 @@ If none fit, surface honestly:
 
 Run the chosen command yourself when the user picks and the harness allows it; otherwise hand the user the exact line to paste. Either way, verify with `teamctl --version` after install and report the version inline. If the version probe fails, name the error in one line and offer to retry or switch install path — don't restart the stage.
 
-If `tmux`, `git`, or `gh` is missing, offer to install it — fire `AskUserQuestion` per missing tool:
+If `tmux` or `git` is missing, offer to install it — fire `AskUserQuestion` per missing tool:
 
 ```text
 question: "Install <tool>?"
@@ -105,7 +105,7 @@ options:
     description: "Document the manual install path and continue — this tool isn't strictly blocking here."
 ```
 
-On `Install it`, run the platform install (`brew install <tool>` on macOS-with-brew, the distro package manager on Linux, etc.), then re-probe with `command -v` and report the result inline. On `Skip`, print the canonical manual path in one line and continue — none of these three hard-block the scaffold, but `tmux` is needed for `teamctl up` at Stage 5, so surface that consequence when the user skips it rather than pretending it's free. `claude` is never the missing one — this skill runs inside it. Don't pretend to install runtimes the plugin can't reasonably manage; surface the gap and continue.
+On `Install it`, run the platform install (`brew install <tool>` on macOS-with-brew, the distro package manager on Linux, etc.), then re-probe with `command -v` and report the result inline. On `Skip`, print the canonical manual path in one line and continue — neither hard-blocks the scaffold, but `tmux` is needed for `teamctl up` at Stage 5, so surface that consequence when the user skips it rather than pretending it's free. `claude` is never the missing one — this skill runs inside it. Don't pretend to install runtimes the plugin can't reasonably manage; surface the gap and continue.
 
 ## Mode pick — explain or investigate
 
