@@ -25,10 +25,40 @@ jobs:
         # on Linux is sufficient and a second macOS combo would
         # double the cost for marginal additional signal.
         include:
-          - os: macos-latest
+          # T-284: macos-14, not macos-latest — matches Cargo.toml's
+          # `github-custom-runners` darwin pin so CI exercises the
+          # same image the release binaries are cut on. This is a
+          # release-path-parity consistency win, NOT the RED-main
+          # fix: the actual blocker is the rust-stub-shim problem
+          # handled in the purge step below (present on macos-14 and
+          # macos-latest alike — proven by this PR's own CI). Keep
+          # the two configs in lockstep; do not float back to
+          # macos-latest.
+          - os: macos-14
             rust: stable
     steps:
       - uses: actions/checkout@v4
+      # T-284: current GitHub macOS ARM runner images pre-seed
+      # `rustup-init` stub shims for cargo/rustc/rustup/rustfmt into
+      # ~/.cargo/bin (and /opt/homebrew/bin). dtolnay/rust-toolchain
+      # installs a real toolchain, but because ~/.cargo/bin/cargo is
+      # itself the stub, every `cargo …` step execs `rustup-init` and
+      # dies with `error: unexpected argument 'fmt' found`. This is a
+      # stub-precedence problem, not the image-version drift the
+      # ticket first read it as — it reproduces on macos-14 too.
+      # Purge the seeded stubs before the toolchain action so dtolnay
+      # populates a clean prefix with real proxies. The diagnostic
+      # echo is deliberate: if a future image changes the stub layout,
+      # this one job log tells you PATH + which-cargo + dir contents
+      # without a repro round-trip.
+      - name: macOS — purge pre-seeded rust stub shims
+        if: runner.os == 'macOS'
+        run: |
+          echo "PATH=$PATH"
+          which -a cargo rustup rustfmt || true
+          ls -la "$HOME/.cargo/bin" 2>/dev/null || true
+          rm -f "$HOME"/.cargo/bin/{cargo,cargo-clippy,cargo-fmt,clippy-driver,rls,rust-analyzer,rust-gdb,rust-lldb,rustc,rustdoc,rustfmt,rustup} \
+                /opt/homebrew/bin/{cargo,cargo-clippy,cargo-fmt,clippy-driver,rustc,rustdoc,rustfmt,rustup} 2>/dev/null || true
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
