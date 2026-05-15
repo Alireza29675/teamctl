@@ -187,9 +187,14 @@ jobs:
                   "$bin" --version
                   ;;
                 aarch64-unknown-linux-gnu)
+                  # Smoke on ubuntu:22.04 (glibc 2.35) — the same glibc
+                  # floor the aarch64 binary is now built against (#253).
+                  # x86_64 is smoked natively on the 22.04 build runner;
+                  # this container must track it so a future glibc-floor
+                  # regression fails the release here instead of shipping.
                   docker run --rm --platform linux/arm64 \
                     -v "$workdir/$base":/work -w /work \
-                    arm64v8/ubuntu:24.04 "./$bin_name" --version
+                    arm64v8/ubuntu:22.04 "./$bin_name" --version
                   ;;
                 *)
                   echo "::error::unhandled target $target — add a smoke branch"
