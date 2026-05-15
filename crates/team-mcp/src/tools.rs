@@ -174,7 +174,7 @@ pub fn schema() -> Value {
                 "properties": {
                     "text":      {
                         "type": "string",
-                        "description": "Mostly plain text. A small markdown subset is rendered: `**bold**`, `__bold__`, `*italic*`, `` `code` ``, and triple-backtick fenced code blocks (with optional language tag). Single-underscore italic (`_text_`) is intentionally not rendered — underscore is too common in code-style text. Bullet lines (`- item` / `* item` / `+ item`) become `• item`. Plain `<`, `>`, `&` are safe — escaped automatically. No headings (Telegram does not render them). Use emojis sparingly to aid scanability (✅ done, ⚠️ caution, 🔧 working, ❓ question). Aim for short, chat-sized messages; split long output into multiple calls rather than sending a wall of text."
+                        "description": "Mostly plain text. A small markdown subset is rendered: `**bold**`, `__bold__`, `*italic*`, `` `code` ``, and triple-backtick fenced code blocks (with optional language tag). Single-underscore italic (`_text_`) is intentionally not rendered — underscore is too common in code-style text. Bullet lines (`- item` / `* item` / `+ item`) become `• item`. Plain `<`, `>`, `&` are safe — escaped automatically. No headings (Telegram does not render them). Use emojis sparingly to aid scanability (✅ done, ⚠️ caution, 🔧 working, ❓ question). Aim for short, chat-sized messages; split long output into multiple calls rather than sending a wall of text. Hard limit: 4096 characters per message (Telegram); longer text is rejected with an actionable error, so split proactively."
                     },
                     "image": {
                         "type": "object",
@@ -183,7 +183,7 @@ pub fn schema() -> Value {
                         "properties": {
                             "source":  { "type": "string", "enum": ["path", "url"] },
                             "value":   { "type": "string", "description": "Absolute filesystem path or public URL." },
-                            "caption": { "type": "string", "description": "Optional caption rendered under the photo. Plain text, ≤1024 chars per Telegram." }
+                            "caption": { "type": "string", "description": "Optional caption rendered under the photo. Plain text, ≤1024 chars per Telegram; longer is rejected with an actionable error." }
                         },
                         "additionalProperties": false
                     },
@@ -194,7 +194,7 @@ pub fn schema() -> Value {
                         "properties": {
                             "source":  { "type": "string", "enum": ["path", "url"] },
                             "value":   { "type": "string" },
-                            "caption": { "type": "string" }
+                            "caption": { "type": "string", "description": "Optional caption. Plain text, ≤1024 chars per Telegram; longer is rejected with an actionable error." }
                         },
                         "additionalProperties": false
                     },
@@ -430,6 +430,38 @@ enum MediaSource {
 /// uploads. URLs bypass the local check — Telegram will validate on its end.
 const MEDIA_MAX_BYTES: u64 = 50 * 1024 * 1024;
 
+/// Telegram Bot API caps a single text message at 4096 and a media caption
+/// at 1024. The unit is **UTF-16 code units**, not bytes or Unicode
+/// scalars — the same unit Telegram uses for entity offsets (a non-BMP
+/// emoji counts as 2, most CJK/Latin chars as 1). We reject above these at
+/// the MCP boundary so the agent gets an actionable error: the bot's
+/// outbound dispatch only `warn`-logs Telegram's rejection (#168), which
+/// is invisible to the agent — it already holds an OK from this tool and
+/// moves on. Limits per Telegram Bot API as of 2026-05 (`sendMessage`
+/// text, `sendPhoto`/`sendDocument` caption). Bump here if Telegram
+/// changes them. #252.
+const MAX_TELEGRAM_TEXT_LEN: usize = 4096;
+const MAX_TELEGRAM_CAPTION_LEN: usize = 1024;
+
+/// Reject `field` when it exceeds `max` Telegram-counted units. Length is
+/// measured in UTF-16 code units to match exactly what Telegram counts —
+/// byte length would false-reject a legitimate emoji/CJK-heavy message,
+/// char count would admit a slightly-oversized one. The error names the
+/// field, the limit, the actual size, and the remediation (chunk into
+/// independent calls) so the agent can self-correct without an operator
+/// in the loop.
+fn check_telegram_len(field: &str, s: &str, max: usize) -> Result<(), String> {
+    let n = s.encode_utf16().count();
+    if n > max {
+        return Err(format!(
+            "reply_to_user: {field} exceeds Telegram's {max}-character limit (got {n}). \
+             Split into multiple reply_to_user calls or attach the content as a file — each \
+             call sends an independent chat message, so chunking is straightforward."
+        ));
+    }
+    Ok(())
+}
+
 /// Image extensions Telegram's `sendPhoto` reliably renders. We accept the
 /// caller's claim by extension; sniffing magic bytes would be more rigorous
 /// but the failure mode (Telegram rejects misnamed file) surfaces a
@@ -506,6 +538,18 @@ async fn reply_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
     }
     if let Some(m) = &a.file {
         validate_media("file", m)?;
+    }
+    // Length-gate before any row insert. Telegram silent-drops oversized
+    // content and the bot only warn-logs that (#168) — reject here so the
+    // agent sees an actionable error instead of a false success. #252.
+    if let Some(t) = a.text.as_deref() {
+        check_telegram_len("text", t, MAX_TELEGRAM_TEXT_LEN)?;
+    }
+    if let Some(c) = a.image.as_ref().and_then(|m| m.caption.as_deref()) {
+        check_telegram_len("image.caption", c, MAX_TELEGRAM_CAPTION_LEN)?;
+    }
+    if let Some(c) = a.file.as_ref().and_then(|m| m.caption.as_deref()) {
+        check_telegram_len("file.caption", c, MAX_TELEGRAM_CAPTION_LEN)?;
     }
     let project = ctx.project().to_string();
     let recipient = "user:telegram";
@@ -1343,6 +1387,98 @@ mod tests {
         assert!(
             err.contains("at least one"),
             "empty call must surface the at-least-one constraint: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_accepts_text_at_exactly_the_limit() {
+        // Boundary: 4096 is allowed (Telegram rejects > 4096, not >=).
+        let (ctx, _f) = ctx_with_manager();
+        let at_limit = "a".repeat(MAX_TELEGRAM_TEXT_LEN);
+        let resp = reply_to_user(&ctx, json!({ "text": at_limit }))
+            .await
+            .expect("text at exactly the limit must pass");
+        assert!(resp["structuredContent"]["id"].as_i64().unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_rejects_text_over_limit_with_actionable_error() {
+        let (ctx, _f) = ctx_with_manager();
+        let over = "a".repeat(MAX_TELEGRAM_TEXT_LEN + 1);
+        let err = reply_to_user(&ctx, json!({ "text": over }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("4096"), "error must name the limit: {err}");
+        assert!(
+            err.contains("4097"),
+            "error must report the actual size: {err}"
+        );
+        assert!(
+            err.contains("Split into multiple"),
+            "error must name the chunk remediation: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_text_length_is_utf16_not_bytes() {
+        // A string whose UTF-8 byte length blows past 4096 but whose
+        // UTF-16 length (what Telegram counts) is well under it must NOT
+        // be rejected. '✅' is 3 bytes UTF-8, 1 UTF-16 unit: 2000 of them
+        // = 6000 bytes but 2000 UTF-16 units. Pins the load-bearing
+        // measure choice — a naive `.len()` check would false-reject this.
+        let (ctx, _f) = ctx_with_manager();
+        let emoji_heavy = "✅".repeat(2000);
+        assert!(
+            emoji_heavy.len() > MAX_TELEGRAM_TEXT_LEN,
+            "precondition: byte len exceeds limit"
+        );
+        let resp = reply_to_user(&ctx, json!({ "text": emoji_heavy }))
+            .await
+            .expect("UTF-16-counted length is under limit; must pass");
+        assert!(resp["structuredContent"]["id"].as_i64().unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_rejects_oversize_image_caption() {
+        let (ctx, _f) = ctx_with_manager();
+        let big_caption = "c".repeat(MAX_TELEGRAM_CAPTION_LEN + 1);
+        let err = reply_to_user(
+            &ctx,
+            json!({
+                "image": {
+                    "source": "url",
+                    "value": "https://example.com/a.png",
+                    "caption": big_caption
+                }
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("image.caption") && err.contains("1024"),
+            "error must name the field and the caption limit: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_to_user_rejects_oversize_file_caption() {
+        let (ctx, _f) = ctx_with_manager();
+        let big_caption = "c".repeat(MAX_TELEGRAM_CAPTION_LEN + 1);
+        let err = reply_to_user(
+            &ctx,
+            json!({
+                "file": {
+                    "source": "url",
+                    "value": "https://example.com/a.pdf",
+                    "caption": big_caption
+                }
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("file.caption") && err.contains("1024"),
+            "error must name the field and the caption limit: {err}"
         );
     }
 
