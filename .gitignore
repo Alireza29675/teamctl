@@ -13,6 +13,9 @@ Cargo.lock.bak
 /state/
 /examples/*/state/
 
+# Local git worktrees (CLAUDE.md mandates they live here; never committed)
+/.worktrees/
+
 # Local secrets (never committed)
 .env
 **/.env
