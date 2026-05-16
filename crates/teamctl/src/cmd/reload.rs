@@ -32,6 +32,7 @@
 //! File locking on `applied.json` and an audit log land in PR C/D —
 //! the schema is forward-compatible with each.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -39,9 +40,10 @@ use anyhow::Result;
 use team_core::compose::Compose;
 use team_core::supervisor::{AgentSpec, AgentState, DrainOutcome, Supervisor, TmuxSupervisor};
 
+use super::agent_filter::AgentSelector;
 use super::snapshot::{self, AgentEntry, ReloadPlan, RemovedAgent};
 
-pub fn run(root: &Path, dry_run: bool, project: Option<&str>) -> Result<()> {
+pub fn run(root: &Path, dry_run: bool, project: Option<&str>, sel: &AgentSelector) -> Result<()> {
     let compose = super::load(root)?;
     let errs = team_core::validate::validate(&compose);
     if !errs.is_empty() {
@@ -53,6 +55,20 @@ pub fn run(root: &Path, dry_run: bool, project: Option<&str>) -> Result<()> {
     let scoped = project
         .map(|name| super::project_filter::resolve(&compose, name))
         .transpose()?;
+
+    // T-305: a per-agent scope force-restarts exactly the selected
+    // agents regardless of whether their config changed. This is a
+    // distinct path from the diff-driven reload — the unscoped and
+    // `<project>`-only contracts below are left untouched. clap
+    // guarantees the selector only appears with a project, so
+    // `scoped` is `Some` here.
+    if sel.is_scoped() {
+        if let Some(id) = scoped.as_deref() {
+            let targets = super::agent_filter::resolve(&compose, id, sel)?
+                .expect("scoped selector resolves to a concrete agent set");
+            return force_restart_scoped(&compose, id, &targets, dry_run);
+        }
+    }
 
     let prev = snapshot::read(&compose.root);
     let bin = super::team_mcp_bin().display().to_string();
@@ -109,6 +125,90 @@ pub fn run(root: &Path, dry_run: bool, project: Option<&str>) -> Result<()> {
         Some(id) => snapshot::merge_project_into(prev.as_ref(), &next, id),
         None => next,
     };
+    snapshot::write(&compose.root, &snap)?;
+    Ok(())
+}
+
+/// T-305: force-restart exactly the selected agents, regardless of
+/// whether their config changed. Distinct from the diff-driven path —
+/// `reload <project> <agent>…` / `--except` always bounces the scoped
+/// set. Unscoped and `<project>`-only reload never reach here.
+///
+/// Mirrors the diff path's restart shape: drain the *actually-running*
+/// session (preferring the prior snapshot entry so a drifted
+/// `tmux_prefix` still tears down the real session), then bring the
+/// agent back up with its current spec.
+fn force_restart_scoped(
+    compose: &Compose,
+    project_id: &str,
+    targets: &BTreeSet<String>,
+    dry_run: bool,
+) -> Result<()> {
+    // Stable manager-then-worker order, matching `compose.agents()`
+    // ordering used everywhere else in the CLI.
+    let ids: Vec<String> = compose
+        .agents()
+        .filter(|h| h.project == project_id && targets.contains(h.agent))
+        .map(|h| h.id())
+        .collect();
+
+    if ids.is_empty() {
+        // e.g. `--except` named every agent. Mirror up/down's
+        // empty-scope line rather than silently doing nothing.
+        println!("no agents in scope for project {project_id}.");
+        return Ok(());
+    }
+
+    if dry_run {
+        for id in &ids {
+            println!("reloaded · {id} (forced) (dry run)");
+        }
+        return Ok(());
+    }
+
+    // Re-render the project's artefacts so a freshly-edited
+    // env/mcp/role_prompt lands before the restart — same as the
+    // diff-driven scoped reload. Idempotent for unchanged agents; the
+    // cross-project DB rewrite stays skipped (T-133).
+    super::up::render_project_public(compose, project_id)?;
+
+    let prev = snapshot::read(&compose.root);
+    let sup = TmuxSupervisor;
+    let drain_timeout = Duration::from_secs(compose.global.supervisor.drain_timeout_secs);
+
+    for id in &ids {
+        // Drain the actually-running session. Prefer the prior
+        // snapshot entry (same prefix-drift correctness argument as
+        // the diff path's `spec_from_prior`); fall back to the current
+        // spec when the agent was never applied. Draining a
+        // not-running session returns immediately — no real wait.
+        let drain_spec = match prev.as_ref().and_then(|s| s.agents.get(id)) {
+            Some(e) => spec_from_prior(compose, id, e),
+            None => match compose.agents().find(|h| &h.id() == id) {
+                Some(h) => {
+                    AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix)
+                }
+                None => continue,
+            },
+        };
+        let outcome = sup.drain(&drain_spec, drain_timeout)?;
+
+        if let Some(h) = compose.agents().find(|h| &h.id() == id) {
+            let spec =
+                AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+            sup.up(&spec)?;
+        }
+        println!("reloaded · {id} (forced){}", drain_suffix(outcome));
+    }
+
+    // Persist the snapshot so the next *unscoped* reload diffs
+    // correctly. Merge just this project's per-agent entries into the
+    // prior snapshot (T-133) — other projects' fingerprints untouched.
+    // If a forced agent's config also changed, the restart already
+    // applied the new spec and the merged `next` records it.
+    let bin = super::team_mcp_bin().display().to_string();
+    let next = snapshot::compute(compose, &bin);
+    let snap = snapshot::merge_project_into(prev.as_ref(), &next, project_id);
     snapshot::write(&compose.root, &snap)?;
     Ok(())
 }

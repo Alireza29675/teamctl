@@ -1088,3 +1088,260 @@ fn warn_e_quiet_silences_env() {
         "TEAMCTL_QUIET=1 must silence; stderr was: {clean}"
     );
 }
+
+// ── T-305: per-agent scope on up/down/reload ────────────────────────────
+//
+// `seed_two_projects` gives alpha {manager, dev} + beta {manager, dev}.
+// These exercise the CLI surface + selector resolution without tmux:
+// `reload --dry-run` for the force path, and the error/usage paths
+// (which short-circuit before the supervisor is ever touched).
+
+#[test]
+fn reload_dry_run_scoped_to_agent_forces_only_that_agent() {
+    // `reload <project> <agent>` force-restarts exactly that agent —
+    // the line is `(forced)`, not the diff path's `added`/`changed`.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+            "alpha",
+            "dev",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("reloaded · alpha:dev (forced) (dry run)"),
+        "force line for the scoped agent: {stdout}"
+    );
+    assert!(
+        !stdout.contains("alpha:manager"),
+        "must not touch the unscoped sibling: {stdout}"
+    );
+    assert!(
+        !stdout.contains("beta:"),
+        "must not touch other projects: {stdout}"
+    );
+}
+
+#[test]
+fn reload_dry_run_except_agent_forces_the_complement() {
+    // `reload <project> --except <agent>` force-restarts every agent
+    // in the project EXCEPT the named one.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+            "alpha",
+            "--except",
+            "dev",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("reloaded · alpha:manager (forced) (dry run)"),
+        "complement is forced: {stdout}"
+    );
+    assert!(
+        !stdout.contains("alpha:dev"),
+        "the excepted agent is left alone: {stdout}"
+    );
+    assert!(
+        !stdout.contains("beta:"),
+        "other projects untouched: {stdout}"
+    );
+}
+
+#[test]
+fn reload_project_only_keeps_the_unchanged_diff_path() {
+    // Back-compat pin: `<project>`-only reload (no agent selector) is
+    // the existing diff path — agents land as `added` (no prior
+    // snapshot), never force-restarted.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+            "alpha",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("added   · alpha:manager"), "got: {stdout}");
+    assert!(
+        !stdout.contains("(forced)"),
+        "project-only must not force-restart: {stdout}"
+    );
+}
+
+#[test]
+fn scoped_unknown_agent_errors_listing_valid_names() {
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+            "alpha",
+            "ghost",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "unknown agent must exit nonzero");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("ghost"), "names the bad input: {stderr}");
+    assert!(stderr.contains("manager"), "lists valid agents: {stderr}");
+    assert!(stderr.contains("dev"), "lists valid agents: {stderr}");
+}
+
+#[test]
+fn except_unknown_agent_also_errors() {
+    // A typo'd exclusion fails loudly rather than silently acting on
+    // every agent.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+            "alpha",
+            "--except",
+            "ghost",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("ghost"), "names the bad input: {stderr}");
+}
+
+#[test]
+fn positional_list_and_except_are_mutually_exclusive() {
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "down",
+            "alpha",
+            "dev",
+            "--except",
+            "manager",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "supplying both forms must be a usage error"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("cannot be used with"),
+        "clap conflict message: {stderr}"
+    );
+}
+
+#[test]
+fn except_requires_a_project() {
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "down",
+            "--except",
+            "dev",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "--except without a project is invalid"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("PROJECT"),
+        "clap names the missing required arg: {stderr}"
+    );
+}
+
+#[test]
+fn except_every_agent_reports_empty_scope() {
+    // Excepting everyone resolves to "act on nothing" — a graceful
+    // no-op line, not an error.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+            "alpha",
+            "--except",
+            "manager",
+            "--except",
+            "dev",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("no agents in scope for project alpha"),
+        "got: {stdout}"
+    );
+}
+
+#[test]
+fn help_documents_all_scope_levels_consistently() {
+    // Acceptance criterion: `--help` for each of up/down/reload
+    // documents no-arg = all projects, <project>, <project> <agent>…,
+    // and <project> --except <agent>….
+    for cmd in ["up", "down", "reload"] {
+        let out = Command::new(bin()).args([cmd, "--help"]).output().unwrap();
+        assert!(out.status.success(), "{cmd} --help failed");
+        let help = String::from_utf8(out.stdout).unwrap();
+        assert!(
+            help.contains("every project"),
+            "{cmd} --help missing all-projects form: {help}"
+        );
+        assert!(
+            help.contains("every agent in it"),
+            "{cmd} --help missing project-only form: {help}"
+        );
+        assert!(
+            help.contains("just those agents"),
+            "{cmd} --help missing positional-list form: {help}"
+        );
+        assert!(
+            help.contains("--except"),
+            "{cmd} --help missing --except form: {help}"
+        );
+    }
+}
