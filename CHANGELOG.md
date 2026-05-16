@@ -4,6 +4,31 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.8.5] — 2026-05-16
+
+### Added
+
+- `request_approval` gains multi-option interactive decisions: a new `options` parameter and a new `decided` status. A manager can offer the user a choice list (not just approve / deny) and read back which option was picked. Touches the `team-mcp` / `team-bot` / `team-core` approval schema. (#301)
+- `teamctl adjust` — a CLI shim that execs `claude /teamctl:adjust`, mirroring how `teamctl init` enters its interactive skill. (#248)
+- Interactive substrate shared by the `/teamctl:init` and `/teamctl:adjust` skills — a conversational layer the skills drive. (#247)
+- `teamctl init` pre-flight: a `.team/` guard so an existing team isn't clobbered, a dependency pre-flight check, and a Guided / Essentials / Blank mode picker. (#297)
+- Headless `claude` agents block interactive tools (`AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`) by default, so a headless agent can't stall on a prompt it can't receive. Thanks to outside contributor Hamed Fathi. (#246)
+
+### Changed
+
+- `teamctl ui` mailbox channel tab now prefixes each row with the channel name and sender, so cross-channel traffic is legible at a glance. (#251)
+- README "Start a team" now leads with `teamctl init` instead of the `claude` slash-command, and lists the Guided / Essentials / Blank picker options. (#239, #250)
+- `/teamctl:release` skill tightened to a shorter-is-better shape with major / minor / patch templates and a verify-handle thanks rule, per owner directive. (#234)
+
+### Fixed
+
+- cargo-dist linux release binaries no longer require `GLIBC_2.39`. The linux build runners are pinned to `ubuntu-22.04` (glibc 2.35), restoring the binary install path on Debian 12, Ubuntu 22.04, Proxmox, and most stable LTS Linux. (#296)
+- The installer and docs now reference the correct Claude Code plugin id `teamctl@teamctl` for `claude plugin update`, so the plugin auto-update path works instead of failing on an unrecognized plugin name. (#298)
+- `reply_to_user` rejects oversized text / caption at the MCP boundary instead of failing deeper in the bridge. (#293)
+- `team-bot` setup no longer fails on a just-edited compose file when run a second time — it reuses the parsed compose instead of re-reading from disk. (#245)
+- `team-bot` replies with a configuration hint when a voice note arrives but speech-to-text is unconfigured, instead of silently dropping it. (#237)
+- macOS CI purges pre-seeded rust stub shims before the toolchain install and pins the runner to `macos-14`, fixing a red `main` pipeline. (#285)
+
 ## [0.8.4] — 2026-05-12
 
 ### Removed
