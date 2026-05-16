@@ -24,12 +24,14 @@ Six beats, in order.
 
 The release body is the **most-screenshotted artifact** of any version cut. It lives on github.com long after you've forgotten it. Get it right.
 
-- **Shorter is better.** Owner directive (msg 2027): *"the shorter descriptions the better."* When in doubt, cut the second sentence. One short clause beats two competent ones. The reader's eye should glide; if it stumbles on density, you wrote too much.
-- **Match precedent rhythm.** Before surfacing, read the last shipped body side-by-side. Match: word count per paragraph (20-25 target for triplet ¶s), sentence count per paragraph (2 max, often 1), first-word-is-user-action (*"Send a voice note"* not *"`teamctl init` retired..."*), one-thought-per-bullet (no semicolon-stacked sub-facts). If your draft feels heavier on the tongue than the precedent, the rhythm is off.
+- **Shorter is better, and it compounds.** Owner directives (msg 2027: *"the shorter descriptions the better"*; msg 2759: *"we should have a tendency to write less than more"*). The body prints **in the terminal after `teamctl update`** and a user jumping several versions sees every body stacked. Verbosity accumulates. When in doubt, cut the second sentence; then cut the first. One short clause beats two competent ones.
+- **Size the body to the release, honestly.** A few bug fixes and a couple of small features is a few tight lines, not a triplet of paragraphs. Don't inflate a small release to look big. Owner (msg 2759): *"the release notes are really long for a few bug fixes and couple of small features."* If a change is not "what's new" worthy for someone running `teamctl update`, it does not go in the body at all — it lives only in `CHANGELOG.md`. The body is the curated headline surface; the changelog is the complete record. Cut to the changelog aggressively.
+- **Match precedent rhythm.** Before surfacing, read the last shipped body side-by-side. Match: word count per paragraph (20-25 target for triplet ¶s), sentence count per paragraph (2 max, often 1), one-thought-per-item. If your draft feels heavier on the tongue than the precedent, the rhythm is off. **Lead-shape changed as of v0.8.5** (owner directive, msg 2741): the precedent to match is v0.8.5 and later, not the single-word `**Verb.**` labels of v0.8.0–v0.8.4.
+- **Bold leads are short sentences, not labels.** Each emoji item opens with a bold short sentence (one to five words is plenty) that states the actual news, then plain text explains it. *"`teamctl init` grew guard rails."* not *"**Start.**"*. The forced single-word category label reads formulaic; a short sentence carries information. Owner directive (msg 2741): *"it's becoming lame that we put one word before every bullet point ... a very short sentence in bold, then explain the point."*
 - **Two screens, not five.** A whole body should fit roughly one phone scroll. Anything longer fails the screenshot test.
 - **Plain American English.** No marketing speak (*"unlock"*, *"empower"*, *"reimagine"*). Show what changed; trust the reader.
 - **One opener sentence is plenty.** *"teamctl learned three new tricks this release."* beats *"We're excited to announce..."*. A bridge sentence connects headline to body; one is enough.
-- **Verb headlines beat noun headlines (when you use a triplet).** *listen, look, attach* tells the reader what they can DO. *voice, files, focus* is fine but weaker.
+- **Verb headlines beat noun headlines (in the title triplet).** *listen, look, attach* tells the reader what they can DO. *voice, files, focus* is fine but weaker. This is about the GitHub release **title** only; the body's bold leads are short sentences (see the rail above), not the title's verbs.
 - **Emoji anchors.** One emoji per triplet paragraph or Tier 2 bullet. Used for scanability, not decoration.
 - **Cut engineering-only changes.** Test deflakes, CI hygiene, internal refactors don't land in the public body. They're in `CHANGELOG.md`.
 - **Em-dashes banned.** Use colons, semicolons, or a fresh sentence. The em-dash invites prose drift; release bodies are short on purpose.
@@ -52,30 +54,34 @@ Structure:
 ```
 <bridge sentence>
 
-<emoji> **Verb1.** <paragraph 1, 20-25 words, 2 sentences max, user-anchored>
+<emoji> **<short sentence stating the news, ~1-5 words>.** <paragraph 1, 20-25 words, 2 sentences max, user-anchored>
 
-<emoji> **Verb2.** <paragraph 2>
+<emoji> **<short sentence>.** <paragraph 2>
 
-<emoji> **Verb3.** <paragraph 3>
+<emoji> **<short sentence>.** <paragraph 3>
 
-And a few quiet wins underneath:
+And the quiet wins underneath:
 
-- <emoji> **<name>**: <one-thought clause>.
-- ... (3-5 bullets total)
+- <emoji> **<short sentence stating the win>.** <one-thought clause>.
+- ... (feature/improvement wins; bug fixes go in the grouped block below, not here)
+
+🐛 **Bug fixes.**
+- <terse one-line fix>.
+- ... (only if there are bug-class fixes worth surfacing; omit the block if none)
 
 🙏 Thanks to @<handle> for outside contributions.
 ```
 
-Title: `vX.Y.Z: <verb1>, <verb2>, <verb3>`. Em-dashes banned, so colon form.
+Title: `vX.Y.Z: <verb1>, <verb2>, <verb3>`. Em-dashes banned, so colon form. (Title verbs are independent of the body's bold-sentence leads.)
 
-Example: v0.8.0 release body (`listen, look, attach`).
+Example: v0.8.5 release body (`An early teamctl adjust is out.` / `The Linux binary installs on mainstream distros again.` / `teamctl init grew guard rails.`).
 
 Rules for picking the triplet:
 
-- Each verb must answer *"what can a user now do that they couldn't last release?"*
+- Each lead must answer *"what can a user now do, or what now works, that didn't last release?"*
 - If a change isn't user-facing, it doesn't make Tier 1.
-- Verbs in the headline match the bold-lead verbs in the body.
-- If you have more than three Tier-1 candidates, fold the weakest into Tier 2.
+- Title verbs summarize the three; they need not echo the body lead-sentences word-for-word.
+- If you have more than three Tier-1 candidates, fold the weakest into the quiet wins.
 - If you have fewer than three, switch to the bullets shape.
 
 ### Bullets shape (polish / patch releases)
@@ -87,9 +93,13 @@ Structure:
 ```
 <bridge sentence framing what the release is about>
 
-- <emoji> **<name>**: <one-thought clause>.
-- <emoji> **<name>**: <one-thought clause>.
-- ... (3-7 bullets total)
+- <emoji> **<short sentence stating the win>.** <one-thought clause>.
+- <emoji> **<short sentence stating the win>.** <one-thought clause>.
+- ... (feature/improvement wins; 3-7 total)
+
+🐛 **Bug fixes.**
+- <terse one-line fix>.
+- ... (only if there are bug-class fixes worth surfacing; omit if none)
 
 🙏 Thanks to @<handle> for outside contributions.
 ```
@@ -107,9 +117,9 @@ Structure:
 ```
 <X.Y.Z> fixes <what>.
 
-<emoji> **<Fix-name>.** <one-paragraph description: what was broken, what changed>.
+<emoji> **<short sentence naming the fix>.** <one-paragraph description: what was broken, what changed>.
 
-<emoji> <Companion-fix-name if any>. <short paragraph>.
+<emoji> **<companion-fix short sentence, if any>.** <short paragraph>.
 
 <one-line upgrade instruction if relevant>.
 
@@ -122,10 +132,14 @@ Example: v0.8.1 release body (single bash 3.2 hotfix on macOS).
 
 ## Tier 2 bullet rules (applies to triplet and bullets shapes)
 
-- One visual line per bullet. The colon prevents prose drift.
-- One thought per bullet, ideally **one short clause**. Cut the second sentence when in doubt. No semicolon-stacked sub-facts.
+- Each bullet opens with a **bold short sentence** stating the win, then a period, then a one-thought clause explaining it. Not a single-word label, not a colon.
+- One thought per bullet, ideally **one short clause** of explanation. Cut it entirely when the bold sentence already says everything. No semicolon-stacked sub-facts.
 - Backticks for command names and code identifiers.
-- 3-5 bullets is the sweet spot for triplet shape; 3-7 for bullets shape. More than that and you're back to engineering catalog.
+- 3-5 feature/improvement bullets is the sweet spot for triplet shape; 3-7 for bullets shape. More than that and you're back to engineering catalog.
+
+### Bug fixes are grouped, not itemized (owner directive, msg 2742)
+
+Bug-class fixes do not each get their own bold bullet. Collect them under a single `🐛 **Bug fixes.**` line with terse one-line sub-bullets, placed at the **end** of the wins (before the thanks line). Exception: a genuinely large, headline-worthy bug fix can stand as its own item or even a Tier-1 lead. Owner words: *"when it's a bug fix it should not have its own big bullet point unless it was a very big bug ... put one category of bugs and then add some bullet points there."* Each sub-bullet is one short line, no bold lead.
 
 ## What to cut
 
@@ -136,6 +150,7 @@ Most release notes include too much. The cuts matter as much as the keeps.
 - **Internal refactors.** Function renames, module splits, schema cleanups.
 - **Per-MCP-tool callouts when the tool is invisible to the user.** Users don't tool-shop; they use features.
 - **Stack changes that don't change what the user does.** New crates, vendored libs, build-system tweaks.
+- **Small docs / TUI polish on a small release.** A README tweak or a TUI nicety is real, but on a fixes-and-polish release it is not "what's new" for someone running `teamctl update`. Changelog-only. (v0.8.5 precedent: the README three-init-paths and TUI channel-tag wins were cut from the body to the changelog.)
 - **Known-broken features.** Either fix before cut, or note in a small "Known issues" line at the bottom. Never lead with them.
 
 These all belong in `CHANGELOG.md`, which is engineering's exhaustive surface. The release body is the **curated** surface.
@@ -161,7 +176,8 @@ Three common failure modes, and how to fix:
 
 - **"Feels shattered" / "doesn't flow".** Usually 5+ separate short paragraphs without grouping. Fix: collapse Tier 2 into the bulleted block; the triplet stays as three paragraphs but the rest folds.
 - **"Reads like a changelog".** You included every PR. Cut to Tier 1 plus 5 bullets max. The rest goes in `CHANGELOG.md`.
-- **"Not nice" / "we had a convention".** Structure right, rhythm wrong. Run the side-by-side diff against the last shipped body: word count per paragraph, sentence count, bullet density, first-word-is-user-action. If your draft feels heavier on the tongue than the precedent, the rhythm is off.
+- **"Not nice" / "we had a convention".** Structure right, rhythm wrong. Run the side-by-side diff against the last shipped body (v0.8.5 or later): word count per paragraph, sentence count, bullet density, bold-lead-is-a-short-sentence. If your draft feels heavier on the tongue than the precedent, the rhythm is off.
+- **"It's becoming lame" / formulaic.** You used single-word `**Verb.**` labels instead of short-sentence bold leads. Rewrite each lead as a 1-5 word sentence that states the actual news, then explain.
 
 ## Pruning
 
