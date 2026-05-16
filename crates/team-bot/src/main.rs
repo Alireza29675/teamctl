@@ -503,6 +503,100 @@ fn approval_outcome_line(approved: bool, approver_first_name: &str) -> String {
     format!("{verb} by {approver_first_name}")
 }
 
+/// #299: outcome line for a chosen multi-option decision. Names the
+/// picked label so the card reads as a record of what was decided.
+fn decision_outcome_line(chosen_label: &str, approver_first_name: &str) -> String {
+    format!("✅ {chosen_label} — chosen by {approver_first_name}")
+}
+
+/// #299: outcome line for the implicit Cancel. Distinct glyph + verb so
+/// the operator (and the scrollback) can tell a cancel from a choice.
+fn cancel_outcome_line(approver_first_name: &str) -> String {
+    format!("🚫 Cancelled by {approver_first_name}")
+}
+
+/// Parsed inline-button tap. `Approve`/`Deny` are the binary
+/// back-compat card; `Opt(idx)`/`Cancel` are the #299 multi-option card.
+#[derive(Debug, PartialEq, Eq)]
+enum CbAction {
+    Approve,
+    Deny,
+    Opt(usize),
+    Cancel,
+}
+
+/// Parse `callback_data` into `(approval_id, action)`. Formats:
+/// `approve:{id}` / `deny:{id}` (binary), `opt:{id}:{idx}` /
+/// `cancel:{id}` (multi-option). Returns `None` on anything malformed or
+/// carrying trailing junk — `handle_callback` then ignores the tap, same
+/// as the prior behavior for unrecognized data.
+fn parse_callback(data: &str) -> Option<(i64, CbAction)> {
+    let mut it = data.split(':');
+    let verb = it.next()?;
+    let id: i64 = it.next()?.parse().ok()?;
+    let action = match verb {
+        "approve" => CbAction::Approve,
+        "deny" => CbAction::Deny,
+        "cancel" => CbAction::Cancel,
+        "opt" => CbAction::Opt(it.next()?.parse().ok()?),
+        _ => return None,
+    };
+    if it.next().is_some() {
+        return None;
+    }
+    Some((id, action))
+}
+
+/// Decode the `options_json` column into `(label, value)` pairs. NULL or
+/// malformed JSON yields empty → the card falls back to the binary
+/// Approve/Deny render rather than failing the send (defensive: a
+/// corrupt row should degrade, not wedge the outbound loop).
+fn decode_options(options_json: Option<&str>) -> Vec<(String, String)> {
+    let Some(raw) = options_json else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<serde_json::Value>>(raw)
+        .map(|arr| {
+            arr.into_iter()
+                .filter_map(|o| {
+                    Some((
+                        o.get("label")?.as_str()?.to_string(),
+                        o.get("value")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Build the inline keyboard for an approval card. Empty `options` → the
+/// binary Approve/Deny card (back-compat, byte-identical to the prior
+/// render). Non-empty → one button per option (one per row; labels can
+/// be long) followed by a Cancel row.
+fn approval_keyboard(id: i64, options: &[(String, String)]) -> InlineKeyboardMarkup {
+    if options.is_empty() {
+        return InlineKeyboardMarkup::new(vec![vec![
+            InlineKeyboardButton::callback("Approve", format!("approve:{id}")),
+            InlineKeyboardButton::callback("Deny", format!("deny:{id}")),
+        ]]);
+    }
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = options
+        .iter()
+        .enumerate()
+        .map(|(i, (label, _))| {
+            vec![InlineKeyboardButton::callback(
+                label.clone(),
+                format!("opt:{id}:{i}"),
+            )]
+        })
+        .collect();
+    rows.push(vec![InlineKeyboardButton::callback(
+        "Cancel",
+        format!("cancel:{id}"),
+    )]);
+    InlineKeyboardMarkup::new(rows)
+}
+
 async fn handle_callback(bot: Bot, q: CallbackQuery, state: Arc<State>) -> ResponseResult<()> {
     let chat_id = q.message.as_ref().map(|m| m.chat().id.0).unwrap_or(0);
     if !state.is_authorized(chat_id) {
@@ -511,13 +605,62 @@ async fn handle_callback(bot: Bot, q: CallbackQuery, state: Arc<State>) -> Respo
     let Some(data) = q.data.clone() else {
         return Ok(());
     };
-    let Some((verb, id_str)) = data.split_once(':') else {
+    let Some((id, action)) = parse_callback(&data) else {
         return Ok(());
     };
-    let Ok(id) = id_str.parse::<i64>() else {
-        return Ok(());
+
+    // Resolve the tap to (terminal status, chosen value, outcome line,
+    // toast glyph). `Opt` needs the immutable `options_json` from the row
+    // to map idx→{label,value}; read it before the decision UPDATE (the
+    // atomic WHERE status='pending' still guards against a concurrent
+    // tap deciding between this read and the write).
+    let (status, value, outcome, toast): (&str, Option<String>, String, String) = match action {
+        CbAction::Approve => (
+            "approved",
+            None,
+            approval_outcome_line(true, &q.from.first_name),
+            format!("✅ #{id}"),
+        ),
+        CbAction::Deny => (
+            "denied",
+            None,
+            approval_outcome_line(false, &q.from.first_name),
+            format!("❌ #{id}"),
+        ),
+        CbAction::Cancel => (
+            "denied",
+            None,
+            cancel_outcome_line(&q.from.first_name),
+            format!("🚫 #{id}"),
+        ),
+        CbAction::Opt(idx) => {
+            let opts = {
+                let c = state.conn.lock().await;
+                c.query_row(
+                    "SELECT options_json FROM approvals WHERE id=?1",
+                    params![id],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten()
+            };
+            let decoded = decode_options(opts.as_deref());
+            let Some((label, val)) = decoded.get(idx).cloned() else {
+                // Out-of-range / corrupt options: don't decide, just
+                // toast. The card stays tappable for a valid option.
+                bot.answer_callback_query(q.id)
+                    .text(format!("#{id} option unavailable"))
+                    .await?;
+                return Ok(());
+            };
+            (
+                "decided",
+                Some(val),
+                decision_outcome_line(&label, &q.from.first_name),
+                format!("✅ #{id}"),
+            )
+        }
     };
-    let approved = verb == "approve";
 
     // Atomic decision: only update if still pending. Returned row count tells
     // us whether this tap was the live decision or a stale duplicate.
@@ -531,9 +674,9 @@ async fn handle_callback(bot: Bot, q: CallbackQuery, state: Arc<State>) -> Respo
         let c = state.conn.lock().await;
         let n = c
             .execute(
-                "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='user:telegram'
-                 WHERE id=?2 AND status='pending'",
-                params![if approved { "approved" } else { "denied" }, id],
+                "UPDATE approvals SET status=?1, decided_at=strftime('%s','now'), decided_by='user:telegram', decision_value=?2
+                 WHERE id=?3 AND status='pending'",
+                params![status, value, id],
             )
             .map(|n| n > 0)
             .unwrap_or(false);
@@ -562,7 +705,6 @@ async fn handle_callback(bot: Bot, q: CallbackQuery, state: Arc<State>) -> Respo
         let chat = msg.chat().id;
         let mid = msg.id();
         let original = msg.regular_message().and_then(|m| m.text()).unwrap_or("");
-        let outcome = approval_outcome_line(approved, &q.from.first_name);
         let new_text = if original.is_empty() {
             outcome.clone()
         } else {
@@ -575,9 +717,7 @@ async fn handle_callback(bot: Bot, q: CallbackQuery, state: Arc<State>) -> Respo
             .await;
     }
 
-    bot.answer_callback_query(q.id)
-        .text(format!("{} #{id}", if approved { "✅" } else { "❌" }))
-        .await?;
+    bot.answer_callback_query(q.id).text(toast).await?;
     Ok(())
 }
 
@@ -596,19 +736,20 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
         // Project-scope filter only — manager-level routing happens in Rust
         // below so that scoped bots only surface approvals filed by agents
         // that roll up to *their* manager (T-027 single-channel).
-        let approvals: Vec<(i64, String, String, String)> = {
+        type ApprovalRow = (i64, String, String, String, Option<String>);
+        let approvals: Vec<ApprovalRow> = {
             let c = state.conn.lock().await;
-            let rows: Vec<(i64, String, String, String)> = match state.manager_project() {
+            let rows: Vec<ApprovalRow> = match state.manager_project() {
                 Some(project) => {
                     let mut stmt = c
                         .prepare(
-                            "SELECT id, agent_id, action, summary FROM approvals
+                            "SELECT id, agent_id, action, summary, options_json FROM approvals
                              WHERE status='pending' AND id > ?1 AND project_id = ?2
                              ORDER BY id",
                         )
                         .unwrap();
                     stmt.query_map(params![last_approval_id, project], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
                     })
                     .unwrap()
                     .flatten()
@@ -617,12 +758,12 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
                 None => {
                     let mut stmt = c
                         .prepare(
-                            "SELECT id, agent_id, action, summary FROM approvals
+                            "SELECT id, agent_id, action, summary, options_json FROM approvals
                              WHERE status='pending' AND id > ?1 ORDER BY id",
                         )
                         .unwrap();
                     stmt.query_map(params![last_approval_id], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
                     })
                     .unwrap()
                     .flatten()
@@ -631,7 +772,7 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
             };
             rows
         };
-        for (id, agent, action, summary) in approvals {
+        for (id, agent, action, summary, options_json) in approvals {
             last_approval_id = last_approval_id.max(id);
             // T-027: when scoped to a manager, only surface approvals filed by
             // agents that report up to *this* bot's manager. With a manager
@@ -644,10 +785,10 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
             if !route_ok {
                 continue;
             }
-            let kb = InlineKeyboardMarkup::new(vec![vec![
-                InlineKeyboardButton::callback("Approve", format!("approve:{id}")),
-                InlineKeyboardButton::callback("Deny", format!("deny:{id}")),
-            ]]);
+            // #299: NULL options_json → binary Approve/Deny (byte-
+            // identical to the prior render); a decoded option list →
+            // one button per option + an implicit Cancel.
+            let kb = approval_keyboard(id, &decode_options(options_json.as_deref()));
             // T-140: parity with /pending — escape interpolated agent
             // payloads even when today's `[a-z0-9_-]:[a-z0-9_-]` schema
             // makes `<>&` unreachable. Defense-in-depth: the renderer
@@ -1981,6 +2122,119 @@ mod tests {
         assert_eq!(
             approval_outcome_line(true, "علیرضا"),
             "✅ Approved by علیرضا",
+        );
+    }
+
+    // ── #299 multi-option decision helpers ───────────────────────
+
+    #[test]
+    fn decision_and_cancel_outcome_lines_name_the_chooser() {
+        assert_eq!(
+            decision_outcome_line("Ship it", "Hamed"),
+            "✅ Ship it — chosen by Hamed",
+        );
+        assert_eq!(cancel_outcome_line("Hamed"), "🚫 Cancelled by Hamed");
+        // Unicode chooser parity with the binary outcome-line test.
+        assert_eq!(
+            decision_outcome_line("گزینه", "علیرضا"),
+            "✅ گزینه — chosen by علیرضا",
+        );
+    }
+
+    #[test]
+    fn parse_callback_accepts_all_four_verbs() {
+        assert_eq!(parse_callback("approve:7"), Some((7, CbAction::Approve)));
+        assert_eq!(parse_callback("deny:7"), Some((7, CbAction::Deny)));
+        assert_eq!(parse_callback("cancel:42"), Some((42, CbAction::Cancel)));
+        assert_eq!(parse_callback("opt:42:2"), Some((42, CbAction::Opt(2))));
+    }
+
+    #[test]
+    fn parse_callback_rejects_malformed() {
+        // No colon, unparseable id, unknown verb, bad opt idx, and
+        // trailing junk all return None — handle_callback then ignores
+        // the tap, preserving the prior unknown-data behavior.
+        assert_eq!(parse_callback("approve"), None);
+        assert_eq!(parse_callback("approve:x"), None);
+        assert_eq!(parse_callback("frobnicate:7"), None);
+        assert_eq!(parse_callback("opt:7:notanum"), None);
+        assert_eq!(parse_callback("opt:7"), None);
+        assert_eq!(parse_callback("approve:7:8"), None);
+        assert_eq!(parse_callback("cancel:7:8"), None);
+    }
+
+    #[test]
+    fn decode_options_handles_null_and_garbage() {
+        assert!(decode_options(None).is_empty());
+        assert!(decode_options(Some("not json")).is_empty());
+        // Entries missing label or value are filtered, not fatal.
+        assert_eq!(
+            decode_options(Some(r#"[{"label":"A","value":"a"},{"value":"b"}]"#)),
+            vec![("A".to_string(), "a".to_string())],
+        );
+        assert_eq!(
+            decode_options(Some(
+                r#"[{"label":"Yes","value":"y"},{"label":"No","value":"n"}]"#
+            )),
+            vec![
+                ("Yes".to_string(), "y".to_string()),
+                ("No".to_string(), "n".to_string()),
+            ],
+        );
+    }
+
+    /// Pull `(text, callback_data)` out of a keyboard for assertions.
+    fn kb_pairs(kb: &InlineKeyboardMarkup) -> Vec<(String, String)> {
+        use teloxide::types::InlineKeyboardButtonKind::CallbackData;
+        kb.inline_keyboard
+            .iter()
+            .flatten()
+            .map(|b| {
+                let data = match &b.kind {
+                    CallbackData(d) => d.clone(),
+                    _ => panic!("expected callback button"),
+                };
+                (b.text.clone(), data)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn approval_keyboard_empty_options_is_binary_back_compat() {
+        // The binary card must stay byte-identical to the pre-#299
+        // render: exactly Approve/Deny with `approve:{id}`/`deny:{id}`.
+        let kb = approval_keyboard(7, &[]);
+        assert_eq!(
+            kb_pairs(&kb),
+            vec![
+                ("Approve".to_string(), "approve:7".to_string()),
+                ("Deny".to_string(), "deny:7".to_string()),
+            ],
+        );
+        assert_eq!(kb.inline_keyboard.len(), 1, "binary is a single row");
+    }
+
+    #[test]
+    fn approval_keyboard_multi_renders_options_then_cancel() {
+        let opts = vec![
+            ("Ship".to_string(), "ship".to_string()),
+            ("Hold".to_string(), "hold".to_string()),
+            ("Rework".to_string(), "rework".to_string()),
+        ];
+        let kb = approval_keyboard(9, &opts);
+        assert_eq!(
+            kb_pairs(&kb),
+            vec![
+                ("Ship".to_string(), "opt:9:0".to_string()),
+                ("Hold".to_string(), "opt:9:1".to_string()),
+                ("Rework".to_string(), "opt:9:2".to_string()),
+                ("Cancel".to_string(), "cancel:9".to_string()),
+            ],
+        );
+        assert_eq!(
+            kb.inline_keyboard.len(),
+            4,
+            "one row per option + a Cancel row"
         );
     }
 

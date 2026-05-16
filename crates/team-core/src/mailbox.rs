@@ -161,6 +161,14 @@ pub fn ensure(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // bypassing the stub. Set by the bot when an operator prefixes a
         // message with `/readnow `.
         "ALTER TABLE messages ADD COLUMN delivery_mode TEXT",
+        // #299: multi-option interactive decisions. `options_json` is a
+        // JSON array of `{label,value}` the bot renders as N inline
+        // buttons; NULL means the binary Approve/Deny back-compat path
+        // (existing callers never set options). `decision_value` holds
+        // the chosen option's `value` once the operator taps; NULL for
+        // binary decisions and for Cancel (status carries those).
+        "ALTER TABLE approvals ADD COLUMN options_json TEXT",
+        "ALTER TABLE approvals ADD COLUMN decision_value TEXT",
     ];
     for stmt in migrations {
         if let Err(e) = conn.execute(stmt, []) {
