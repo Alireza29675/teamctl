@@ -24,7 +24,8 @@ Six beats, in order.
 
 The release body is the **most-screenshotted artifact** of any version cut. It lives on github.com long after you've forgotten it. Get it right.
 
-- **Shorter is better.** Owner directive (msg 2027): *"the shorter descriptions the better."* When in doubt, cut the second sentence. One short clause beats two competent ones. The reader's eye should glide; if it stumbles on density, you wrote too much.
+- **Shorter is better, and it compounds.** Owner directives (msg 2027: *"the shorter descriptions the better"*; msg 2759: *"we should have a tendency to write less than more"*). The body prints **in the terminal after `teamctl update`** and a user jumping several versions sees every body stacked. Verbosity accumulates. When in doubt, cut the second sentence; then cut the first. One short clause beats two competent ones.
+- **Size the body to the release, honestly.** A few bug fixes and a couple of small features is a few tight lines, not a triplet of paragraphs. Don't inflate a small release to look big. Owner (msg 2759): *"the release notes are really long for a few bug fixes and couple of small features."* If a change is not "what's new" worthy for someone running `teamctl update`, it does not go in the body at all — it lives only in `CHANGELOG.md`. The body is the curated headline surface; the changelog is the complete record. Cut to the changelog aggressively.
 - **Match precedent rhythm.** Before surfacing, read the last shipped body side-by-side. Match: word count per paragraph (20-25 target for triplet ¶s), sentence count per paragraph (2 max, often 1), one-thought-per-item. If your draft feels heavier on the tongue than the precedent, the rhythm is off. **Lead-shape changed as of v0.8.5** (owner directive, msg 2741): the precedent to match is v0.8.5 and later, not the single-word `**Verb.**` labels of v0.8.0–v0.8.4.
 - **Bold leads are short sentences, not labels.** Each emoji item opens with a bold short sentence (one to five words is plenty) that states the actual news, then plain text explains it. *"`teamctl init` grew guard rails."* not *"**Start.**"*. The forced single-word category label reads formulaic; a short sentence carries information. Owner directive (msg 2741): *"it's becoming lame that we put one word before every bullet point ... a very short sentence in bold, then explain the point."*
 - **Two screens, not five.** A whole body should fit roughly one phone scroll. Anything longer fails the screenshot test.
@@ -149,6 +150,7 @@ Most release notes include too much. The cuts matter as much as the keeps.
 - **Internal refactors.** Function renames, module splits, schema cleanups.
 - **Per-MCP-tool callouts when the tool is invisible to the user.** Users don't tool-shop; they use features.
 - **Stack changes that don't change what the user does.** New crates, vendored libs, build-system tweaks.
+- **Small docs / TUI polish on a small release.** A README tweak or a TUI nicety is real, but on a fixes-and-polish release it is not "what's new" for someone running `teamctl update`. Changelog-only. (v0.8.5 precedent: the README three-init-paths and TUI channel-tag wins were cut from the body to the changelog.)
 - **Known-broken features.** Either fix before cut, or note in a small "Known issues" line at the bottom. Never lead with them.
 
 These all belong in `CHANGELOG.md`, which is engineering's exhaustive surface. The release body is the **curated** surface.
