@@ -526,7 +526,6 @@ impl Store {
 
     /// Insert a new pending approval request. Returns the id.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub fn request_approval(
         &self,
         project: &str,
