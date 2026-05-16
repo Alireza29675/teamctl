@@ -1,5 +1,6 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
+assertion_line: 406
 expression: s
 ---
 ┌AGENTS────────────────────┐┌DETAIL · writing:dev1─────────────────────────────────────────────────────────────────────┐
@@ -23,7 +24,7 @@ expression: s
 │                   │                                                                              │                   │
 │                   │                                                                              │                   │
 │                   │-- INSERT --                                                                  │                   │
-│                   │Alt+Enter send · Esc Esc cancel · Tab attach                                  │                   │
+│                   │Esc Enter send · Esc Esc cancel · Tab attach                                  │                   │
 │                   └──────────────────────────────────────────────────────────────────────────────┘                   │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
