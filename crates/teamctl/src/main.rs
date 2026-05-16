@@ -1,9 +1,38 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 mod cmd;
+
+/// Shared project + per-agent scope for `up` / `down` / `reload`
+/// (T-305). Flattened into each so `--help` documents the same four
+/// scope levels everywhere. clap enforces: the positional agent list
+/// and `--except` are mutually exclusive, and both require `<PROJECT>`.
+#[derive(Args, Debug)]
+struct AgentScope {
+    /// Project to scope to — matches `project.id` or the project
+    /// filename without `.yaml`. Omit to act on every project.
+    #[arg(value_name = "PROJECT")]
+    project: Option<String>,
+
+    /// Restrict the action to these agents within <PROJECT>. The rest
+    /// of the project is left alone. Requires <PROJECT>; mutually
+    /// exclusive with --except.
+    #[arg(value_name = "AGENT", requires = "project")]
+    agents: Vec<String>,
+
+    /// Act on every agent in <PROJECT> EXCEPT the named one(s).
+    /// Repeatable. Requires <PROJECT>; mutually exclusive with the
+    /// positional agent list.
+    #[arg(
+        long = "except",
+        value_name = "AGENT",
+        requires = "project",
+        conflicts_with = "agents"
+    )]
+    except: Vec<String>,
+}
 
 #[derive(Parser)]
 #[command(
@@ -76,31 +105,40 @@ enum Command {
     // ── Lifecycle ────────────────────────────────────────────────────
     /// Parse the compose tree and check invariants.
     Validate,
-    /// Render artifacts and start every agent's tmux session.
+    /// Render artifacts and start agents' tmux sessions.
+    ///
+    /// Scope levels: no args → every project · `<project>` → every
+    /// agent in it · `<project> <agent>…` → just those agents ·
+    /// `<project> --except <agent>…` → all but those. Already-running
+    /// agents are a no-op.
     Up {
-        /// Optional project to scope the operation to (matches
-        /// `project.id` or the project filename without `.yaml`). When
-        /// omitted, operates on every project. Scoped runs skip the
-        /// cross-project DB rewrite and merge just the named project's
-        /// per-agent entries into `applied.json`, leaving other
-        /// projects' last-applied state untouched.
-        #[arg(value_name = "PROJECT")]
-        project: Option<String>,
+        #[command(flatten)]
+        scope: AgentScope,
     },
-    /// Stop every agent's tmux session. State is preserved.
+    /// Stop agents' tmux sessions. State is preserved.
+    ///
+    /// Scope levels: no args → every project · `<project>` → every
+    /// agent in it · `<project> <agent>…` → just those agents ·
+    /// `<project> --except <agent>…` → all but those.
     Down {
-        #[arg(value_name = "PROJECT")]
-        project: Option<String>,
+        #[command(flatten)]
+        scope: AgentScope,
     },
-    /// Apply compose changes. Restarts changed agents only.
+    /// Apply compose changes. Unscoped: restarts changed agents only.
+    ///
+    /// Scope levels: no args → every project · `<project>` → every
+    /// agent in it · `<project> <agent>…` → just those agents ·
+    /// `<project> --except <agent>…` → all but those. A per-agent
+    /// scope FORCE-restarts the selected agents even if their config
+    /// is unchanged; unscoped reload keeps the changed-only behavior.
     Reload {
         /// Print the reload plan without rendering, registering, or
         /// touching any agent. Same per-line format as a real reload,
         /// annotated with `(dry run)`.
         #[arg(long)]
         dry_run: bool,
-        #[arg(value_name = "PROJECT")]
-        project: Option<String>,
+        #[command(flatten)]
+        scope: AgentScope,
     },
 
     // ── Inspection ───────────────────────────────────────────────────
@@ -402,10 +440,17 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Validate => cmd::validate::run(&root),
-        Command::Up { project } => cmd::up::run(&root, project.as_deref()),
-        Command::Down { project } => cmd::down::run(&root, project.as_deref()),
-        Command::Reload { dry_run, project } => {
-            cmd::reload::run(&root, dry_run, project.as_deref())
+        Command::Up { scope } => {
+            let sel = cmd::agent_filter::AgentSelector::from_args(scope.agents, scope.except);
+            cmd::up::run(&root, scope.project.as_deref(), &sel)
+        }
+        Command::Down { scope } => {
+            let sel = cmd::agent_filter::AgentSelector::from_args(scope.agents, scope.except);
+            cmd::down::run(&root, scope.project.as_deref(), &sel)
+        }
+        Command::Reload { dry_run, scope } => {
+            let sel = cmd::agent_filter::AgentSelector::from_args(scope.agents, scope.except);
+            cmd::reload::run(&root, dry_run, scope.project.as_deref(), &sel)
         }
         Command::Ps => cmd::status::run(&root),
         Command::Logs { target } => cmd::logs::run(&root, &target),

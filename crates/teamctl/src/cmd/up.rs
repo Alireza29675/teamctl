@@ -8,9 +8,11 @@ use team_core::render::{
     claude_settings_path, env_path, mcp_path, render_agent, render_claude_settings,
     write_role_prompt_concat,
 };
-use team_core::supervisor::{AgentSpec, Supervisor, TmuxSupervisor};
+use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
-pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
+use super::agent_filter::AgentSelector;
+
+pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()> {
     let compose = super::load(root)?;
     super::update_check::maybe_print_banner(&compose.root);
     let errs = team_core::validate::validate(&compose);
@@ -23,6 +25,14 @@ pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
     let scoped = project
         .map(|name| super::project_filter::resolve(&compose, name))
         .transpose()?;
+    // Per-agent target set (T-305). `None` => no agent-level filter
+    // (no-arg / `<project>`-only contracts, untouched). Only reached
+    // when `scoped` is `Some` — clap requires a project for the
+    // selector forms.
+    let targets = match scoped.as_deref() {
+        Some(id) => super::agent_filter::resolve(&compose, id, sel)?,
+        None => None,
+    };
 
     // Per T-133: scoped runs skip cross-project work — wrapper write,
     // DB-side projects/agents/acls/channels rewrite, snapshot rewrite
@@ -48,7 +58,20 @@ pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
         if scoped.as_deref().is_some_and(|id| id != h.project) {
             continue;
         }
+        if targets.as_ref().is_some_and(|t| !t.contains(h.agent)) {
+            continue;
+        }
         let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+        // In a per-agent scope the operator named this agent on the
+        // command line, so an already-running session is worth calling
+        // out explicitly rather than silently. `up` stays idempotent
+        // (sup.up() is a no-op for a running session) — this only adds
+        // a clearer line, never an error.
+        if targets.is_some() && matches!(sup.state(&spec)?, AgentState::Running) {
+            println!("up · {} (already running)", h.id());
+            touched += 1;
+            continue;
+        }
         sup.up(&spec)?;
         println!("up · {}", h.id());
         touched += 1;
@@ -60,11 +83,22 @@ pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
     let team_bot = super::bot::team_bot_bin();
     source_dotenv_into_process(&compose.root);
     for spec in super::bot::bot_specs(&compose) {
+        // Project guard preserved verbatim from the pre-T-305 path.
+        let split = spec.manager.split_once(':');
         if scoped
             .as_deref()
-            .is_some_and(|id| spec.manager.split_once(':').map(|(p, _)| p) != Some(id))
+            .is_some_and(|id| split.map(|(p, _)| p) != Some(id))
         {
             continue;
+        }
+        // A bot's lifecycle follows its manager agent: in a per-agent
+        // scope, skip the bot unless its manager is targeted.
+        // `targets` is `Some` only when `scoped` is `Some`, so the
+        // guard above has already pinned `split` to the in-scope pair.
+        if let Some(t) = &targets {
+            if !t.contains(split.map(|(_, a)| a).unwrap_or("")) {
+                continue;
+            }
         }
         match super::bot::up_one(&spec, &team_bot, &compose.root) {
             Ok(true) => {
@@ -77,7 +111,7 @@ pub fn run(root: &Path, project: Option<&str>) -> Result<()> {
     }
 
     if let (Some(id), 0) = (scoped.as_deref(), touched) {
-        println!("no agents in project {id}.");
+        println!("no agents in scope for project {id}.");
     }
 
     // Persist the applied-state snapshot so a reload immediately
