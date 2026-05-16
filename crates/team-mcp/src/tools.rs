@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::time::sleep;
 
-use crate::store::Store;
+use crate::store::{ApprovalStatus, Store};
 use std::path::PathBuf;
 use team_core::attachments::Scanner;
 use team_core::compose::Attachments;
@@ -212,7 +212,7 @@ pub fn schema() -> Value {
         },
         {
             "name": "request_approval",
-            "description": "Request human approval for a brand-sensitive action. Blocks until approved/denied/expired/undeliverable (long-poll). Use before any tool call that publishes, deploys, pays, or sends externally. Terminal `undeliverable` means the prompt was never marked delivered to a human surface — distinct from `expired` (delivered but no decision in time).",
+            "description": "Request a human decision. Binary by default (Approve/Deny); pass `options` for a multi-choice decision rendered as tappable buttons with an implicit Cancel. Blocks until decided/denied/expired/undeliverable (long-poll). Use before any tool call that publishes, deploys, pays, or sends externally, or whenever you'd otherwise ask the operator to pick between named alternatives. Response carries `status` plus, for multi-choice, the chosen `value`; free text the operator types around the decision reaches you separately via your normal inbox. Terminal `undeliverable` means the prompt was never marked delivered to a human surface — distinct from `expired` (delivered but no decision in time).",
             "inputSchema": {
                 "type": "object",
                 "required": ["action", "summary"],
@@ -221,6 +221,19 @@ pub fn schema() -> Value {
                     "scope_tag":  { "type": "string", "description": "Optional narrower tag for auto-approval matching." },
                     "summary":    { "type": "string" },
                     "payload":    { "type": "object" },
+                    "options": {
+                        "type": "array",
+                        "description": "Optional. Labeled choices for a multi-option decision. Omit for the binary Approve/Deny card. Keep `label` terse (it's a Telegram button); put any richer context in `value`, which is what comes back to you. An implicit Cancel is always added — don't include one.",
+                        "items": {
+                            "type": "object",
+                            "required": ["label", "value"],
+                            "properties": {
+                                "label": { "type": "string", "description": "Short button text the operator taps." },
+                                "value": { "type": "string", "description": "Returned to you verbatim as `value` when this option is chosen." }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
                     "ttl_seconds":{ "type": "integer", "minimum": 30, "maximum": 3600, "default": 900 },
                     "wait":       { "type": "boolean", "default": true, "description": "When false, return immediately after inserting the row (status=pending, delivered_at=null). Useful for diagnostics and non-blocking flows." }
                 },
@@ -1135,6 +1148,18 @@ struct ApprovalArgs {
     ttl_seconds: u64,
     #[serde(default = "default_approval_wait")]
     wait: bool,
+    /// #299: labeled options for a multi-choice decision. When absent the
+    /// prompt renders as the binary Approve/Deny card (back-compat). When
+    /// present the bot renders one button per option plus an implicit
+    /// Cancel; the chosen `value` comes back to the agent.
+    #[serde(default)]
+    options: Option<Vec<ApprovalOption>>,
+}
+
+#[derive(Deserialize)]
+struct ApprovalOption {
+    label: String,
+    value: String,
 }
 fn default_approval_ttl() -> u64 {
     900
@@ -1146,6 +1171,21 @@ fn default_approval_wait() -> bool {
 async fn request_approval(ctx: &Ctx, args: Value) -> Result<Value, String> {
     let a: ApprovalArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
     let payload_str = serde_json::to_string(&a.payload).unwrap_or_else(|_| "{}".into());
+    // Serialize options to the `options_json` column the bot reads to
+    // render N buttons. `None` (binary callers) leaves the column NULL →
+    // the bot takes the Approve/Deny back-compat path.
+    let options_json = match &a.options {
+        Some(opts) if !opts.is_empty() => Some(
+            serde_json::to_string(
+                &opts
+                    .iter()
+                    .map(|o| json!({ "label": o.label, "value": o.value }))
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|e| e.to_string())?,
+        ),
+        _ => None,
+    };
     let id = ctx
         .store
         .request_approval(
@@ -1156,16 +1196,22 @@ async fn request_approval(ctx: &Ctx, args: Value) -> Result<Value, String> {
             &a.summary,
             &payload_str,
             a.ttl_seconds as f64,
+            options_json.as_deref(),
         )
         .map_err(|e| e.to_string())?;
 
     if !a.wait {
-        let (status, note, delivered_at) =
-            ctx.store.approval_status(id).map_err(|e| e.to_string())?;
+        let ApprovalStatus {
+            status,
+            note,
+            value,
+            delivered_at,
+        } = ctx.store.approval_status(id).map_err(|e| e.to_string())?;
         return Ok(content_json(&json!({
             "id": id,
             "status": status,
             "note": note,
+            "value": value,
             "delivered_at": delivered_at,
         })));
     }
@@ -1174,25 +1220,35 @@ async fn request_approval(ctx: &Ctx, args: Value) -> Result<Value, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(a.ttl_seconds);
     loop {
         let _ = ctx.store.expire_stale_approvals();
-        let (status, note, delivered_at) =
-            ctx.store.approval_status(id).map_err(|e| e.to_string())?;
+        let ApprovalStatus {
+            status,
+            note,
+            value,
+            delivered_at,
+        } = ctx.store.approval_status(id).map_err(|e| e.to_string())?;
         if status != "pending" {
             return Ok(content_json(&json!({
                 "id": id,
                 "status": status,
                 "note": note,
+                "value": value,
                 "delivered_at": delivered_at,
             })));
         }
         if std::time::Instant::now() >= deadline {
             // Force-expire one last time.
             let _ = ctx.store.expire_stale_approvals();
-            let (status, note, delivered_at) =
-                ctx.store.approval_status(id).map_err(|e| e.to_string())?;
+            let ApprovalStatus {
+                status,
+                note,
+                value,
+                delivered_at,
+            } = ctx.store.approval_status(id).map_err(|e| e.to_string())?;
             return Ok(content_json(&json!({
                 "id": id,
                 "status": status,
                 "note": note,
+                "value": value,
                 "delivered_at": delivered_at,
             })));
         }
@@ -2091,6 +2147,84 @@ mod tests {
         assert!(
             err.contains("path") || err.contains("missing"),
             "missing required field error: {err}"
+        );
+    }
+
+    // ── #299 multi-option request_approval ───────────────────────
+
+    fn approval_options_json(store: &Store, id: i64) -> Option<String> {
+        let conn = store.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT options_json FROM approvals WHERE id=?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn request_approval_binary_is_unchanged() {
+        // No `options` → options_json NULL (bot renders Approve/Deny)
+        // and the response carries a null `value`. Pins back-compat.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = request_approval(
+            &ctx,
+            json!({ "action": "deploy", "summary": "ship it?", "wait": false }),
+        )
+        .await
+        .unwrap();
+        let sc = &resp["structuredContent"];
+        assert_eq!(sc["status"], "pending");
+        assert!(sc["value"].is_null(), "binary response value must be null");
+        let id = sc["id"].as_i64().unwrap();
+        assert!(
+            approval_options_json(&ctx.store, id).is_none(),
+            "binary request must leave options_json NULL"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_approval_with_options_serializes_them() {
+        let (ctx, _f) = ctx_with_manager();
+        let resp = request_approval(
+            &ctx,
+            json!({
+                "action": "decide",
+                "summary": "which rollout?",
+                "wait": false,
+                "options": [
+                    { "label": "Canary", "value": "canary" },
+                    { "label": "Full",   "value": "full" },
+                    { "label": "Hold",   "value": "hold" }
+                ]
+            }),
+        )
+        .await
+        .unwrap();
+        let id = resp["structuredContent"]["id"].as_i64().unwrap();
+        let stored = approval_options_json(&ctx.store, id).expect("options_json set");
+        let parsed: Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 3);
+        assert_eq!(parsed[0]["label"], "Canary");
+        assert_eq!(parsed[0]["value"], "canary");
+        assert_eq!(parsed[2]["value"], "hold");
+    }
+
+    #[tokio::test]
+    async fn request_approval_empty_options_falls_back_to_binary() {
+        // An explicit empty array is treated as "no options" — the bot
+        // would otherwise render a Cancel-only card with no real choice.
+        let (ctx, _f) = ctx_with_manager();
+        let resp = request_approval(
+            &ctx,
+            json!({ "action": "deploy", "summary": "?", "wait": false, "options": [] }),
+        )
+        .await
+        .unwrap();
+        let id = resp["structuredContent"]["id"].as_i64().unwrap();
+        assert!(
+            approval_options_json(&ctx.store, id).is_none(),
+            "empty options array must leave options_json NULL"
         );
     }
 }
