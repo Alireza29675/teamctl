@@ -152,11 +152,17 @@ if command -v claude >/dev/null 2>&1; then
   if plugin_installed; then
     # Best-effort update path. Suppress noise on success; warn on failure but
     # don't kill the script — the binaries above are the install's main job.
+    # `plugin marketplace update` takes the bare marketplace name
+    # (`teamctl`); `plugin update` takes the marketplace-qualified
+    # plugin id (`teamctl@teamctl`). They are NOT the same argument —
+    # do not "sync" these two to the same string. The bare form on
+    # `plugin update` always fails with `Plugin "teamctl" not found`,
+    # which made this best-effort step unconditionally broken (#298).
     if ! claude plugin marketplace update teamctl >/dev/null 2>&1; then
       echo "note: 'claude plugin marketplace update teamctl' failed (non-fatal; binaries installed OK)" >&2
     fi
-    if ! claude plugin update teamctl --scope user >/dev/null 2>&1; then
-      echo "note: 'claude plugin update teamctl' failed (non-fatal; binaries installed OK)" >&2
+    if ! claude plugin update teamctl@teamctl --scope user >/dev/null 2>&1; then
+      echo "note: 'claude plugin update teamctl@teamctl' failed (non-fatal; binaries installed OK)" >&2
     fi
   elif [ -t 1 ] && [ -r /dev/tty ]; then
     printf "install teamctl Claude Code plugin? [y/N] "
