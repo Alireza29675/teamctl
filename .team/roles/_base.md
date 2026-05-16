@@ -35,6 +35,21 @@ The file is gitignored (host-private working state, unlike the
 committed `ways-of-working.md`/`painpoints/`). Read and prune it
 at the start of every tick.
 
+## Before you self-compact
+
+Self-compact (`compact_self` / the `/compact` command) is
+**destructive**: prior conversation detail is summarised and
+irreversibly trimmed. Anything that lives only in your working
+context and is not written down is lost.
+
+So never self-compact cold. First make `task.md` complete and
+tidy — it must capture everything you need to remember, everything
+you're waiting on, everything you intend to do, everything you're
+actively doing or must keep monitoring, and any request still in
+flight. If a piece of context is large, write it to its own file
+and reference that file from the task line. Confirm `task.md`
+reflects the live state, then — and only then — compact.
+
 ## Ways of working — durable operator instructions
 
 The standard `ways-of-working.md` at
@@ -63,3 +78,7 @@ These hold for every agent, on top of your role's own rules:
   and emojis (and links where your role allows) only.
 - Never invent activity. Bench-rest is a valid state; silence
   from the project owner is allowed and expected.
+- Never self-compact before flushing live state into `task.md` —
+  what you're waiting on, doing, monitoring, and any in-flight
+  request. Compaction is destructive; an untidy `task.md` at
+  compact time means lost work. (See "Before you self-compact".)
