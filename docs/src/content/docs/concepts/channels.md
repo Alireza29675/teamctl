@@ -26,6 +26,7 @@ Violations return a structured JSON-RPC error, not a panic.
 - A DM lands in exactly one inbox (the recipient's).
 - A broadcast lands in the inbox of every subscribed agent. The sender is excluded — you don't see your own broadcasts in `inbox_peek`.
 - Messages are unread until the agent calls `inbox_ack(ids: [...])`. `inbox_peek` is non-destructive.
+- A `system` message is a privileged kind — lifecycle signals (drain, startup, rate-limit) the supervisor emits. It is delivered to the agent **inline and in real time** (never a deferred stub the agent has to drill into), and only a `system:*` source may originate one; agents and users sending `kind: 'system'` are rejected at insert.
 
 ## Example
 

@@ -490,6 +490,55 @@ fn immediate_message_delivers_full_body_inline() {
     dev.shutdown();
 }
 
+/// #254: a `kind='system'` row is a lifecycle signal — it must deliver
+/// the full body inline with no `meta.lazy` flag even though lazy inbox
+/// is the default and the row has no `delivery_mode='immediate'`.
+#[test]
+fn system_kind_delivers_full_body_inline_under_default_lazy() {
+    use rusqlite::Connection;
+
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let bin = team_mcp_bin();
+
+    let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
+    dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
+    dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    thread::sleep(Duration::from_millis(150));
+
+    // Raw insert mimics the supervisor's system-signal path without
+    // dragging the supervisor crate in. Default lazy inbox, no
+    // delivery_mode — only `kind='system'` forces inline.
+    let conn = Connection::open(&mailbox).unwrap();
+    team_core::mailbox::ensure(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO messages
+            (project_id, sender, recipient, text, sent_at, kind)
+         VALUES ('hello', 'system:supervisor', 'hello:dev',
+                 'session terminating in 60s, call drained()',
+                 strftime('%s','now'), 'system')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let notif = dev
+        .lines
+        .wait_for_method("notifications/claude/channel", RPC_BUDGET)
+        .expect("expected notifications/claude/channel");
+    assert_eq!(
+        notif["params"]["content"], "session terminating in 60s, call drained()",
+        "system rows must deliver the full body inline"
+    );
+    assert!(
+        notif["params"]["meta"].get("lazy").is_none(),
+        "system rows must never carry the lazy stub flag"
+    );
+
+    dev.shutdown();
+}
+
 /// T-104: `TEAM_LAZY_INBOX=0` is the global escape hatch. With it set,
 /// every row delivers full-body, regardless of `delivery_mode`.
 #[test]

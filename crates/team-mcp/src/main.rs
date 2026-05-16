@@ -293,6 +293,11 @@ fn spawn_channel_watcher(
 /// drills in via `inbox_read(ids)` to fetch + auto-resolve. When
 /// `lazy_inbox` is false OR the row was marked immediate (operator used
 /// `/readnow `), the full body lands inline as before.
+///
+/// #254: `kind = 'system'` rows always deliver full-body inline (no
+/// lazy stub), regardless of `lazy_inbox` / `delivery_mode` — they are
+/// real-time lifecycle signals (drain, startup, rate-limit) the agent
+/// must act on without an `inbox_read` round-trip.
 fn format_channel_event(m: &store::Message, lazy_inbox: bool) -> Value {
     let mut meta = serde_json::Map::new();
     meta.insert("id".into(), Value::String(m.id.to_string()));
@@ -303,7 +308,11 @@ fn format_channel_event(m: &store::Message, lazy_inbox: bool) -> Value {
         meta.insert("thread_id".into(), Value::String(t.clone()));
     }
     let immediate = m.delivery_mode.as_deref() == Some("immediate");
-    let content = if !lazy_inbox || immediate {
+    // #254: `system` kind is a lifecycle signal — always full-body
+    // inline + real-time, never a lazy stub, regardless of the global
+    // lazy-inbox setting or per-row delivery_mode.
+    let system = m.kind.as_deref() == Some("system");
+    let content = if !lazy_inbox || immediate || system {
         m.text.clone()
     } else {
         meta.insert("lazy".into(), Value::String("1".into()));
