@@ -878,6 +878,98 @@ mod tests {
     }
 
     #[test]
+    fn fresh_essentials_team_bot_setup_yields_resolvable_bridge_spec() {
+        // #311 repro. Materialize the REAL shipped `essentials` scaffold
+        // (main + ops; `ops:builder` pre-wired with the
+        // TEAMCTL_TG_BUILDER_{TOKEN,CHATS} env-var names), reproduce the
+        // two persistence side-effects of `bot setup`'s `wizard_one`
+        // for ops:builder (write_env_file + upsert_manager_telegram),
+        // reload the compose exactly as `teamctl up` does, and assert
+        // the Telegram bridge would receive a usable, resolvable spec.
+        //
+        // Pins #311's acceptance contract ("fresh init -> bot setup ->
+        // round-trip delivers") at the deterministically-testable
+        // layer: the persisted config the bridge consumes. The
+        // interactive wizard (stdin), Telegram HTTP, and the tmux spawn
+        // are out of unit scope — what decides whether the bridge can
+        // deliver is exactly the spec + .env this asserts.
+        let dir = tempfile::tempdir().unwrap();
+        let team = dir.path().join(".team");
+
+        let ess = crate::cmd::init::TEMPLATES
+            .iter()
+            .find(|t| t.key == "essentials")
+            .expect("essentials template present");
+        for (rel, content) in ess.files {
+            let body = content
+                .replace("{{project_id}}", "main")
+                .replace("{{project_name}}", "Main");
+            let path = team.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, body).unwrap();
+        }
+
+        // A strict-parse regression on the shipped essentials tree
+        // would itself be #311.
+        let compose =
+            Compose::load(&team).expect("freshly-scaffolded essentials compose must load");
+
+        assert_eq!(
+            all_managers(&compose),
+            vec!["ops:builder".to_string()],
+            "essentials must expose exactly ops:builder to `bot setup`"
+        );
+
+        // The scaffold pre-wires the env-var names; `bot setup` reuses
+        // them verbatim (env_names_chosen_by_user == false path).
+        let (tok_env, chats_env) = manager_telegram(&compose, "ops:builder")
+            .expect("essentials pre-wires ops:builder's telegram env-var names");
+        assert_eq!(tok_env, "TEAMCTL_TG_BUILDER_TOKEN");
+        assert_eq!(chats_env, "TEAMCTL_TG_BUILDER_CHATS");
+
+        write_env_file(&team, &tok_env, "123456:FAKE-TOKEN", &chats_env, "99001122").unwrap();
+        upsert_manager_telegram(&compose, "ops:builder", &tok_env, &chats_env).unwrap();
+
+        // Reload exactly as `teamctl up` does, then build bridge specs.
+        let compose = Compose::load(&team).expect("compose reloads after bot setup");
+        let specs = bot_specs(&compose);
+        assert_eq!(
+            specs.len(),
+            1,
+            "exactly one bot spec (ops:builder) expected"
+        );
+        let spec = &specs[0];
+        assert_eq!(spec.manager, "ops:builder");
+        assert_eq!(spec.token_env, "TEAMCTL_TG_BUILDER_TOKEN");
+        assert_eq!(spec.chats_env, "TEAMCTL_TG_BUILDER_CHATS");
+
+        // up_one() resolves spec.token_env from the sourced .team/.env.
+        // File-based assertion (parallel-safe, matching
+        // write_env_file_replaces_in_place).
+        let env_body = std::fs::read_to_string(team.join(".env")).unwrap();
+        assert!(
+            env_body.contains("TEAMCTL_TG_BUILDER_TOKEN=123456:FAKE-TOKEN"),
+            "the bot token the bridge resolves must be persisted to .team/.env:\n{env_body}"
+        );
+        assert!(
+            env_body.contains("TEAMCTL_TG_BUILDER_CHATS=99001122"),
+            "the authorized chat id must be persisted to .team/.env:\n{env_body}"
+        );
+
+        // The telegram block must round-trip through the typed schema
+        // the bridge reads (agent.telegram()) after the yaml_edit write.
+        let ops_yaml = std::fs::read_to_string(team.join("projects/ops.yaml")).unwrap();
+        let parsed: team_core::compose::Project = serde_yaml::from_str(&ops_yaml).unwrap();
+        let tg = parsed
+            .managers
+            .get("builder")
+            .and_then(|a| a.telegram())
+            .expect("ops:builder telegram must survive the upsert and re-parse");
+        assert_eq!(tg.bot_token_env, "TEAMCTL_TG_BUILDER_TOKEN");
+        assert_eq!(tg.chat_ids_env, "TEAMCTL_TG_BUILDER_CHATS");
+    }
+
+    #[test]
     fn edit_manager_yaml_inserts_interfaces_telegram_block() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("p.yaml");
