@@ -6,6 +6,12 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/docs.yml'
+      # tools/install.sh is the source of truth for https://teamctl.run/install
+      # (the "Sync install.sh into docs/public" step below regenerates the
+      # served file from it). Without this path, a tools/install.sh-only change
+      # merges to main but never redeploys — the live endpoint silently drifts
+      # from the in-repo installer. This was the #322 P0. Keep it here.
+      - 'tools/install.sh'
   pull_request:
     paths:
       - 'docs/**'
