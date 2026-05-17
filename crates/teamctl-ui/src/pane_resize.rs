@@ -18,8 +18,12 @@
 //!
 //! Fix: after every `terminal.draw`, compute the `Detail` rect the
 //! Triptych layout would produce for the current terminal size and
-//! call `tmux resize-pane -t <session> -x W -y H` to keep the inner
-//! pane sized to match. Cache the last value we pushed per session
+//! call `tmux resize-window -t <session> -x W -y H` to keep the inner
+//! session sized to match. It must be `resize-window`, **not**
+//! `resize-pane`: the agent session is detached, single-pane, and
+//! clientless, and `resize-pane` cannot shrink the sole pane of a
+//! clientless window — that wrong verb is the #312 recurrence (see
+//! [`TmuxPaneResizer`]). Cache the last value we pushed per session
 //! so the common case (no resize, no focus switch) is a HashMap
 //! lookup, not a subprocess spawn.
 
@@ -70,10 +74,10 @@ pub fn triptych_detail_area(total: Rect, has_pending_approvals: bool) -> Option<
     Some(detail)
 }
 
-/// Decide whether to push a `tmux resize-pane` to `session` given the
-/// current Detail dimensions and the last size we already pushed for
-/// this session. The common case (same agent focused, no resize) is
-/// a no-op; we only fire the subprocess when the size has actually
+/// Decide whether to push a `tmux resize-window` to `session` given
+/// the current Detail dimensions and the last size we already pushed
+/// for this session. The common case (same agent focused, no resize)
+/// is a no-op; we only fire the subprocess when the size has actually
 /// changed or we haven't synced this session before.
 pub fn should_sync(
     cache: &HashMap<String, (u16, u16)>,
@@ -83,7 +87,7 @@ pub fn should_sync(
     cache.get(session) != Some(&current)
 }
 
-/// Pushes a `tmux resize-pane` for a session. Production resizers
+/// Pushes a `tmux resize-window` for a session. Production resizers
 /// shell out via [`TmuxPaneResizer`]; tests pass a stub that records
 /// calls without touching tmux.
 pub trait PaneResizer: Send + Sync {
@@ -94,26 +98,49 @@ pub trait PaneResizer: Send + Sync {
     fn resize(&self, session: &str, cols: u16, rows: u16);
 }
 
-/// Production implementation — shells out to `tmux resize-pane`.
-/// `-t <session>` targets the agent's tmux session; `-x W -y H` sets
-/// the pane dimensions. Stdout/stderr are dropped: a failure (session
-/// gone, tmux not on PATH) is silently ignored and the cache still
-/// advances so a fresh spawn next tick can re-sync.
+/// `tmux` argv that resizes `session`'s window to `cols`×`rows`.
+///
+/// Pulled out as a pure function so the exact subcommand is
+/// unit-pinned. It MUST be `resize-window`, never `resize-pane` — see
+/// the anti-regression note on [`TmuxPaneResizer`].
+fn resize_window_argv(session: &str, cols: u16, rows: u16) -> [String; 7] {
+    [
+        "resize-window".to_string(),
+        "-t".to_string(),
+        session.to_string(),
+        "-x".to_string(),
+        cols.to_string(),
+        "-y".to_string(),
+        rows.to_string(),
+    ]
+}
+
+/// Production implementation — shells out to **`tmux resize-window`**.
+///
+/// It MUST be `resize-window`, **not** `resize-pane`. The agent
+/// session is a detached, single-pane, **clientless** tmux session
+/// created at `-x 200 -y 50` (`team-core::supervisor`). `resize-pane`
+/// only redistributes space *within* a window's existing geometry —
+/// for the sole pane of a clientless window it is a silent no-op, so
+/// the captured content stays 200×50 and overflows the smaller Detail
+/// rect. Only `resize-window` changes the window (and hence its sole
+/// pane) for a session with no attached client. This exact "right
+/// trigger, wrong verb" error is why the bug recurred across
+/// #99 → T-199/#210 → #312. Do NOT "simplify" this back to
+/// `resize-pane`. (`resize-window` is tmux ≥ 2.9, 2018 — well below
+/// any tmux the supervisor can drive.)
+///
+/// `-t <session>` targets the agent's session; `-x W -y H` set the
+/// window size. Stdout/stderr are dropped: a failure (session gone,
+/// tmux not on PATH) is silently ignored and the cache still advances
+/// so a fresh spawn next tick can re-sync.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TmuxPaneResizer;
 
 impl PaneResizer for TmuxPaneResizer {
     fn resize(&self, session: &str, cols: u16, rows: u16) {
         let _ = Command::new("tmux")
-            .args([
-                "resize-pane",
-                "-t",
-                session,
-                "-x",
-                &cols.to_string(),
-                "-y",
-                &rows.to_string(),
-            ])
+            .args(resize_window_argv(session, cols, rows))
             .status();
     }
 }
@@ -231,5 +258,86 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0], ("t-a".to_string(), 100, 30));
         assert_eq!(calls[1], ("t-b".to_string(), 80, 20));
+    }
+
+    /// The CI guard for #312: pins the production verb. T-199/#210's
+    /// tests asserted the sync *decision* via `MockPaneResizer` but
+    /// never the *verb*, so a `resize-window`→`resize-pane` slip is
+    /// invisible to them — exactly how #312 recurred. This runs in the
+    /// default suite and fails the moment the verb regresses.
+    #[test]
+    fn resize_argv_is_resize_window_never_resize_pane() {
+        let argv = super::resize_window_argv("t-hello-mgr", 92, 24);
+        assert_eq!(
+            argv[0], "resize-window",
+            "MUST be `resize-window`: `resize-pane` silently no-ops on \
+             the sole pane of a clientless detached session and reopens \
+             #312"
+        );
+        assert_ne!(argv[0], "resize-pane", "the #312 regression verb");
+        assert_eq!(
+            argv,
+            ["resize-window", "-t", "t-hello-mgr", "-x", "92", "-y", "24"].map(str::to_string)
+        );
+    }
+
+    /// Empirical #312 repro, codified. `#[ignore]` because — unlike the
+    /// rest of this crate's hermetic mock tests — it spawns a real
+    /// `tmux` server; run with `cargo test -- --ignored` on a tmux
+    /// host. Proves the production resizer actually shrinks a clientless
+    /// session created the way `team-core::supervisor` creates it (the
+    /// real-effect check #210 lacked). Against the pre-fix `resize-pane`
+    /// code this fails: the window stays 200×50.
+    #[test]
+    #[ignore = "spawns a real tmux server; run with --ignored on a tmux host"]
+    fn resize_window_actually_shrinks_a_clientless_session() {
+        let session = "t312-regression-probe";
+        let kill = || {
+            let _ = Command::new("tmux")
+                .args(["kill-session", "-t", session])
+                .status();
+        };
+        kill();
+        // Mirror team-core::supervisor: detached, clientless, 200×50.
+        let created = Command::new("tmux")
+            .args([
+                "new-session",
+                "-d",
+                "-x",
+                "200",
+                "-y",
+                "50",
+                "-s",
+                session,
+                "sh",
+                "-c",
+                "while :; do sleep 5; done",
+            ])
+            .status();
+        if !matches!(created, Ok(s) if s.success()) {
+            // No usable tmux in this environment — nothing to assert.
+            return;
+        }
+
+        TmuxPaneResizer.resize(session, 80, 24);
+
+        let out = Command::new("tmux")
+            .args([
+                "display-message",
+                "-p",
+                "-t",
+                session,
+                "#{window_width}x#{window_height}",
+            ])
+            .output()
+            .expect("tmux display-message");
+        let geom = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        kill();
+
+        assert_eq!(
+            geom, "80x24",
+            "resizer did not shrink the clientless window (got `{geom}`) \
+             — the resize-pane regression (#312)"
+        );
     }
 }
