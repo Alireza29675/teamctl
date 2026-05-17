@@ -4,6 +4,20 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.8.6] — 2026-05-17
+
+### Changed
+
+- teamctl's Linux release binaries are now fully static (musl): they carry zero glibc dependency and install and run on any Linux — including old, minimal, or glibc-absent systems such as Debian, Alpine, Proxmox, and embedded boxes. This permanently eliminates the `GLIBC_x.xx not found` install failures that the previous `ubuntu-22.04` runner pin only deferred. (#309)
+
+### Fixed
+
+- New and Essentials teams now receive their Telegram messages: `bot setup` no longer corrupts the `telegram` block when writing config — a YAML-edit bug mis-nested a replaced leaf's values, breaking delivery for freshly-created teams. (#318)
+- `teamctl bot setup` no longer echoes the Telegram bot token as it is typed or pasted. The prompt now reads it with terminal echo disabled, keeping the credential out of the screen, scrollback, screen-shares, and recordings. (#315)
+- Agent env-file loading is hardened: env values are no longer passed through the shell, so a value containing spaces or glob characters (`*`, `?`) can no longer mangle the agent's environment or pull unintended files into it. (#307)
+- The `teamctl ui` Detail pane now fits the agent's terminal output correctly — the inner tmux session is sized with `resize-window`, so captured content no longer overflows or clips inside a smaller pane. (#317)
+- Submitting in the `teamctl ui` compose editor now works on all terminals: plain Enter in Normal mode submits, fixing send on default-mode terminals (xterm, Terminal.app, GNOME Terminal) where the previous Alt/Ctrl+Enter chord never fired. (#316)
+
 ## [0.8.5] — 2026-05-16
 
 ### Added
