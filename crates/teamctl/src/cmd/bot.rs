@@ -144,7 +144,7 @@ fn wizard_one(root: &Path, compose: &Compose, manager: &str, force: bool) -> Res
                    BotFather will reply with a token like `123456:AAH-…`."
             );
         }
-        let t = prompt("Paste bot token: ")?.trim().to_string();
+        let t = prompt_secret("Paste bot token: ")?.trim().to_string();
         if t.is_empty() || !t.contains(':') {
             bail!("invalid token (expected `<id>:<secret>` shape)");
         }
@@ -321,6 +321,87 @@ fn prompt(msg: &str) -> Result<String> {
         .trim_end_matches('\n')
         .trim_end_matches('\r')
         .to_string())
+}
+
+/// Read one line and strip the trailing newline (and a preceding CR),
+/// matching [`prompt`]'s capture behaviour exactly so swapping a field
+/// from `prompt` to `prompt_secret` changes only the echo, never the
+/// captured value. Split out so the value-correctness contract is
+/// unit-testable without a terminal.
+fn capture_line<R: BufRead>(mut reader: R) -> io::Result<String> {
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    Ok(line
+        .trim_end_matches('\n')
+        .trim_end_matches('\r')
+        .to_string())
+}
+
+/// Prompt for a secret (the Telegram bot token). On an interactive
+/// unix terminal the input is read with echo disabled — typed *and*
+/// pasted characters never appear in the terminal, scrollback, a
+/// screen-share, or a recording (T-314). The captured value is
+/// unaffected: echo is a display concern only.
+///
+/// Non-interactive stdin (pipe/redirect — tests, automation) has no
+/// terminal echo to suppress and `tcgetattr` would fail on a non-tty,
+/// so it falls back to a plain read. Non-unix also falls back; the CI
+/// matrix and supported install targets are POSIX, where the masking
+/// is effective.
+fn prompt_secret(msg: &str) -> Result<String> {
+    print!("{msg}");
+    io::stdout().flush().ok();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+
+        let fd = io::stdin().as_raw_fd();
+        // SAFETY: `isatty` on any fd is defined and side-effect-free.
+        let is_tty = unsafe { libc::isatty(fd) } == 1;
+        if is_tty {
+            // Restore the original terminal attributes on every exit
+            // path (normal return, `?` early-return, panic) so a
+            // failure can't strand the terminal with echo disabled.
+            struct RestoreEcho {
+                fd: i32,
+                original: libc::termios,
+            }
+            impl Drop for RestoreEcho {
+                fn drop(&mut self) {
+                    // SAFETY: `original` was filled by a successful
+                    // `tcgetattr` on this same fd.
+                    unsafe {
+                        libc::tcsetattr(self.fd, libc::TCSANOW, &self.original);
+                    }
+                }
+            }
+
+            // SAFETY: `termios` is a C POD; `tcgetattr` fully
+            // initialises it for a valid terminal fd.
+            let mut term: libc::termios = unsafe { std::mem::zeroed() };
+            if unsafe { libc::tcgetattr(fd, &mut term) } != 0 {
+                return Err(io::Error::last_os_error()).context("tcgetattr (mask token input)");
+            }
+            let _restore = RestoreEcho { fd, original: term };
+            // Clear ECHO only — keep ICANON (line editing + Enter) and
+            // ISIG (Ctrl-C) so it behaves like a normal password
+            // prompt, just silent.
+            term.c_lflag &= !libc::ECHO;
+            if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &term) } != 0 {
+                return Err(io::Error::last_os_error())
+                    .context("tcsetattr disable echo (mask token input)");
+            }
+
+            let value = capture_line(io::stdin().lock()).context("read stdin")?;
+            // The user's Enter wasn't echoed — advance the line so the
+            // next output doesn't run onto the prompt text.
+            println!();
+            return Ok(value);
+        }
+    }
+
+    capture_line(io::stdin().lock()).context("read stdin")
 }
 
 fn prompt_with_default(label: &str, default: &str) -> Result<String> {
@@ -780,6 +861,61 @@ mod tests {
     #[test]
     fn default_chats_env_matches_token_shape() {
         assert_eq!(default_chats_env("p:role-x"), "TEAMCTL_TG_ROLE_X_CHATS");
+    }
+
+    // T-314: token-input masking is display-only — the captured value
+    // must be byte-identical to what was entered (and identical to
+    // `prompt`'s capture, so the prompt→prompt_secret swap changes
+    // only the echo). The echo-off termios path needs a real tty and
+    // can't be unit-tested; `capture_line` is the value-correctness
+    // contract that can.
+    #[test]
+    fn capture_line_strips_only_the_trailing_newline() {
+        assert_eq!(
+            capture_line(&b"123456:AAH-abcDEF\n"[..]).unwrap(),
+            "123456:AAH-abcDEF"
+        );
+    }
+
+    #[test]
+    fn capture_line_strips_crlf() {
+        assert_eq!(
+            capture_line(&b"123:tok-_x.Y\r\n"[..]).unwrap(),
+            "123:tok-_x.Y"
+        );
+    }
+
+    #[test]
+    fn capture_line_preserves_value_bytes_including_inner_spaces() {
+        // Only the line terminator is stripped; inner/edge spaces and
+        // token punctuation survive verbatim (the caller applies its
+        // own `.trim()` + shape check — capture must not pre-mangle).
+        assert_eq!(
+            capture_line(&b"  12:AA b:c  \n"[..]).unwrap(),
+            "  12:AA b:c  "
+        );
+    }
+
+    #[test]
+    fn capture_line_handles_eof_without_newline() {
+        assert_eq!(
+            capture_line(&b"123:no-newline"[..]).unwrap(),
+            "123:no-newline"
+        );
+    }
+
+    #[test]
+    fn capture_line_matches_prompt_capture_semantics() {
+        // Pin parity with `prompt`'s exact trim chain so the swapped
+        // field behaves identically on capture.
+        let raw = "999:Zz-_.\r\n";
+        let via_capture = capture_line(raw.as_bytes()).unwrap();
+        let via_prompt_logic = raw
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_string();
+        assert_eq!(via_capture, via_prompt_logic);
+        assert_eq!(via_capture, "999:Zz-_.");
     }
 
     #[test]
