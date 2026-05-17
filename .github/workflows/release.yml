@@ -134,20 +134,18 @@ jobs:
           # Actually do builds and make zips and whatnot
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
-      # Smoke-test every produced tarball: extract and run `<bin> --version` on
-      # the same runner, across all three published crates (teamctl, team-mcp,
-      # team-bot). For aarch64-linux we cross-compile on x86_64 runners, so go
-      # through qemu-user-static. Catches the v0.1.1 / v0.2.5 / v0.2.7 / v0.2.8
-      # failure mode (broken aarch64-linux artifacts shipping to crates.io
-      # before anyone noticed the GH-Release build went red) by failing the
-      # release at the build stage instead of at "host". Smoking all three
-      # binaries (not just teamctl) catches breakage in team-mcp/team-bot that
-      # would otherwise ship green — same vulnerability class.
-      - name: Set up qemu (aarch64-linux smoke only)
-        if: contains(join(matrix.targets, ','), 'aarch64-unknown-linux-gnu')
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
+      # Smoke-test every produced tarball across all published crates
+      # (teamctl, team-mcp, team-bot, teamctl-ui). #294: the Linux
+      # artifacts are static musl, so the proof has two parts —
+      # (1) structural: no NEEDED dynamic library (zero glibc link, no
+      # floor to defer ever); (2) behavioral: the binary runs inside
+      # Alpine, which has NO glibc — a glibc-linked regression fails
+      # here instead of shipping the un-installable binary the #253
+      # field repro described. Both Linux arches build natively (x86_64
+      # + arm runners), so the binary runs on its own runner with no
+      # qemu. Smoking all four binaries (not just teamctl) also catches
+      # the historic broken-aarch64-artifact class (v0.1.1 / v0.2.5 /
+      # v0.2.7 / v0.2.8) by failing the release at the build stage.
       - name: Smoke-test tarballs
         shell: bash
         run: |
@@ -174,27 +172,49 @@ jobs:
               echo "::error::tarball $tarball missing executable $bin_name"
               exit 1
             fi
-            # teamctl-ui is a TUI; --version requires a terminal and
-            # exits with "No such device" under CI's non-tty runner.
-            # Smoke-test by verifying the binary is executable + exists,
-            # not by invoking. Proper --version flag tracked as a follow-up.
+            # (1) Structural static-link assertion for every Linux
+            # tarball, including the TUI (which can't be --version'd
+            # under a non-tty). A truly static binary has NO NEEDED
+            # dynamic-library entry; if one appears, a dependency
+            # reintroduced a dynamic libc link and reopened the #253
+            # glibc-floor class — fail the release loudly.
+            case "$target" in
+              *-linux-musl)
+                # Fail closed: the assertion is only meaningful if
+                # readelf exists. MUST stay inside this linux-musl arm
+                # — this Smoke-test step also runs the macos-14 legs,
+                # and macOS has no readelf (Mach-O/otool), so a
+                # hoisted guard would fail-close every darwin smoke
+                # and kill every release. Do NOT lift this out.
+                if ! command -v readelf >/dev/null 2>&1; then
+                  echo "::error::readelf not found — cannot verify static linkage"
+                  exit 1
+                fi
+                if readelf -d "$bin" 2>/dev/null | grep -q 'NEEDED'; then
+                  echo "::error::$base is NOT static — has a NEEDED dynamic dependency (reopens the #253 glibc-floor class)"
+                  readelf -d "$bin" | grep NEEDED || true
+                  exit 1
+                fi
+                echo "smoke: $base — no NEEDED dynamic deps (static) ✓"
+                ;;
+            esac
             if [ "$bin_name" = "teamctl-ui" ]; then
-              echo "smoke: $base (executable check only, TUI binary)"
+              echo "smoke: $base (static check only; TUI needs a tty for --version)"
             else
               echo "smoke: $base ($bin_name --version)"
               case "$target" in
-                x86_64-unknown-linux-gnu | x86_64-apple-darwin | aarch64-apple-darwin)
+                x86_64-apple-darwin | aarch64-apple-darwin)
                   "$bin" --version
                   ;;
-                aarch64-unknown-linux-gnu)
-                  # Smoke on ubuntu:22.04 (glibc 2.35) — the same glibc
-                  # floor the aarch64 binary is now built against (#253).
-                  # x86_64 is smoked natively on the 22.04 build runner;
-                  # this container must track it so a future glibc-floor
-                  # regression fails the release here instead of shipping.
-                  docker run --rm --platform linux/arm64 \
-                    -v "$workdir/$base":/work -w /work \
-                    arm64v8/ubuntu:22.04 "./$bin_name" --version
+                x86_64-unknown-linux-musl | aarch64-unknown-linux-musl)
+                  # Native run on the build runner (static binary runs
+                  # on its own arch with no toolchain), then (2) the
+                  # real #294 proof: run inside Alpine — musl, ZERO
+                  # glibc. A glibc-linked binary fails here; a static
+                  # musl one runs. Same-arch container, no qemu.
+                  "$bin" --version
+                  docker run --rm -v "$workdir/$base":/work -w /work \
+                    alpine:3 "./$bin_name" --version
                   ;;
                 *)
                   echo "::error::unhandled target $target — add a smoke branch"

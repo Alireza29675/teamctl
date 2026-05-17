@@ -47,8 +47,8 @@ uuid = { version = "1", features = ["v5"] }
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = "0.28"
 # rustls only — same posture as teloxide (see crates/team-bot/Cargo.toml).
-# native-tls would drag in openssl-sys and break the cargo-dist cross-build
-# for aarch64-unknown-linux-gnu.
+# native-tls would drag in openssl-sys and break the cargo-dist static
+# musl Linux build (#294 — zero C TLS deps is what keeps it clean).
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart"] }
 
 [profile.release]
@@ -56,55 +56,45 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
-# cargo-dist: cross-compile binaries for Linux + macOS (4 targets).
+# cargo-dist: release binaries for Linux + macOS (4 targets, each
+# built natively on its own-arch runner).
 # See https://github.com/axodotdev/cargo-dist
 [workspace.metadata.dist]
 cargo-dist-version = "0.25.1"
 ci = "github"
-# We hand-edit release.yml to keep the orchestration jobs (plan / host /
-# announce) on `runs-on: ubuntu-24.04` (GitHub Actions retired
-# ubuntu-20.04 in April 2026; cargo-dist 0.25.1 still defaults to 20.04).
-# Those jobs don't compile the shipped binary, so their glibc is
-# irrelevant — only the build-matrix runner (`github-custom-runners`
-# below) governs the binary's glibc floor, and that is pinned to
-# ubuntu-22.04 (#253). Keep the two asymmetric: do NOT "sync" the
-# orchestration runners down to 22.04 or the build runner up to 24.04.
-# `allow-dirty = ["ci"]` tells `dist host` to skip the freshness check
-# on the workflow file so releases don't fail on the diff.
+# `allow-dirty = ["ci"]` tells `dist host` to skip the workflow
+# freshness check: we hand-edit release.yml (the tarball smoke-test
+# block, and the disabled homebrew-publish job) so the generated and
+# committed workflows differ by design.
 allow-dirty = ["ci"]
 installers = ["shell", "homebrew"]
 tap = "Alireza29675/homebrew-teamctl"
 publish-jobs = ["homebrew"]
 targets = [
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
 ]
 pr-run-mode = "plan"
 install-path = "~/.local/bin"
-# cargo-dist 0.25.1's default runner labels are all retired by GitHub
+# cargo-dist 0.25.1's default runner labels are retired by GitHub
 # Actions (`ubuntu-20.04`, `macos-13` — removed 2025-2026); jobs that
 # target them sit queued forever, so every target is pinned to a
-# currently-supported image. Linux is pinned to ubuntu-22.04, NOT
-# ubuntu-24.04: the binary cargo-dist builds inherits the build
-# runner's glibc as a hard floor, and ubuntu-24.04's glibc 2.39 made
-# the release un-installable on Debian 12 / Ubuntu 22.04 / Proxmox and
-# most stable LTS Linux (#253). ubuntu-22.04 (glibc 2.35) covers those;
-# GitHub Actions supports it through 2027. The permanent fix is a musl
-# static target (no glibc floor at all) — tracked as the #253 musl
-# follow-up; this 22.04 pin must be revisited before the 2027 GHA
-# retirement if musl hasn't landed by then.
-github-custom-runners = { x86_64-unknown-linux-gnu = "ubuntu-22.04", aarch64-unknown-linux-gnu = "ubuntu-22.04", x86_64-apple-darwin = "macos-14", aarch64-apple-darwin = "macos-14" }
-
-# Cross-compile sysroot for the aarch64 Linux target. cc-rs (used by
-# `ring`, `openssl-sys`, ...) auto-resolves `aarch64-linux-gnu-gcc`
-# from PATH when the build target is aarch64-unknown-linux-gnu, but
-# the GitHub Actions ubuntu-22.04 runner doesn't ship the cross-gcc.
-# Without this, every cross-compile dies with
-# `failed to find tool "aarch64-linux-gnu-gcc"`.
-[workspace.metadata.dist.dependencies.apt]
-gcc-aarch64-linux-gnu = { targets = ["aarch64-unknown-linux-gnu"] }
+# currently-supported image.
+#
+# The Linux targets are static musl (#294): the binary links libc
+# statically and has zero glibc dependency, so the build runner's
+# glibc no longer matters — there is no glibc floor and no #253-class
+# failure to defer (this supersedes the #253 ubuntu-22.04 stopgap and
+# retires its ~2027 forced-move horizon). Each Linux arch builds
+# NATIVELY on its own runner — x86_64 on ubuntu-24.04, aarch64 on
+# ubuntu-24.04-arm (GitHub ARM Linux runners, GA + free for public
+# repos since 2025) — so `ring`'s cc-rs C parts compile against the
+# native musl toolchain (cargo-dist auto-installs `musl-tools`). No
+# cross toolchain, no qemu, no zigbuild, hence no aarch64 cross-gcc
+# apt dependency.
+github-custom-runners = { x86_64-unknown-linux-musl = "ubuntu-24.04", aarch64-unknown-linux-musl = "ubuntu-24.04-arm", x86_64-apple-darwin = "macos-14", aarch64-apple-darwin = "macos-14" }
 
 [profile.dist]
 inherits = "release"
