@@ -1314,7 +1314,7 @@ fn render_compose_modal(area: Rect, buf: &mut Buffer, app: &App) {
         .style(style)
         .render(chunks[1], buf);
 
-    Paragraph::new("Alt+Enter send · Esc Esc cancel · Tab attach")
+    Paragraph::new("Esc Enter send · Esc Esc cancel · Tab attach")
         .style(muted)
         .render(chunks[2], buf);
 }

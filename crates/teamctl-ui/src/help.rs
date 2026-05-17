@@ -78,8 +78,8 @@ pub const COMPOSE: &[Binding] = &[
         description: "broadcast to a channel (picker)",
     },
     Binding {
-        chord: "Alt+Enter",
-        description: "send the composed message",
+        chord: "Esc Enter",
+        description: "send the composed message (terminal-universal)",
     },
     Binding {
         chord: "Esc Esc",
@@ -208,7 +208,7 @@ mod tests {
             "?",
             "t",
             "q",
-            "Alt+Enter",
+            "Esc Enter",
         ] {
             assert!(
                 bindings.contains(&must_have),

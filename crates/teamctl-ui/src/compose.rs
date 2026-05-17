@@ -292,6 +292,13 @@ impl Editor {
             KeyCode::Char('d') => self.pending_op = Some('d'),
             KeyCode::Char('y') => self.pending_op = Some('y'),
             KeyCode::Char('p') => self.paste_below(),
+            // T-313: plain Enter in Normal mode is the terminal-
+            // universal submit (Esc → Enter). It carries no modifier
+            // and no kitty/modifyOtherKeys dependency, so it works on
+            // the default-mode terminals where Alt/Ctrl+Enter is eaten.
+            // Normal mode never inserts text, so this doesn't fight
+            // newline entry (that stays Insert-mode Enter).
+            KeyCode::Enter => return EditorAction::Send,
             _ => {}
         }
         EditorAction::Continue
@@ -689,6 +696,40 @@ mod tests {
             e.apply_key(k(KeyCode::Char(c)));
         }
         assert_eq!(e.apply_key(k_ctrl(KeyCode::Enter)), EditorAction::Send);
+    }
+
+    #[test]
+    fn normal_mode_enter_sends() {
+        // T-313: plain Enter in Normal mode is the terminal-universal
+        // submit (Esc → Enter). No modifier, no kitty/modifyOtherKeys
+        // dependency — works where Alt/Ctrl+Enter is eaten.
+        let mut e = Editor::default();
+        for c in "hi".chars() {
+            e.apply_key(k(KeyCode::Char(c)));
+        }
+        e.apply_key(k(KeyCode::Esc)); // Insert → Normal
+        assert_eq!(e.apply_key(k(KeyCode::Enter)), EditorAction::Send);
+    }
+
+    #[test]
+    fn insert_mode_enter_still_inserts_newline_not_send() {
+        // T-313 regression pin: the universal submit is Normal-mode
+        // only. Plain Enter while typing must still add a line, or
+        // multi-line compose breaks.
+        let mut e = Editor::default();
+        for c in "ab".chars() {
+            e.apply_key(k(KeyCode::Char(c)));
+        }
+        assert_eq!(e.apply_key(k(KeyCode::Enter)), EditorAction::Continue);
+        assert_eq!(e.lines.len(), 2, "Insert Enter must split the line");
+    }
+
+    #[test]
+    fn alt_enter_still_sends_for_kitty_protocol_terminals() {
+        // T-313: don't regress the advanced-terminal fast path.
+        let mut e = Editor::default();
+        let alt_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT);
+        assert_eq!(e.apply_key(alt_enter), EditorAction::Send);
     }
 
     #[test]
