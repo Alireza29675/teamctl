@@ -156,10 +156,22 @@ fn splice_nested_mapping(
         block_lines.push(format!("{:indent$}{key}:", "", indent = indent, key = key));
         indent += 2;
     }
-    // Leaf indent: if the leaf was found, missing_tail is empty and `indent`
-    // == insert_indent. Otherwise indent has already advanced past the last
-    // missing key. In both cases the value pairs sit at `indent`.
-    let value_indent = indent;
+    // Leaf-relative value indent. When the leaf was missing, the
+    // `missing_tail` loop already emitted the leaf key and advanced
+    // `indent` one level past it, so `indent` is the correct child
+    // level. When the leaf already existed, `missing_tail` was empty —
+    // `indent` still equals the leaf's own indent, so values must sit
+    // one level deeper than the re-emitted leaf key. Without this they
+    // serialize as siblings of the leaf, silently nulling it (#311:
+    // `bot setup` re-running against an essentials team — whose
+    // scaffold pre-wires `interfaces.telegram` — produced `telegram:`
+    // with sibling `bot_token_env:`, so `agent.telegram()` parsed
+    // `None` and the Telegram bridge never started).
+    let value_indent = if existing_depth == path.len() {
+        insert_indent + 2
+    } else {
+        indent
+    };
     if existing_depth == path.len() {
         // We're replacing an existing leaf — emit the leaf key line too.
         block_lines.push(format!(
@@ -491,5 +503,64 @@ managers:
         assert!(after.contains("NEW_CHATS"));
         assert!(!after.contains("OLD_TOKEN"));
         assert!(!after.contains("OLD_CHATS"));
+    }
+
+    /// #311 root cause: replacing an **already-existing** leaf must nest
+    /// the value pairs one level *under* the re-emitted leaf key, not at
+    /// the leaf's own indent. The string-only `idempotent_replace_*`
+    /// test missed this because `contains("NEW_TOKEN")` is true even
+    /// when the pair serializes as a sibling of `telegram:` (nulling the
+    /// leaf). This asserts the parsed structure, not substrings: the
+    /// essentials scaffold pre-wires `interfaces.telegram`, so every
+    /// `bot setup` on a fresh team hit this replace path and the bridge
+    /// never saw a telegram block.
+    #[test]
+    fn replace_existing_leaf_nests_values_under_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prewired.yaml");
+        // Mirrors the shipped `essentials` ops.yaml: a pre-wired
+        // telegram leaf the wizard re-writes verbatim.
+        let fixture = "\
+version: 2
+managers:
+  builder:
+    runtime: claude-code
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_BUILDER_TOKEN
+        chat_ids_env: TEAMCTL_TG_BUILDER_CHATS
+";
+        fs::write(&path, fixture).unwrap();
+
+        let doc = load(&path).unwrap();
+        let doc = set_nested_mapping(
+            doc,
+            &["managers", "builder", "interfaces", "telegram"],
+            &[
+                ("bot_token_env", "TEAMCTL_TG_BUILDER_TOKEN"),
+                ("chat_ids_env", "TEAMCTL_TG_BUILDER_CHATS"),
+            ],
+        )
+        .unwrap();
+        save(&doc, &path).unwrap();
+
+        let after = fs::read_to_string(&path).unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&after)
+            .unwrap_or_else(|e| panic!("re-spliced YAML must parse: {e}\n{after}"));
+        let tg = &v["managers"]["builder"]["interfaces"]["telegram"];
+        assert!(
+            tg.is_mapping(),
+            "telegram leaf must remain a mapping, not be nulled by sibling pairs:\n{after}"
+        );
+        assert_eq!(
+            tg["bot_token_env"].as_str(),
+            Some("TEAMCTL_TG_BUILDER_TOKEN"),
+            "bot_token_env must be nested under telegram:\n{after}"
+        );
+        assert_eq!(
+            tg["chat_ids_env"].as_str(),
+            Some("TEAMCTL_TG_BUILDER_CHATS"),
+            "chat_ids_env must be nested under telegram:\n{after}"
+        );
     }
 }
