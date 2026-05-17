@@ -19,7 +19,9 @@ managers:
     display_name: Sage (Visionary)
     runtime: claude-code
     model: claude-opus-4-7
-    role_prompt: roles/sage.md
+    role_prompt:
+    - roles/_base.md
+    - roles/sage.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:
@@ -40,7 +42,9 @@ managers:
     display_name: Hugo (Project Manager)
     runtime: claude-code
     model: claude-opus-4-7
-    role_prompt: roles/hugo.md
+    role_prompt:
+    - roles/_base.md
+    - roles/hugo.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:
@@ -66,7 +70,10 @@ managers:
     display_name: Ada (Engineer)
     runtime: claude-code
     model: claude-opus-4-7
-    role_prompt: roles/ada.md
+    role_prompt:
+    - roles/_base.md
+    - roles/_engineer.md
+    - roles/ada.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:
@@ -90,7 +97,10 @@ managers:
     display_name: Wren (Engineer)
     runtime: claude-code
     model: claude-opus-4-7
-    role_prompt: roles/wren.md
+    role_prompt:
+    - roles/_base.md
+    - roles/_engineer.md
+    - roles/wren.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:
@@ -114,7 +124,10 @@ managers:
     display_name: Otis (Engineer)
     runtime: claude-code
     model: claude-opus-4-7
-    role_prompt: roles/otis.md
+    role_prompt:
+    - roles/_base.md
+    - roles/_engineer.md
+    - roles/otis.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:
@@ -138,7 +151,10 @@ managers:
     display_name: Kian (Engineer)
     runtime: claude-code
     model: claude-opus-4-7
-    role_prompt: roles/kian.md
+    role_prompt:
+    - roles/_base.md
+    - roles/_engineer.md
+    - roles/kian.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:
@@ -162,7 +178,10 @@ managers:
     display_name: Nico (Engineer)
     runtime: claude-code
     model: claude-opus-4-7
-    role_prompt: roles/nico.md
+    role_prompt:
+    - roles/_base.md
+    - roles/_engineer.md
+    - roles/nico.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:
@@ -186,7 +205,9 @@ managers:
     display_name: Neda (Comms)
     runtime: claude-code
     model: claude-opus-4-7
-    role_prompt: roles/neda.md
+    role_prompt:
+    - roles/_base.md
+    - roles/neda.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:
@@ -206,7 +227,9 @@ managers:
     display_name: Vera (DX Research)
     runtime: claude-code
     model: claude-opus-4-7
-    role_prompt: roles/vera.md
+    role_prompt:
+    - roles/_base.md
+    - roles/vera.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:

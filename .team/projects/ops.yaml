@@ -11,7 +11,9 @@ managers:
     display_name: Otto (TeamOps)
     runtime: claude-code
     model: claude-opus-4-7
-    role_prompt: roles/otto.md
+    role_prompt:
+    - roles/_base.md
+    - roles/otto.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm: []
