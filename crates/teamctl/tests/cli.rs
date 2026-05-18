@@ -1345,3 +1345,124 @@ fn help_documents_all_scope_levels_consistently() {
         );
     }
 }
+
+// ── T-310: id-charset validation — qa PoC class end-to-end ──────────────
+//
+// A `project.id` (or agent id) containing shell-metacharacter content
+// must be rejected by `teamctl validate` AND must bail before
+// `build_up_command` ever runs on `teamctl up` / `reload` / `down`.
+// The unit tests in `team-core::validate` pin the validator itself;
+// these integration tests pin the criterion-2 wiring: the supervisor
+// is never reached when a compose carries a bad id.
+
+fn seed_compose_with_evil_project_id(root: &std::path::Path) {
+    fs::write(
+        root.join("team-compose.yaml"),
+        r#"
+version: 2
+broker:
+  type: sqlite
+  path: state/mailbox.db
+supervisor:
+  type: tmux
+  tmux_prefix: a-
+projects:
+  - file: projects/evil.yaml
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("projects")).unwrap();
+    // qa PoC class: shell-metacharacter content in `project.id`.
+    fs::write(
+        root.join("projects/evil.yaml"),
+        r#"
+version: 2
+project:
+  id: "evil; touch /tmp/teamctl-t310-pwn"
+  name: Evil
+  cwd: .
+managers:
+  manager:
+    runtime: claude-code
+    model: claude-opus-4-7
+workers:
+  dev:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    reports_to: manager
+"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn validate_rejects_project_id_with_shell_metacharacters() {
+    // `teamctl validate` exit-nonzero with a clear, actionable error
+    // naming the rejected id (acceptance criterion 1).
+    let tmp = tempdir().unwrap();
+    seed_compose_with_evil_project_id(tmp.path());
+    let out = Command::new(bin())
+        .args(["--root", tmp.path().to_str().unwrap(), "validate"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "must exit nonzero");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("evil; touch /tmp/teamctl-t310-pwn"),
+        "names the rejected id: {stderr}"
+    );
+    assert!(
+        stderr.contains("disallowed characters"),
+        "explains the rule: {stderr}"
+    );
+}
+
+#[test]
+fn down_bails_on_evil_project_id_before_reaching_supervisor() {
+    // Criterion 2: a shell-meta `project.id` can no longer reach the
+    // shell via `build_up_command` on `teamctl down`. Pre-T-310 this
+    // command was NOT validate-gated, so a malicious compose flowed
+    // unquoted into `sh -c`. Now `down` validates + bails first.
+    //
+    // The negative existence check is the security pin: the injected
+    // `touch /tmp/teamctl-t310-pwn` must NOT have run.
+    let pwn_marker = std::path::PathBuf::from("/tmp/teamctl-t310-pwn");
+    let _ = std::fs::remove_file(&pwn_marker);
+
+    let tmp = tempdir().unwrap();
+    seed_compose_with_evil_project_id(tmp.path());
+    let out = Command::new(bin())
+        .args(["--root", tmp.path().to_str().unwrap(), "down"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "down must bail on validation error");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("disallowed characters"),
+        "down must surface the id-charset error: {stderr}"
+    );
+    assert!(
+        !pwn_marker.exists(),
+        "INJECTION FIRED — `build_up_command` was reached: marker {} exists",
+        pwn_marker.display()
+    );
+    // Best-effort cleanup if a regression ever creates it.
+    let _ = std::fs::remove_file(&pwn_marker);
+}
+
+#[test]
+fn validate_accepts_existing_conformant_id_shapes() {
+    // Acceptance criterion 5 (no regression for conformant teams):
+    // the existing `seed_two_projects` shape passes validate cleanly.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args(["--root", tmp.path().to_str().unwrap(), "validate"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "conformant ids must validate: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

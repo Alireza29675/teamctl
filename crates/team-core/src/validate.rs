@@ -62,6 +62,16 @@ pub enum ValidationError {
     #[error("duplicate project id `{0}`")]
     DuplicateProject(String),
 
+    #[error(
+        "project id `{0}` has disallowed characters; allowed: ASCII letters, digits, and `.` `_` `-` (no whitespace, shell metacharacters, or control chars; `:` is reserved as the project:agent separator)"
+    )]
+    InvalidProjectId(String),
+
+    #[error(
+        "project `{project}`: agent id `{agent}` has disallowed characters; allowed: ASCII letters, digits, and `.` `_` `-` (no whitespace, shell metacharacters, or control chars; `:` is reserved as the project:agent separator)"
+    )]
+    InvalidAgentId { project: String, agent: String },
+
     #[error("project `{project}`: agent `{agent}` uses runtime `{runtime}`, which is not built in and not declared in `<root>/runtimes/{runtime}.yaml`")]
     UnknownRuntime {
         project: String,
@@ -98,6 +108,26 @@ pub enum ValidationError {
 /// fidelity gain for an at-most-64-cell rendering window.
 pub const DISPLAY_NAME_MAX_CHARS: usize = 64;
 
+/// T-310: charset rule for `project.id` and agent ids — both flow,
+/// unquoted, into shell-bound strings (`{project}:{agent}` in
+/// `supervisor::build_up_command`) and into tmux session names. A
+/// conservative ASCII allowlist keeps every downstream consumer safe
+/// at the boundary instead of forcing each call site to quote
+/// defensively. `:` is intentionally NOT allowed — it's reserved as
+/// the canonical `<project>:<agent>` join separator everywhere in
+/// teamctl, and admitting it into an id would make `id()` parse
+/// ambiguous.
+///
+/// Rejected by construction: any whitespace, any shell metacharacter
+/// (`;`, `|`, `&`, `$`, backtick, `(`, `)`, `<`, `>`, `*`, `?`, `~`,
+/// `!`, `#`, `'`, `"`, `\`), any control char, any non-ASCII (incl.
+/// emoji), the empty string.
+pub fn is_valid_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
 pub fn validate(compose: &Compose) -> Vec<ValidationError> {
     let mut errs = Vec::new();
 
@@ -125,6 +155,21 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
     for p in &compose.projects {
         if !seen_projects.insert(p.project.id.clone()) {
             errs.push(ValidationError::DuplicateProject(p.project.id.clone()));
+        }
+        // T-310: id charset gate. Both `project.id` and the agent-id
+        // map keys flow unquoted into shell-bound strings + tmux
+        // session names downstream; rejecting unsafe chars at the
+        // boundary hardens every consumer at once.
+        if !is_valid_id(&p.project.id) {
+            errs.push(ValidationError::InvalidProjectId(p.project.id.clone()));
+        }
+        for id in p.managers.keys().chain(p.workers.keys()) {
+            if !is_valid_id(id) {
+                errs.push(ValidationError::InvalidAgentId {
+                    project: p.project.id.clone(),
+                    agent: id.clone(),
+                });
+            }
         }
 
         let mgr_ids: BTreeSet<&str> = p.managers.keys().map(|s| s.as_str()).collect();
@@ -468,5 +513,180 @@ mod tests {
             e,
             ValidationError::BlankDisplayName { .. } | ValidationError::DisplayNameTooLong { .. }
         )));
+    }
+
+    // ── T-310: id charset validation ────────────────────────────────────
+
+    #[test]
+    fn is_valid_id_accepts_existing_id_shapes() {
+        // Pin the conformant shapes currently in use across dogfood,
+        // cookbook, tests, and conventional fixtures — none of these
+        // may regress.
+        for ok in [
+            "teamctl",
+            "ops",
+            "nico",
+            "eng_lead",
+            "pr-22-review",
+            "blog-site",
+            "my.team",
+            "a1",
+            "x-2.0",
+            "a",
+            "0",
+            "A",
+            "_",
+            "-",
+            ".",
+        ] {
+            assert!(is_valid_id(ok), "must accept conformant id `{ok}`");
+        }
+    }
+
+    #[test]
+    fn is_valid_id_rejects_shell_metacharacter_class() {
+        // The qa PoC class on #310: any shell metacharacter in an id
+        // would flow unquoted into `build_up_command`. Each of these
+        // must be rejected at the boundary.
+        for bad in [
+            "evil; rm",
+            "proj$(id)",
+            "with space",
+            "back`ticks`",
+            "p|ipe",
+            "p&amp",
+            "p*g",
+            "p?g",
+            "p~e",
+            "p!g",
+            "p#g",
+            "p'q",
+            "p\"q",
+            "p\\g",
+            "p<g",
+            "p>g",
+            "p(g",
+            "p)g",
+            "p\tg",
+            "p\ng",
+        ] {
+            assert!(!is_valid_id(bad), "must reject `{bad:?}`");
+        }
+    }
+
+    #[test]
+    fn is_valid_id_rejects_colon_as_reserved_separator() {
+        // `:` is reserved for the canonical `<project>:<agent>` join;
+        // admitting it into an id would make `AgentHandle::id()`
+        // ambiguous *and* would still flow unquoted into shell-bound
+        // strings.
+        assert!(!is_valid_id("p:rj"));
+        assert!(!is_valid_id(":"));
+        assert!(!is_valid_id("a:"));
+        assert!(!is_valid_id(":a"));
+    }
+
+    #[test]
+    fn is_valid_id_rejects_empty_and_control_chars() {
+        assert!(!is_valid_id(""));
+        assert!(!is_valid_id("\0"));
+        assert!(!is_valid_id("p\x07q"));
+    }
+
+    #[test]
+    fn is_valid_id_rejects_non_ascii() {
+        // Emoji and Unicode letters are operationally bad even though
+        // some are shell-inert; stay strictly ASCII per the issue.
+        assert!(!is_valid_id("crab🦀"));
+        assert!(!is_valid_id("café"));
+    }
+
+    #[test]
+    fn clean_compose_passes_id_charset() {
+        // Regression for conformant teams (acceptance criterion 5):
+        // existing valid ids are unaffected.
+        let c = toy_compose("dev");
+        let errs = validate(&c);
+        assert!(
+            !errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidProjectId(_) | ValidationError::InvalidAgentId { .. }
+            )),
+            "clean compose unexpectedly flagged for id charset: {errs:?}",
+        );
+    }
+
+    #[test]
+    fn project_id_with_shell_metacharacters_flags() {
+        // qa PoC class regression (acceptance criterion 4): a
+        // `project.id` containing shell-metacharacter content is
+        // rejected by `validate` *before* it could reach
+        // `build_up_command`'s unquoted shell interpolation on
+        // `teamctl up` / `reload` / `down`.
+        let mut c = toy_compose("dev");
+        c.projects[0].project.id = "evil; rm -rf ~".into();
+        let errs = validate(&c);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidProjectId(s) if s == "evil; rm -rf ~"
+            )),
+            "expected InvalidProjectId, got {errs:?}",
+        );
+    }
+
+    #[test]
+    fn manager_id_with_shell_metacharacters_flags() {
+        // Same PoC class via the manager-key path — `compose.agents()`
+        // yields these ids and the supervisor flows them unquoted into
+        // `{project}:{agent}`.
+        let mut c = toy_compose("dev");
+        let bad = "$(id)";
+        let mgr = c.projects[0].managers.remove("mgr").unwrap();
+        c.projects[0].managers.insert(bad.into(), mgr);
+        let errs = validate(&c);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidAgentId { project, agent }
+                    if project == "hello" && agent == bad
+            )),
+            "expected InvalidAgentId for manager, got {errs:?}",
+        );
+    }
+
+    #[test]
+    fn worker_id_with_shell_metacharacters_flags() {
+        // Same PoC class via the worker-key path.
+        let mut c = toy_compose("dev");
+        let bad = "rogue|pipe";
+        let wkr = c.projects[0].workers.remove("dev").unwrap();
+        c.projects[0].workers.insert(bad.into(), wkr);
+        // The dm target `dev` is also stale now — filter for the
+        // charset error specifically.
+        let errs = validate(&c);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidAgentId { project, agent }
+                    if project == "hello" && agent == bad
+            )),
+            "expected InvalidAgentId for worker, got {errs:?}",
+        );
+    }
+
+    #[test]
+    fn project_id_with_reserved_colon_flags() {
+        // `:` is the canonical project:agent join — admitting it would
+        // make routing parse ambiguous *and* still leak unquoted into
+        // shell strings.
+        let mut c = toy_compose("dev");
+        c.projects[0].project.id = "foo:bar".into();
+        let errs = validate(&c);
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, ValidationError::InvalidProjectId(s) if s == "foo:bar")),
+            "expected InvalidProjectId on colon, got {errs:?}",
+        );
     }
 }

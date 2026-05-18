@@ -1,12 +1,25 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use team_core::supervisor::{AgentSpec, Supervisor, TmuxSupervisor};
 
 use super::agent_filter::AgentSelector;
 
 pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()> {
     let compose = super::load(root)?;
+    // T-310: gate on validation before the supervisor builds any
+    // shell-bound command. `up` and `reload` already do this; `down`
+    // didn't, leaving `build_up_command`'s `{project}:{agent}`
+    // interpolation reachable from a shell-metacharacter id via the
+    // `down` path. Mirror the existing up/reload shape so a malicious
+    // compose can't slip past on this command either.
+    let errs = team_core::validate::validate(&compose);
+    if !errs.is_empty() {
+        for e in &errs {
+            eprintln!("error: {e}");
+        }
+        bail!("{} validation error(s) — fix before down", errs.len());
+    }
     let scoped = project
         .map(|name| super::project_filter::resolve(&compose, name))
         .transpose()?;
