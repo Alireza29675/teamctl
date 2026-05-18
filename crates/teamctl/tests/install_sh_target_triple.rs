@@ -15,6 +15,12 @@
 //! every triple the installer can resolve is a triple cargo-dist
 //! actually publishes, and that the Linux triples are musl (the
 //! released-artifact shape, locked so it cannot silently drift back).
+//!
+//! #324: the `parse_dist_targets` parser is shape-robust over both
+//! multi-line and inline `targets = […]` arrays AND anchored to the
+//! `[workspace.metadata.dist]` section so a sibling sub-table with its
+//! own `targets = [` (e.g. `dependencies.apt`'s per-package targets)
+//! cannot shadow the cargo-dist asset list.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -53,25 +59,48 @@ fn installer_targets() -> BTreeSet<String> {
 /// The triples cargo-dist publishes assets for: the `targets = [ … ]`
 /// array in the root `Cargo.toml` `[workspace.metadata.dist]` table.
 fn dist_targets() -> BTreeSet<String> {
-    let cargo = read("Cargo.toml");
-    let mut lines = cargo.lines();
-    lines
-        .by_ref()
-        .find(|l| l.trim_start().starts_with("targets = ["))
-        .unwrap_or_else(|| panic!("no `targets = [` array found in root Cargo.toml"));
+    parse_dist_targets(&read("Cargo.toml"))
+}
 
-    let mut out = BTreeSet::new();
-    for line in lines {
-        if line.contains(']') {
-            break;
-        }
-        if let (Some(a), Some(b)) = (line.find('"'), line.rfind('"')) {
-            if b > a {
-                out.insert(line[a + 1..b].to_string());
-            }
-        }
-    }
-    out
+/// Section-anchored, shape-robust parse of `[workspace.metadata.dist]`'s
+/// `targets = […]` array. Handles both the multi-line shape used today
+/// and a future inline collapse. Anchored to the `[workspace.metadata.
+/// dist]` section so a sibling sub-table (e.g. `dependencies.apt`'s
+/// per-package `targets = […]`) cannot shadow the cargo-dist asset list.
+fn parse_dist_targets(toml: &str) -> BTreeSet<String> {
+    const SECTION: &str = "[workspace.metadata.dist]";
+    const ARRAY: &str = "targets = [";
+
+    let section_start = toml
+        .find(SECTION)
+        .unwrap_or_else(|| panic!("no `{SECTION}` table in Cargo.toml"));
+    let after_header = &toml[section_start + SECTION.len()..];
+    // Section body ends at the next table header (`\n[…]`). The dotted
+    // sub-tables of `[workspace.metadata.dist]` (e.g.
+    // `.dependencies.apt`) also start with `\n[` and are correctly
+    // treated as outside this section's body.
+    let body_end = after_header.find("\n[").unwrap_or(after_header.len());
+    let section = &after_header[..body_end];
+
+    let arr_start = section.find(ARRAY).unwrap_or_else(|| {
+        panic!("no `{ARRAY}` inside `{SECTION}` — did the cargo-dist config move?")
+    });
+    let after_open = &section[arr_start + ARRAY.len()..];
+    let arr_end = after_open
+        .find(']')
+        .unwrap_or_else(|| panic!("`{ARRAY}` has no closing `]` inside `{SECTION}`"));
+    let body = &after_open[..arr_end];
+
+    // The body is a comma-separated list of `"triple"` string literals,
+    // possibly multi-line. Splitting on `"` and taking odd-indexed
+    // segments yields the unquoted triples for either layout. (TOML
+    // does not escape `"` inside double-quoted strings without `\\`,
+    // and cargo-dist triples never contain quotes or backslashes.)
+    body.split('"')
+        .enumerate()
+        .filter(|(i, _)| i % 2 == 1)
+        .map(|(_, s)| s.to_string())
+        .collect()
 }
 
 #[test]
@@ -115,4 +144,83 @@ fn installer_linux_targets_are_musl() {
             );
         }
     }
+}
+
+// ────────── parser-shape unit tests (#324) ──────────
+//
+// These exercise `parse_dist_targets` against synthetic Cargo.toml-shaped
+// inputs covering both shapes the parser must handle (multi-line and
+// inline) AND the section-anchoring that prevents a sibling sub-table's
+// `targets = [` (e.g. `dependencies.apt`'s) from being mistakenly read as
+// the cargo-dist asset list.
+
+#[test]
+fn parser_handles_multiline_array() {
+    let toml = r#"
+[workspace.metadata.dist]
+cargo-dist-version = "0.25.1"
+targets = [
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+pr-run-mode = "plan"
+"#;
+    let got = parse_dist_targets(toml);
+    assert_eq!(got.len(), 4, "parsed {got:?}");
+    assert!(got.contains("x86_64-unknown-linux-musl"));
+    assert!(got.contains("aarch64-unknown-linux-musl"));
+    assert!(got.contains("x86_64-apple-darwin"));
+    assert!(got.contains("aarch64-apple-darwin"));
+}
+
+#[test]
+fn parser_handles_inline_array() {
+    let toml = r#"
+[workspace.metadata.dist]
+cargo-dist-version = "0.25.1"
+targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "aarch64-apple-darwin"]
+pr-run-mode = "plan"
+"#;
+    let got = parse_dist_targets(toml);
+    assert_eq!(got.len(), 4, "parsed {got:?}");
+    assert!(got.contains("x86_64-unknown-linux-musl"));
+    assert!(got.contains("aarch64-apple-darwin"));
+}
+
+#[test]
+fn parser_anchored_to_dist_section_ignores_sibling_targets() {
+    // The real Cargo.toml has a `targets = […]` inside the sub-table
+    // `[workspace.metadata.dist.dependencies.apt]` (per-package cross-
+    // compile sysroot list). Section-anchoring pins extraction to the
+    // `[workspace.metadata.dist]` body proper.
+    let toml = r#"
+[workspace.metadata.dist]
+targets = [
+    "x86_64-unknown-linux-musl",
+]
+
+[workspace.metadata.dist.dependencies.apt]
+gcc-aarch64-linux-gnu = { targets = ["aarch64-unknown-linux-gnu"] }
+"#;
+    let got = parse_dist_targets(toml);
+    assert_eq!(got, BTreeSet::from(["x86_64-unknown-linux-musl".into()]));
+    assert!(
+        !got.contains("aarch64-unknown-linux-gnu"),
+        "sibling sub-table's `targets = [`-shaped value leaked into the \
+         cargo-dist asset list (#324 section-anchoring regression): {got:?}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "no `[workspace.metadata.dist]` table in Cargo.toml")]
+fn parser_panics_loudly_when_section_missing() {
+    parse_dist_targets("[package]\nname = \"x\"\n");
+}
+
+#[test]
+#[should_panic(expected = "no `targets = [`")]
+fn parser_panics_loudly_when_array_missing() {
+    parse_dist_targets("[workspace.metadata.dist]\ncargo-dist-version = \"0.25.1\"\n");
 }
