@@ -525,14 +525,49 @@ fn render_mailbox_body(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
 
-    // Tail to whatever fits — same shape as the detail pane.
+    // T-131 PR-1: cursor-aware window + selected-row highlight.
+    // `visible_indices` is identity in PR-1 (every row visible); PR-2
+    // (filter+search) swaps its body — the rest of this render path
+    // is the abstraction's call site and does not need changing.
+    let visible = app.mailbox.visible_indices(app.mailbox_tab);
+    if visible.is_empty() {
+        // PR-1: unreachable (rows non-empty implies visible non-empty),
+        // but stays here as the PR-2 empty-filter-result branch.
+        return;
+    }
     let cap = area.height as usize;
-    let start = rows.len().saturating_sub(cap);
+    let selected = app
+        .mailbox
+        .cursor(app.mailbox_tab)
+        .selected_idx
+        .min(visible.len() - 1);
+    // Tail-anchored: when selected sits in the last `cap` rows, anchor
+    // to the tail so the freshly-appended row stays visible — matches
+    // the pre-T-131 default. Otherwise keep selected near the bottom
+    // of the window (vim-like). On terminals taller than the row count
+    // the whole list fits and `start` is 0.
+    let start = if visible.len() <= cap {
+        0
+    } else if visible.len() - selected <= cap {
+        visible.len() - cap
+    } else {
+        selected.saturating_sub(cap.saturating_sub(1))
+    };
+    let end = (start + cap).min(visible.len());
+    let focused = app.focused_pane == Pane::Mailbox;
+    let highlight = Style::default().add_modifier(Modifier::REVERSED);
     // T-231: pass the active tab so render_row can pick the right
     // prefix (sender for Inbox/Channel/Wire, recipient for Sent).
-    let lines: Vec<Line<'_>> = rows[start..]
+    let lines: Vec<Line<'_>> = visible[start..end]
         .iter()
-        .map(|r| Line::raw(render_row(r, &app.team, app.mailbox_tab)))
+        .map(|&row_idx| {
+            let line = Line::raw(render_row(&rows[row_idx], &app.team, app.mailbox_tab));
+            if focused && row_idx == visible[selected] {
+                line.style(highlight)
+            } else {
+                line
+            }
+        })
         .collect();
     Paragraph::new(lines).render(area, buf);
 }
