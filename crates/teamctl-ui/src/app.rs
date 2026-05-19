@@ -527,6 +527,34 @@ impl App {
         self.mailbox_tab = self.mailbox_tab.prev();
     }
 
+    // T-131 PR-1: per-tab row cursor controls. Each delegates to the
+    // matching `MailboxBuffers` method on the active tab, keeping the
+    // App-level surface symmetric with the keybindings in
+    // `handle_event` (Up/Down/j/k, PageUp/PageDown, Home/End).
+    pub fn mailbox_cursor_down(&mut self) {
+        self.mailbox.move_cursor_down(self.mailbox_tab);
+    }
+
+    pub fn mailbox_cursor_up(&mut self) {
+        self.mailbox.move_cursor_up(self.mailbox_tab);
+    }
+
+    pub fn mailbox_page_down(&mut self) {
+        self.mailbox.page_cursor_down(self.mailbox_tab);
+    }
+
+    pub fn mailbox_page_up(&mut self) {
+        self.mailbox.page_cursor_up(self.mailbox_tab);
+    }
+
+    pub fn mailbox_cursor_home(&mut self) {
+        self.mailbox.cursor_home(self.mailbox_tab);
+    }
+
+    pub fn mailbox_cursor_end(&mut self) {
+        self.mailbox.cursor_end(self.mailbox_tab);
+    }
+
     pub fn cycle_focus_back(&mut self) {
         self.focused_pane = self.focused_pane.prev();
     }
@@ -1604,6 +1632,21 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
                 {
                     app.select_next_channel()
                 }
+                // T-131 PR-1: mailbox row navigation when the
+                // mailbox pane is focused. j/k mirror Vim; arrows
+                // mirror every-day navigation. PageUp/PageDown jump a
+                // screen; Home/End jump to ends. Per-tab cursor state
+                // lives on `MailboxBuffers` and survives tab switches.
+                KeyCode::Up | KeyCode::Char('k') if app.focused_pane == Pane::Mailbox => {
+                    app.mailbox_cursor_up()
+                }
+                KeyCode::Down | KeyCode::Char('j') if app.focused_pane == Pane::Mailbox => {
+                    app.mailbox_cursor_down()
+                }
+                KeyCode::PageUp if app.focused_pane == Pane::Mailbox => app.mailbox_page_up(),
+                KeyCode::PageDown if app.focused_pane == Pane::Mailbox => app.mailbox_page_down(),
+                KeyCode::Home if app.focused_pane == Pane::Mailbox => app.mailbox_cursor_home(),
+                KeyCode::End if app.focused_pane == Pane::Mailbox => app.mailbox_cursor_end(),
                 // Roster navigation — only when roster is the
                 // focused pane. j/k mirror Vim; arrows mirror
                 // every-day navigation.
@@ -1736,9 +1779,8 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
         // each tick to the agent's tmux pane as a copy-mode scroll —
         // wheel-up enters copy-mode and walks history, wheel-down
         // walks back toward live. Roster steps the agent selection
-        // (same step as `j`/`k`). Mailbox is a no-op until T-131
-        // lands the row-cursor state for the rows to scroll; the
-        // routing scaffold is in place so that fill-in is local.
+        // (same step as `j`/`k`). T-131 PR-1 wires Mailbox to step
+        // the per-tab row cursor (same step as `j`/`k`).
         // Stages other than Triptych ignore mouse input — modal
         // overlays (compose, approvals, picker, help) own the screen
         // and shouldn't get a surprise scroll routed past them.
@@ -1764,10 +1806,10 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
                         ScrollDirection::Up => app.select_prev(),
                         ScrollDirection::Down => app.select_next(),
                     },
-                    Pane::Mailbox => {
-                        // T-131 will wire row-level scroll state
-                        // here. v1 ships the routing only.
-                    }
+                    Pane::Mailbox => match dir {
+                        ScrollDirection::Up => app.mailbox_cursor_up(),
+                        ScrollDirection::Down => app.mailbox_cursor_down(),
+                    },
                 }
             }
         }

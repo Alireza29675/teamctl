@@ -299,9 +299,33 @@ pub struct MailboxBuffers {
     pub sent_after: i64,
     pub channel_after: i64,
     pub wire_after: i64,
+    // T-131 PR-1: UI cursor state per tab. `selected_idx` is an index
+    // INTO `visible_indices(tab)`, not directly into `rows(tab)` — the
+    // two coincide in PR-1 but PR-2 (filter+search) makes them diverge
+    // without changing this invariant or any call site.
+    pub inbox_cursor: CursorState,
+    pub sent_cursor: CursorState,
+    pub channel_cursor: CursorState,
+    pub wire_cursor: CursorState,
+}
+
+/// UI cursor state for one mailbox tab. PR-1 stores only the selected
+/// row index; the rendered scroll-window is derived at render time
+/// from `selected_idx` + the actual pane height, so a terminal resize
+/// just changes the next-paint window without touching persisted
+/// state. `selected_idx` is an index into
+/// [`MailboxBuffers::visible_indices`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CursorState {
+    pub selected_idx: usize,
 }
 
 const MAX_TAB_ROWS: usize = 500;
+
+/// PageUp/PageDown jump size — a screen-ish chunk of rows. Fixed for
+/// PR-1 to keep scope surgical; a follow-up can wire this to the
+/// actual rendered mailbox-pane height once that's plumbed onto App.
+pub const PAGE_JUMP: usize = 10;
 
 impl MailboxBuffers {
     pub fn rows(&self, tab: MailboxTab) -> &[MessageRow] {
@@ -313,10 +337,84 @@ impl MailboxBuffers {
         }
     }
 
+    /// Indices into `rows(tab)` for the rows currently presented to
+    /// the operator. PR-1 returns identity (every row visible); the
+    /// abstraction exists so PR-2 (filter+search) can swap the body
+    /// without touching cursor methods or the render call sites — the
+    /// `selected_idx` invariant "index into visible_indices(tab)" is
+    /// what makes that swap free.
+    pub fn visible_indices(&self, tab: MailboxTab) -> Vec<usize> {
+        (0..self.rows(tab).len()).collect()
+    }
+
+    pub fn cursor(&self, tab: MailboxTab) -> &CursorState {
+        match tab {
+            MailboxTab::Inbox => &self.inbox_cursor,
+            MailboxTab::Sent => &self.sent_cursor,
+            MailboxTab::Channel => &self.channel_cursor,
+            MailboxTab::Wire => &self.wire_cursor,
+        }
+    }
+
+    fn cursor_mut(&mut self, tab: MailboxTab) -> &mut CursorState {
+        match tab {
+            MailboxTab::Inbox => &mut self.inbox_cursor,
+            MailboxTab::Sent => &mut self.sent_cursor,
+            MailboxTab::Channel => &mut self.channel_cursor,
+            MailboxTab::Wire => &mut self.wire_cursor,
+        }
+    }
+
+    /// Move the cursor one row toward the tail; clamps at the last
+    /// visible row (vim-like — no wrap).
+    pub fn move_cursor_down(&mut self, tab: MailboxTab) {
+        let max = self.visible_indices(tab).len().saturating_sub(1);
+        let c = self.cursor_mut(tab);
+        c.selected_idx = (c.selected_idx + 1).min(max);
+    }
+
+    /// Move the cursor one row toward the head; clamps at 0.
+    pub fn move_cursor_up(&mut self, tab: MailboxTab) {
+        let c = self.cursor_mut(tab);
+        c.selected_idx = c.selected_idx.saturating_sub(1);
+    }
+
+    /// Jump a screen toward the tail.
+    pub fn page_cursor_down(&mut self, tab: MailboxTab) {
+        let max = self.visible_indices(tab).len().saturating_sub(1);
+        let c = self.cursor_mut(tab);
+        c.selected_idx = (c.selected_idx + PAGE_JUMP).min(max);
+    }
+
+    /// Jump a screen toward the head.
+    pub fn page_cursor_up(&mut self, tab: MailboxTab) {
+        let c = self.cursor_mut(tab);
+        c.selected_idx = c.selected_idx.saturating_sub(PAGE_JUMP);
+    }
+
+    /// Jump to the first visible row.
+    pub fn cursor_home(&mut self, tab: MailboxTab) {
+        self.cursor_mut(tab).selected_idx = 0;
+    }
+
+    /// Jump to the last visible row.
+    pub fn cursor_end(&mut self, tab: MailboxTab) {
+        let max = self.visible_indices(tab).len().saturating_sub(1);
+        self.cursor_mut(tab).selected_idx = max;
+    }
+
     /// Fold a freshly-fetched batch into the appropriate tab,
-    /// trimming to the last `MAX_TAB_ROWS`. Bumps the cursor to the
-    /// last returned id when the batch is non-empty.
+    /// trimming to the last `MAX_TAB_ROWS`. Bumps the broker
+    /// pagination cursor to the last returned id when the batch is
+    /// non-empty. T-131 PR-1: when the UI cursor was already at the
+    /// tail (or the tab was empty), follow new arrivals — matching
+    /// the pre-T-131 "tail to whatever fits" UX. Always re-clamps the
+    /// UI cursor against the (possibly drained) post-extend visible
+    /// length so a stale index can never reference a missing row.
     pub fn extend(&mut self, tab: MailboxTab, batch: Vec<MessageRow>) {
+        let prev_visible_len = self.visible_indices(tab).len();
+        let was_at_tail =
+            prev_visible_len == 0 || self.cursor(tab).selected_idx + 1 >= prev_visible_len;
         let last_id = batch.last().map(|r| r.id);
         let (buf, after) = match tab {
             MailboxTab::Inbox => (&mut self.inbox, &mut self.inbox_after),
@@ -332,12 +430,25 @@ impl MailboxBuffers {
         if let Some(id) = last_id {
             *after = id;
         }
+        let new_visible_len = self.visible_indices(tab).len();
+        let cur = self.cursor_mut(tab);
+        if was_at_tail && new_visible_len > 0 {
+            cur.selected_idx = new_visible_len - 1;
+        } else if new_visible_len > 0 {
+            let max = new_visible_len - 1;
+            if cur.selected_idx > max {
+                cur.selected_idx = max;
+            }
+        } else {
+            cur.selected_idx = 0;
+        }
     }
 
     /// Reset every tab's contents and cursor. Called when the
     /// focused agent changes — the new agent's `inbox` filter would
     /// otherwise skip historical rows that landed before our last
-    /// `inbox_after`.
+    /// `inbox_after`, and the UI cursor would point into the wrong
+    /// agent's buffer.
     pub fn reset(&mut self) {
         *self = Self::default();
     }
@@ -693,5 +804,178 @@ mod tests {
         assert_eq!(*mock.sent_calls.lock().unwrap(), vec![("p:a".into(), 2)]);
         assert_eq!(*mock.channel_calls.lock().unwrap(), vec![("p:a".into(), 5)]);
         assert_eq!(*mock.wire_calls.lock().unwrap(), vec![("p".into(), 9)]);
+    }
+
+    // T-131 PR-1: cursor + visible_indices invariants.
+
+    fn rows_n(n: i64) -> Vec<MessageRow> {
+        (1..=n).map(|i| row(i, "p:m", "p:dev", "x")).collect()
+    }
+
+    #[test]
+    fn visible_indices_is_identity_in_pr1() {
+        // PR-1 invariant: visible_indices(tab) == (0..rows(tab).len()).
+        // PR-2 swaps the body — this test guards the PR-1 baseline so
+        // a PR-2 regression that breaks PR-1's identity assumption
+        // surfaces here, not in a render call site downstream.
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, rows_n(5));
+        assert_eq!(buf.visible_indices(MailboxTab::Inbox), vec![0, 1, 2, 3, 4]);
+        assert!(buf.visible_indices(MailboxTab::Sent).is_empty());
+    }
+
+    #[test]
+    fn extend_into_empty_seats_cursor_at_tail() {
+        // Pre-T-131 UX was "tail to whatever fits"; the cursor seat
+        // preserves it — a freshly-populated tab shows the latest row
+        // selected, matching the existing snapshot expectations for
+        // unfocused mailbox panes.
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, rows_n(7));
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 6);
+    }
+
+    #[test]
+    fn extend_when_cursor_at_tail_follows_new_arrivals() {
+        // Standard chat-app "follow tail" UX: as long as the operator
+        // hasn't scrolled away, new messages keep the cursor at the
+        // newest row.
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, rows_n(3));
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 2);
+        buf.extend(
+            MailboxTab::Inbox,
+            vec![row(4, "p:m", "p:dev", "x"), row(5, "p:m", "p:dev", "x")],
+        );
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 4);
+    }
+
+    #[test]
+    fn extend_when_cursor_scrolled_up_does_not_follow() {
+        // Operator inspecting older history shouldn't be yanked back
+        // to the tail by a new arrival — the cursor is sticky once it
+        // leaves the tail.
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, rows_n(5));
+        buf.cursor_home(MailboxTab::Inbox); // selected_idx = 0
+        buf.extend(MailboxTab::Inbox, vec![row(6, "p:m", "p:dev", "x")]);
+        assert_eq!(
+            buf.cursor(MailboxTab::Inbox).selected_idx,
+            0,
+            "scrolled-up cursor must not jump on new arrival"
+        );
+    }
+
+    #[test]
+    fn extend_reclamps_cursor_after_drain() {
+        // The MAX_TAB_ROWS drain shifts indices — a cursor that was
+        // valid pre-drain must be re-clamped against the new visible
+        // length so render never indexes past the buffer.
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, rows_n(MAX_TAB_ROWS as i64));
+        buf.cursor_home(MailboxTab::Inbox);
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 0);
+        // Push another batch large enough to drain off the front.
+        let next: Vec<MessageRow> = (501..=510).map(|i| row(i, "p:m", "p:dev", "x")).collect();
+        buf.extend(MailboxTab::Inbox, next);
+        let visible = buf.visible_indices(MailboxTab::Inbox);
+        assert_eq!(visible.len(), MAX_TAB_ROWS);
+        assert!(
+            buf.cursor(MailboxTab::Inbox).selected_idx < visible.len(),
+            "post-drain cursor must stay in range; got {}, visible.len {}",
+            buf.cursor(MailboxTab::Inbox).selected_idx,
+            visible.len()
+        );
+    }
+
+    #[test]
+    fn move_cursor_down_and_up_clamp_at_ends() {
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, rows_n(3)); // cursor seated at 2
+        buf.move_cursor_down(MailboxTab::Inbox);
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 2, "tail clamps");
+        buf.move_cursor_up(MailboxTab::Inbox);
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 1);
+        buf.move_cursor_up(MailboxTab::Inbox);
+        buf.move_cursor_up(MailboxTab::Inbox);
+        buf.move_cursor_up(MailboxTab::Inbox); // extra up at 0 is no-op
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 0, "head clamps");
+    }
+
+    #[test]
+    fn page_cursor_jumps_a_screen() {
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, rows_n(50));
+        buf.cursor_home(MailboxTab::Inbox);
+        buf.page_cursor_down(MailboxTab::Inbox);
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, PAGE_JUMP);
+        buf.page_cursor_down(MailboxTab::Inbox);
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 2 * PAGE_JUMP);
+        buf.page_cursor_up(MailboxTab::Inbox);
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, PAGE_JUMP);
+        // PageDown past the tail clamps.
+        for _ in 0..20 {
+            buf.page_cursor_down(MailboxTab::Inbox);
+        }
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 49);
+        // PageUp past the head clamps.
+        for _ in 0..20 {
+            buf.page_cursor_up(MailboxTab::Inbox);
+        }
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 0);
+    }
+
+    #[test]
+    fn cursor_home_and_end_jump_to_ends() {
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, rows_n(20));
+        buf.cursor_home(MailboxTab::Inbox);
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 0);
+        buf.cursor_end(MailboxTab::Inbox);
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 19);
+    }
+
+    #[test]
+    fn cursors_are_per_tab_and_independent() {
+        // Issue AC: "Scrolling is per-tab — Inbox/Sent/Channel/Wire
+        // each remember their own position."
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, rows_n(10));
+        buf.extend(MailboxTab::Sent, rows_n(10));
+        buf.cursor_home(MailboxTab::Inbox); // Inbox cursor at 0
+                                            // Sent cursor stays at its post-extend tail (idx 9).
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 0);
+        assert_eq!(buf.cursor(MailboxTab::Sent).selected_idx, 9);
+        // And channel/wire are still at 0 with empty buffers.
+        assert_eq!(buf.cursor(MailboxTab::Channel).selected_idx, 0);
+        assert_eq!(buf.cursor(MailboxTab::Wire).selected_idx, 0);
+    }
+
+    #[test]
+    fn reset_clears_cursors_too() {
+        // Reset is called when the focused agent changes; the new
+        // agent's mailbox starts from a clean slate, cursor at 0.
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, rows_n(5));
+        buf.cursor_home(MailboxTab::Inbox);
+        buf.move_cursor_down(MailboxTab::Inbox);
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 1);
+        buf.reset();
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 0);
+        assert_eq!(buf.cursor(MailboxTab::Sent).selected_idx, 0);
+    }
+
+    #[test]
+    fn cursor_methods_are_safe_on_empty_buffer() {
+        // No rows yet — every cursor method must be a no-op on
+        // selected_idx = 0 rather than panic.
+        let mut buf = MailboxBuffers::default();
+        buf.move_cursor_down(MailboxTab::Inbox);
+        buf.move_cursor_up(MailboxTab::Inbox);
+        buf.page_cursor_down(MailboxTab::Inbox);
+        buf.page_cursor_up(MailboxTab::Inbox);
+        buf.cursor_home(MailboxTab::Inbox);
+        buf.cursor_end(MailboxTab::Inbox);
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 0);
     }
 }

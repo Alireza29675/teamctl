@@ -1026,3 +1026,50 @@ fn status_bar_omits_rate_limit_indicator_when_path_crowds_center_slot() {
         "status bar should drop indicator before metrics when path crowds center: {last_line:?}"
     );
 }
+
+#[test]
+fn mailbox_pane_renders_head_anchored_window_when_cursor_at_head() {
+    // T-131 PR-1: with more rows than fit and the cursor jumped to
+    // the head (`Home` / `g`-equivalent), the rendered window shows
+    // the first rows, NOT the pre-T-131 tail. This is the snapshot
+    // value-add — pins the cursor-aware window slicing distinct from
+    // the pre-T-131 tail-only behavior the other mailbox snapshots
+    // still pin for the default cursor-at-tail case.
+    use teamctl_ui::mailbox::MailboxTab;
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    // 30 distinguishable rows — well over the mailbox pane height at
+    // 120x30 (the right-stack mailbox slice is roughly the lower
+    // 2/5 of 30 ≈ 12 rows). With cursor at tail (default), only the
+    // last ~12 rows are visible. With cursor at head, the first ~12
+    // are visible. The body text is the disambiguator.
+    let batch: Vec<_> = (1..=30)
+        .map(|i| {
+            message(
+                i,
+                "writing:dev1",
+                "writing:manager",
+                &format!("msg #{i:02}"),
+            )
+        })
+        .collect();
+    app.mailbox.extend(MailboxTab::Inbox, batch);
+    app.mailbox_cursor_home(); // selected_idx = 0, anchors window at head.
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    // The first row body (#01) must appear; the last row body (#30)
+    // must NOT (it's below the visible window).
+    assert!(
+        s.contains("msg #01"),
+        "head-anchored mailbox should render the first row;\nbuf:\n{s}"
+    );
+    assert!(
+        !s.contains("msg #30"),
+        "head-anchored mailbox must NOT render the last row;\nbuf:\n{s}"
+    );
+    insta::assert_snapshot!("mailbox_head_anchored_120x30", s);
+}
