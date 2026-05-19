@@ -13,6 +13,19 @@ name: installer-smoke
 # Note: until dev2's T-004 (teamctl.run docs/route) lands, we point at the
 # raw GitHub URL for the script. After T-004, swap INSTALLER_URL to
 # https://teamctl.run/install.
+#
+# Step-order class-fix (#324, lineage from #322/#323): the "local script
+# under test" step runs FIRST and is the only fail-closed acceptance gate;
+# the "network" step runs after with `continue-on-error: true` as
+# drift-detection only. Previously the network step ran first under `set
+# -eu` at job level, which fail-closed the WHOLE job on a step that — for
+# any PR that fixes `tools/install.sh` — tests the *old* main script
+# against the *new* release artifacts by construction. That made the
+# acceptance step structurally unreachable on exactly the PRs it most
+# needed to validate (the #322 P0 fix had to be proven by manual end-to-end
+# instead). Keeping the network step in the same job preserves drift
+# signal on schedule / push-to-main / dispatch without letting drift gate
+# PR acceptance.
 
 on:
   push:
@@ -56,26 +69,13 @@ jobs:
           echo "TEAMCTL_VERSION=$tag" >> "$GITHUB_ENV"
           echo "resolved latest tag: $tag"
 
-      - name: Run installer (network)
-        run: |
-          set -eu
-          mkdir -p "$TEAMCTL_INSTALL_DIR"
-          curl -fsSL "$INSTALLER_URL" | sh
-
-      - name: Verify binaries on PATH
-        # Network step pulls the *published* main-branch installer, which today
-        # only installs teamctl. The PR's script (verified below) brings all
-        # four. Don't expect team-mcp / team-bot / teamctl-ui here until this
-        # PR ships.
-        run: |
-          set -eu
-          export PATH="$TEAMCTL_INSTALL_DIR:$PATH"
-          teamctl --version
-
+      # ──────────────────────────────────────────────────────────────────
+      # Acceptance gate (#324): runs FIRST, fail-closed. The PR's actual
+      # `tools/install.sh` is what gates the job result.
+      # ──────────────────────────────────────────────────────────────────
       - name: Run installer (local script under test, pinned latest)
         run: |
           set -eu
-          rm -rf "$TEAMCTL_INSTALL_DIR"
           mkdir -p "$TEAMCTL_INSTALL_DIR"
           sh ./tools/install.sh
 
@@ -87,7 +87,36 @@ jobs:
           team-mcp --version
           team-bot --version
           # Use `command -v` because the published `teamctl-ui` binary
-          # predates the --version fix in this PR; the LOCAL build has
-          # the fix and is pinned by crates/teamctl-ui/tests/cli.rs.
-          # Once 0.7.4 ships, this can become `teamctl-ui --version`.
+          # predates the --version fix in 0.7.4; the LOCAL build has the
+          # fix and is pinned by crates/teamctl-ui/tests/cli.rs.
+          # Once 0.7.4+ is the deployed `teamctl-ui`, this can become
+          # `teamctl-ui --version`.
           command -v teamctl-ui
+
+      # ──────────────────────────────────────────────────────────────────
+      # Drift detection (#324): runs AFTER the acceptance gate with
+      # `continue-on-error: true` so it never gates the job. Tests the
+      # currently-deployed main-branch installer against the latest release
+      # artifacts — useful on schedule / push-to-main / dispatch as a
+      # standing drift sentinel; for PRs it just surfaces "main's currently
+      # -deployed script is broken vs the latest release" without blocking
+      # the PR's own acceptance signal (the #322/#323 trap).
+      # ──────────────────────────────────────────────────────────────────
+      - name: Run installer (network — drift detection, non-gating)
+        continue-on-error: true
+        run: |
+          set -eu
+          rm -rf "$TEAMCTL_INSTALL_DIR"
+          mkdir -p "$TEAMCTL_INSTALL_DIR"
+          curl -fsSL "$INSTALLER_URL" | sh
+
+      - name: Verify binaries on PATH (network — drift detection, non-gating)
+        continue-on-error: true
+        # The network step pulls main's currently-deployed installer, which
+        # may install fewer binaries than the local script under test. Only
+        # `teamctl` is asserted here; drift in the rest is visible from this
+        # step's pass/fail badge without gating the job.
+        run: |
+          set -eu
+          export PATH="$TEAMCTL_INSTALL_DIR:$PATH"
+          teamctl --version
