@@ -113,7 +113,7 @@ Once dep checks pass and the operator confirmed they're ready (Stage 1's closing
 
 ```text
 question: "How should we shape this?"
-header: "What do you want?"
+header: "What do you want to do?"
 options:
   - label: "Co-design a team"
     description: "I'll investigate the codebase, propose 2-3 candidate domains, and you can edit, brainstorm more, or describe your own."
