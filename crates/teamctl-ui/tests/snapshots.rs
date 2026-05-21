@@ -1073,3 +1073,49 @@ fn mailbox_pane_renders_head_anchored_window_when_cursor_at_head() {
     );
     insta::assert_snapshot!("mailbox_head_anchored_120x30", s);
 }
+
+#[test]
+fn mailbox_pane_shows_filter_indicator_when_filter_set_and_input_closed() {
+    // T-131 PR-2: with a non-empty filter and the input CLOSED, the
+    // mailbox pane reserves one line between tabs and body for an
+    // always-visible state indicator (`filter: foo`) — without it,
+    // closing the input leaves a shorter row list with no signal why
+    // rows disappeared (the UX bug the variant Q called out).
+    // Additionally pins that the filter actually restricts the
+    // visible rows: only senders matching the filter substring
+    // appear in the body.
+    use teamctl_ui::mailbox::{MailboxInputKind, MailboxTab};
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    app.mailbox.extend(
+        MailboxTab::Inbox,
+        vec![
+            message(11, "writing:ada", "writing:manager", "ready for review"),
+            message(12, "writing:kian", "writing:manager", "release notes"),
+            message(13, "writing:ada", "writing:manager", "shipping the patch"),
+            message(14, "user:telegram", "writing:manager", "any blockers?"),
+        ],
+    );
+    app.mailbox
+        .set_input(MailboxTab::Inbox, MailboxInputKind::Filter, "ada".into());
+    assert!(app.mailbox_input_mode.is_none());
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(
+        s.contains("filter: ada"),
+        "filter-state indicator must be visible when filter set + input closed;\nbuf:\n{s}"
+    );
+    assert!(
+        s.contains("ready for review") && s.contains("shipping the patch"),
+        "ada's rows must remain visible;\nbuf:\n{s}"
+    );
+    assert!(
+        !s.contains("release notes") && !s.contains("any blockers"),
+        "non-ada rows must be hidden by the filter;\nbuf:\n{s}"
+    );
+    insta::assert_snapshot!("mailbox_filter_indicator_120x30", s);
+}

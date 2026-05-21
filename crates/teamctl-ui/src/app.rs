@@ -26,7 +26,9 @@ use crate::compose::{CliMessageSender, ComposeTarget, Editor, EditorAction, Mess
 use crate::data::TeamSnapshot;
 use crate::keysender::{encode_key, KeySender, ScrollDirection, TmuxKeySender};
 use crate::layouts;
-use crate::mailbox::{BrokerMailboxSource, MailboxBuffers, MailboxSource, MailboxTab};
+use crate::mailbox::{
+    BrokerMailboxSource, MailboxBuffers, MailboxInputKind, MailboxSource, MailboxTab,
+};
 use crate::pane::{PaneSource, TmuxPaneSource};
 use crate::splash;
 use crate::status_bar;
@@ -121,6 +123,17 @@ pub struct App {
     /// view. Reset whenever the focused agent changes — switching
     /// agents starts the operator at the head of fresh traffic.
     pub mailbox: MailboxBuffers,
+    /// T-131 PR-2: which mailbox input the operator is currently
+    /// editing, if any. Singleton — only one input open at a time
+    /// across all tabs. When `Some`, `Pane::Mailbox` keystrokes route
+    /// to the per-tab `filter_text` / `search_text` buffer on
+    /// [`MailboxBuffers`] (the data lives there, per-tab; this is
+    /// just the editing-UI flag).
+    pub mailbox_input_mode: Option<MailboxInputKind>,
+    /// Pre-open snapshot of the active input buffer — restored on
+    /// `Esc` (cancel-revert) so the operator can back out without
+    /// losing the prior filter/search. Empty between sessions.
+    pub mailbox_input_snapshot: String,
     /// Pending approvals snapshot (PR-UI-4). Drives the conditional
     /// stripe at the top of Triptych and the modal opened by `a`.
     pub pending_approvals: Vec<Approval>,
@@ -245,6 +258,8 @@ impl App {
             tutorial_completed: tutorial::is_completed(),
             mailbox_tab: MailboxTab::Inbox,
             mailbox: MailboxBuffers::default(),
+            mailbox_input_mode: None,
+            mailbox_input_snapshot: String::new(),
             pending_approvals: Vec::new(),
             selected_approval: 0,
             approval_error: None,
@@ -553,6 +568,57 @@ impl App {
 
     pub fn mailbox_cursor_end(&mut self) {
         self.mailbox.cursor_end(self.mailbox_tab);
+    }
+
+    // T-131 PR-2: mailbox filter / search input mode. Singleton state
+    // (only one input open at a time) drives editing into the active
+    // tab's per-tab `filter_text` or `search_text` on MailboxBuffers.
+
+    /// Open the sender-substring filter input on the active tab.
+    /// Snapshots the current value so Esc can revert.
+    pub fn open_mailbox_filter_input(&mut self) {
+        self.mailbox_input_snapshot = self.mailbox.filter_text(self.mailbox_tab).to_string();
+        self.mailbox_input_mode = Some(MailboxInputKind::Filter);
+    }
+
+    /// Open the body-substring search input on the active tab.
+    /// Snapshots the current value so Esc can revert.
+    pub fn open_mailbox_search_input(&mut self) {
+        self.mailbox_input_snapshot = self.mailbox.search_text(self.mailbox_tab).to_string();
+        self.mailbox_input_mode = Some(MailboxInputKind::Search);
+    }
+
+    /// Append `c` to the active input buffer. visible_indices
+    /// recomputes live; the cursor re-clamps inside MailboxBuffers.
+    pub fn mailbox_input_push_char(&mut self, c: char) {
+        if let Some(kind) = self.mailbox_input_mode {
+            self.mailbox.input_push_char(self.mailbox_tab, kind, c);
+        }
+    }
+
+    /// Pop one character from the active input buffer.
+    pub fn mailbox_input_pop_char(&mut self) {
+        if let Some(kind) = self.mailbox_input_mode {
+            self.mailbox.input_pop_char(self.mailbox_tab, kind);
+        }
+    }
+
+    /// Confirm and close the input — keep the operator's typed text.
+    pub fn mailbox_input_confirm(&mut self) {
+        self.mailbox_input_mode = None;
+        self.mailbox_input_snapshot.clear();
+    }
+
+    /// Cancel and close the input — revert the active buffer to the
+    /// pre-open snapshot so the operator can back out without losing
+    /// the prior filter / search.
+    pub fn mailbox_input_cancel(&mut self) {
+        if let Some(kind) = self.mailbox_input_mode {
+            let snapshot = std::mem::take(&mut self.mailbox_input_snapshot);
+            self.mailbox.set_input(self.mailbox_tab, kind, snapshot);
+        }
+        self.mailbox_input_mode = None;
+        self.mailbox_input_snapshot.clear();
     }
 
     pub fn cycle_focus_back(&mut self) {
@@ -1467,6 +1533,24 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
         Event::Key(k) if k.kind == KeyEventKind::Press => match app.stage {
             Stage::Splash => app.dismiss_splash(),
             Stage::Triptych => match k.code {
+                // T-131 PR-2: mailbox input-mode interception. When
+                // the filter / search input is open, all keys route
+                // to the active input buffer; everything else
+                // (cursor keys, tab cycle, chord prefixes, even `q`
+                // quit) is swallowed so a stray key can't trigger
+                // unrelated behavior mid-edit. These MUST come first
+                // — placed before the unguarded `Char('q')` quit
+                // arm so typing `q` into the filter doesn't quit.
+                KeyCode::Enter if app.mailbox_input_mode.is_some() => app.mailbox_input_confirm(),
+                KeyCode::Esc if app.mailbox_input_mode.is_some() => app.mailbox_input_cancel(),
+                KeyCode::Backspace if app.mailbox_input_mode.is_some() => {
+                    app.mailbox_input_pop_char()
+                }
+                KeyCode::Char(c) if app.mailbox_input_mode.is_some() => {
+                    app.mailbox_input_push_char(c)
+                }
+                _ if app.mailbox_input_mode.is_some() => {}
+
                 // PR-UI-7 chord-prefix follow-ups MUST be tested
                 // before unguarded `Char('q')` / `Char('o')` arms,
                 // otherwise the no-modifier `q` quit would shadow
@@ -1637,6 +1721,13 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
                 // mirror every-day navigation. PageUp/PageDown jump a
                 // screen; Home/End jump to ends. Per-tab cursor state
                 // lives on `MailboxBuffers` and survives tab switches.
+                // NB on layout precedence: the MailboxFirst-layout
+                // arms above (j/k → channel walk) match first by
+                // arm order and intentionally shadow these in that
+                // layout — MailboxFirst's UX is channel-feed-centric,
+                // not row-cursor-centric. These arms cover the
+                // Triptych layout where mailbox is one focused pane
+                // among three.
                 KeyCode::Up | KeyCode::Char('k') if app.focused_pane == Pane::Mailbox => {
                     app.mailbox_cursor_up()
                 }
@@ -1647,6 +1738,18 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
                 KeyCode::PageDown if app.focused_pane == Pane::Mailbox => app.mailbox_page_down(),
                 KeyCode::Home if app.focused_pane == Pane::Mailbox => app.mailbox_cursor_home(),
                 KeyCode::End if app.focused_pane == Pane::Mailbox => app.mailbox_cursor_end(),
+                // T-131 PR-2: `f` opens the sender-substring filter
+                // input on the active tab; `/` opens the body-search
+                // input. Both gated on Pane::Mailbox so the keys stay
+                // unsurprising in other panes. Once open, the
+                // input-mode arms at the top of this match own the
+                // keystrokes.
+                KeyCode::Char('f') if app.focused_pane == Pane::Mailbox => {
+                    app.open_mailbox_filter_input()
+                }
+                KeyCode::Char('/') if app.focused_pane == Pane::Mailbox => {
+                    app.open_mailbox_search_input()
+                }
                 // Roster navigation — only when roster is the
                 // focused pane. j/k mirror Vim; arrows mirror
                 // every-day navigation.
@@ -3531,5 +3634,166 @@ mod tests {
         // Stripe consumes one row → Detail height is 3/5 of 39 = 23.
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].2, 23);
+    }
+
+    // T-131 PR-2: mailbox filter/search input-mode integration tests.
+    // Drive real key events through `handle_event` to pin the
+    // dispatch contract (input arms at the top of the Triptych match,
+    // openers gated on Pane::Mailbox).
+
+    fn app_with_mailbox_focused() -> App {
+        let mut app = App::new();
+        app.dismiss_splash();
+        // Cycle focus to the Mailbox pane (Roster → Detail → Mailbox).
+        app.cycle_focus();
+        app.cycle_focus();
+        assert_eq!(app.focused_pane, Pane::Mailbox);
+        app
+    }
+
+    #[test]
+    fn f_opens_filter_input_when_mailbox_focused() {
+        let mut app = app_with_mailbox_focused();
+        assert!(app.mailbox_input_mode.is_none());
+        dispatch(&mut app, key(KeyCode::Char('f')));
+        assert_eq!(app.mailbox_input_mode, Some(MailboxInputKind::Filter));
+    }
+
+    #[test]
+    fn slash_opens_search_input_when_mailbox_focused() {
+        let mut app = app_with_mailbox_focused();
+        dispatch(&mut app, key(KeyCode::Char('/')));
+        assert_eq!(app.mailbox_input_mode, Some(MailboxInputKind::Search));
+    }
+
+    #[test]
+    fn f_does_not_open_filter_when_roster_focused() {
+        // The opener is Pane::Mailbox-gated so it stays unsurprising
+        // in other panes (where `f` has no meaning today, but the
+        // guard keeps us out of trouble if it later picks up one).
+        let mut app = App::new();
+        app.dismiss_splash();
+        assert_eq!(app.focused_pane, Pane::Roster);
+        dispatch(&mut app, key(KeyCode::Char('f')));
+        assert!(app.mailbox_input_mode.is_none());
+    }
+
+    #[test]
+    fn typing_into_filter_input_mutates_active_tab_buffer() {
+        let mut app = app_with_mailbox_focused();
+        dispatch(&mut app, key(KeyCode::Char('f')));
+        dispatch(&mut app, key(KeyCode::Char('a')));
+        dispatch(&mut app, key(KeyCode::Char('d')));
+        dispatch(&mut app, key(KeyCode::Char('a')));
+        assert_eq!(app.mailbox.filter_text(app.mailbox_tab), "ada");
+        // Sibling tab's filter must remain empty (per-tab independence).
+        assert_eq!(app.mailbox.filter_text(MailboxTab::Sent), "");
+    }
+
+    #[test]
+    fn backspace_pops_input_buffer() {
+        let mut app = app_with_mailbox_focused();
+        dispatch(&mut app, key(KeyCode::Char('/')));
+        for c in "abc".chars() {
+            dispatch(&mut app, key(KeyCode::Char(c)));
+        }
+        assert_eq!(app.mailbox.search_text(app.mailbox_tab), "abc");
+        dispatch(&mut app, key(KeyCode::Backspace));
+        assert_eq!(app.mailbox.search_text(app.mailbox_tab), "ab");
+    }
+
+    #[test]
+    fn enter_confirms_keeps_typed_text() {
+        let mut app = app_with_mailbox_focused();
+        dispatch(&mut app, key(KeyCode::Char('f')));
+        for c in "kian".chars() {
+            dispatch(&mut app, key(KeyCode::Char(c)));
+        }
+        dispatch(&mut app, key(KeyCode::Enter));
+        assert!(
+            app.mailbox_input_mode.is_none(),
+            "input must close on Enter"
+        );
+        assert_eq!(
+            app.mailbox.filter_text(app.mailbox_tab),
+            "kian",
+            "Enter must keep the typed text (confirm-keep semantics)"
+        );
+    }
+
+    #[test]
+    fn esc_cancels_reverts_to_snapshot() {
+        let mut app = app_with_mailbox_focused();
+        // Seed a prior filter so the snapshot has something to restore.
+        app.mailbox
+            .set_input(app.mailbox_tab, MailboxInputKind::Filter, "previous".into());
+        dispatch(&mut app, key(KeyCode::Char('f')));
+        // Now overwrite via typing.
+        dispatch(&mut app, key(KeyCode::Backspace));
+        dispatch(&mut app, key(KeyCode::Backspace));
+        dispatch(&mut app, key(KeyCode::Char('x')));
+        assert_eq!(app.mailbox.filter_text(app.mailbox_tab), "previox");
+        // Esc → revert.
+        dispatch(&mut app, key(KeyCode::Esc));
+        assert!(app.mailbox_input_mode.is_none());
+        assert_eq!(
+            app.mailbox.filter_text(app.mailbox_tab),
+            "previous",
+            "Esc must revert the active buffer to the pre-open snapshot"
+        );
+    }
+
+    #[test]
+    fn open_input_swallows_pr1_cursor_keys() {
+        // While input is open, Up/Down/j/k/PageUp/PageDown/Home/End
+        // must NOT move the row cursor — they're swallowed by the
+        // input-mode catchall arm.
+        let mut app = app_with_mailbox_focused();
+        // Seed buffers so the cursor has somewhere to move.
+        app.mailbox.extend(
+            app.mailbox_tab,
+            (1..=10)
+                .map(|i| crate::mailbox::MessageRow {
+                    id: i,
+                    sender: "p:a".into(),
+                    recipient: "p:dev".into(),
+                    text: "x".into(),
+                    sent_at: 0.0,
+                })
+                .collect(),
+        );
+        let seated = app.mailbox.cursor(app.mailbox_tab).selected_idx;
+        assert_eq!(seated, 9, "extend seats cursor at tail (PR-1 contract)");
+        // Open filter, then try to move the cursor — must not move.
+        dispatch(&mut app, key(KeyCode::Char('f')));
+        dispatch(&mut app, key(KeyCode::Up));
+        dispatch(&mut app, key(KeyCode::PageUp));
+        dispatch(&mut app, key(KeyCode::Home));
+        // Cursor still at 9 (input ate `f` but those chars are part
+        // of the filter buffer; Up/PageUp/Home are swallowed).
+        // Note: typing `f` opens, but Up/PageUp/Home are not Char(_)
+        // so they hit the catchall swallow arm.
+        assert_eq!(app.mailbox.cursor(app.mailbox_tab).selected_idx, 9);
+    }
+
+    #[test]
+    fn open_input_swallows_q_quit() {
+        // The killer test: pressing `q` while filter is open MUST go
+        // into the filter buffer, NOT trigger the quit confirm.
+        // (Char(c)-with-input-mode-guard arm placed BEFORE
+        // `Char('q')` quit arm in match order.)
+        let mut app = app_with_mailbox_focused();
+        dispatch(&mut app, key(KeyCode::Char('f')));
+        dispatch(&mut app, key(KeyCode::Char('q')));
+        assert_eq!(
+            app.stage,
+            Stage::Triptych,
+            "q must NOT trigger quit while input is open"
+        );
+        assert_eq!(
+            app.mailbox.filter_text(app.mailbox_tab),
+            "q",
+            "q must land in the filter buffer"
+        );
     }
 }

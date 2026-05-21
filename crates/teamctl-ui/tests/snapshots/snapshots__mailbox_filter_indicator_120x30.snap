@@ -1,0 +1,34 @@
+---
+source: crates/teamctl-ui/tests/snapshots.rs
+expression: s
+---
+┌AGENTS────────────────────┐┌DETAIL · writing:manager──────────────────────────────────────────────────────────────────┐
+│ *  manager               ││                      (no scrollback yet — agent may be starting up)                      │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          │└──────────────────────────────────────────────────────────────────────────────────────────┘
+│                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
+│                          ││ Inbox    Sent    Channel    Wire                                                         │
+│                          ││filter: ada                                                                               │
+│                          ││[writing:ada] ready for review                                                            │
+│                          ││[writing:ada] shipping the patch                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+│                          ││                                                                                          │
+└──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
+Tab cycle panes  ·  / search · ⏎ open · @ send · q quit                                              ? help · t tutorial
+/fixture                                                                                           CPU 0% · RAM 0.0/0 GB
