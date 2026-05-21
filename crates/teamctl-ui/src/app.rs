@@ -1546,7 +1546,17 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
                 KeyCode::Backspace if app.mailbox_input_mode.is_some() => {
                     app.mailbox_input_pop_char()
                 }
-                KeyCode::Char(c) if app.mailbox_input_mode.is_some() => {
+                // Char arm is gated on "no modifier or Shift only" so
+                // Ctrl / Alt / Meta + Char combos (e.g. the `Ctrl+W`
+                // chord prefix, `Ctrl+C`) fall through to the swallow
+                // arm below instead of landing literally in the filter
+                // buffer — matches standard text-input UX (modifier
+                // combos aren't typed as their literal char). qa #335
+                // nit 2.
+                KeyCode::Char(c)
+                    if app.mailbox_input_mode.is_some()
+                        && (k.modifiers.is_empty() || k.modifiers == KeyModifiers::SHIFT) =>
+                {
                     app.mailbox_input_push_char(c)
                 }
                 _ if app.mailbox_input_mode.is_some() => {}
@@ -3774,6 +3784,39 @@ mod tests {
         // Note: typing `f` opens, but Up/PageUp/Home are not Char(_)
         // so they hit the catchall swallow arm.
         assert_eq!(app.mailbox.cursor(app.mailbox_tab).selected_idx, 9);
+    }
+
+    #[test]
+    fn ctrl_modifier_char_does_not_inject_into_input() {
+        // qa #335 nit 2: Ctrl+W / Ctrl+C / Alt+Char while filter is
+        // open must NOT land their literal char in the buffer.
+        // Modifier combos fall through the Char-arm's guard and hit
+        // the swallow arm — operator can still type plain `w` to
+        // search for that char.
+        let mut app = app_with_mailbox_focused();
+        dispatch(&mut app, key(KeyCode::Char('f'))); // open filter
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        dispatch(
+            &mut app,
+            key_with(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        dispatch(&mut app, key_with(KeyCode::Char('a'), KeyModifiers::ALT));
+        assert_eq!(
+            app.mailbox.filter_text(app.mailbox_tab),
+            "",
+            "modifier+Char combos must not leak into the filter buffer"
+        );
+        // Plain Char (no modifier) still types — sanity that the
+        // guard didn't lock everyone out.
+        dispatch(&mut app, key(KeyCode::Char('w')));
+        assert_eq!(app.mailbox.filter_text(app.mailbox_tab), "w");
+        // Shift+Char (capital letter shape) also types — Shift is
+        // explicitly allowed in the guard.
+        dispatch(&mut app, key_with(KeyCode::Char('X'), KeyModifiers::SHIFT));
+        assert_eq!(app.mailbox.filter_text(app.mailbox_tab), "wX");
     }
 
     #[test]
