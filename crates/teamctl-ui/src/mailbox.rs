@@ -301,12 +301,38 @@ pub struct MailboxBuffers {
     pub wire_after: i64,
     // T-131 PR-1: UI cursor state per tab. `selected_idx` is an index
     // INTO `visible_indices(tab)`, not directly into `rows(tab)` — the
-    // two coincide in PR-1 but PR-2 (filter+search) makes them diverge
-    // without changing this invariant or any call site.
+    // two coincide when no filter/search is set; PR-2 made them
+    // diverge without changing this invariant or any call site (the
+    // composability payoff of returning `Vec<usize>` indices, not a
+    // slice).
     pub inbox_cursor: CursorState,
     pub sent_cursor: CursorState,
     pub channel_cursor: CursorState,
     pub wire_cursor: CursorState,
+    // T-131 PR-2: per-tab filter (sender substring) + search (body
+    // substring) text. Both compose: a row is visible iff it passes
+    // BOTH (empty = no-op on that axis). Mirrors the existing per-tab
+    // Vec + cursor pattern. Case-insensitive substring match.
+    pub inbox_filter: String,
+    pub sent_filter: String,
+    pub channel_filter: String,
+    pub wire_filter: String,
+    pub inbox_search: String,
+    pub sent_search: String,
+    pub channel_search: String,
+    pub wire_search: String,
+}
+
+/// Which mailbox input the operator is editing. Singleton at the App
+/// level (only one input can be open at a time across all tabs);
+/// distinct from the per-tab `filter_text` / `search_text` it targets,
+/// which live on [`MailboxBuffers`]. Defined here so the data-side
+/// methods (`input_push_char`, `input_pop_char`, etc.) can take it
+/// without crossing the App boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MailboxInputKind {
+    Filter,
+    Search,
 }
 
 /// UI cursor state for one mailbox tab. PR-1 stores only the selected
@@ -338,13 +364,122 @@ impl MailboxBuffers {
     }
 
     /// Indices into `rows(tab)` for the rows currently presented to
-    /// the operator. PR-1 returns identity (every row visible); the
-    /// abstraction exists so PR-2 (filter+search) can swap the body
-    /// without touching cursor methods or the render call sites — the
-    /// `selected_idx` invariant "index into visible_indices(tab)" is
-    /// what makes that swap free.
+    /// the operator — filter ∩ search. PR-2 swapped this body in;
+    /// every cursor method and the render call site stayed unchanged
+    /// from PR-1 because they go through this abstraction. A row at
+    /// `rows(tab)[i]` is visible iff:
+    ///
+    /// 1. `filter_text(tab)` is empty OR `row.sender` (lower-cased)
+    ///    contains the filter (lower-cased) as a substring.
+    /// 2. `search_text(tab)` is empty OR `row.text` (lower-cased)
+    ///    contains the search (lower-cased) as a substring.
+    ///
+    /// When both axes are empty, the result is identity
+    /// `(0..rows.len())` — PR-1's default behavior recovers exactly.
+    /// Case-insensitive substring is the documented contract; the
+    /// per-keystroke recompute on small (~500-row) buffers is well
+    /// within budget.
     pub fn visible_indices(&self, tab: MailboxTab) -> Vec<usize> {
-        (0..self.rows(tab).len()).collect()
+        let rows = self.rows(tab);
+        let filter = self.filter_text(tab).to_lowercase();
+        let search = self.search_text(tab).to_lowercase();
+        if filter.is_empty() && search.is_empty() {
+            return (0..rows.len()).collect();
+        }
+        (0..rows.len())
+            .filter(|&i| {
+                let row = &rows[i];
+                (filter.is_empty() || row.sender.to_lowercase().contains(&filter))
+                    && (search.is_empty() || row.text.to_lowercase().contains(&search))
+            })
+            .collect()
+    }
+
+    /// Current sender-substring filter on `tab`; empty = no filter.
+    pub fn filter_text(&self, tab: MailboxTab) -> &str {
+        match tab {
+            MailboxTab::Inbox => &self.inbox_filter,
+            MailboxTab::Sent => &self.sent_filter,
+            MailboxTab::Channel => &self.channel_filter,
+            MailboxTab::Wire => &self.wire_filter,
+        }
+    }
+
+    /// Current body-substring search on `tab`; empty = no search.
+    pub fn search_text(&self, tab: MailboxTab) -> &str {
+        match tab {
+            MailboxTab::Inbox => &self.inbox_search,
+            MailboxTab::Sent => &self.sent_search,
+            MailboxTab::Channel => &self.channel_search,
+            MailboxTab::Wire => &self.wire_search,
+        }
+    }
+
+    fn filter_text_mut(&mut self, tab: MailboxTab) -> &mut String {
+        match tab {
+            MailboxTab::Inbox => &mut self.inbox_filter,
+            MailboxTab::Sent => &mut self.sent_filter,
+            MailboxTab::Channel => &mut self.channel_filter,
+            MailboxTab::Wire => &mut self.wire_filter,
+        }
+    }
+
+    fn search_text_mut(&mut self, tab: MailboxTab) -> &mut String {
+        match tab {
+            MailboxTab::Inbox => &mut self.inbox_search,
+            MailboxTab::Sent => &mut self.sent_search,
+            MailboxTab::Channel => &mut self.channel_search,
+            MailboxTab::Wire => &mut self.wire_search,
+        }
+    }
+
+    /// Push `c` onto the active input buffer for `tab`, then clamp
+    /// the cursor against the (possibly shorter) new visible_indices.
+    /// Called per-keystroke by the App input-mode handler.
+    pub fn input_push_char(&mut self, tab: MailboxTab, kind: MailboxInputKind, c: char) {
+        match kind {
+            MailboxInputKind::Filter => self.filter_text_mut(tab).push(c),
+            MailboxInputKind::Search => self.search_text_mut(tab).push(c),
+        }
+        self.clamp_cursor(tab);
+    }
+
+    /// Pop one character (Backspace) from the active input buffer for
+    /// `tab`, then re-clamp the cursor.
+    pub fn input_pop_char(&mut self, tab: MailboxTab, kind: MailboxInputKind) {
+        match kind {
+            MailboxInputKind::Filter => {
+                self.filter_text_mut(tab).pop();
+            }
+            MailboxInputKind::Search => {
+                self.search_text_mut(tab).pop();
+            }
+        }
+        self.clamp_cursor(tab);
+    }
+
+    /// Replace the active input buffer for `tab` wholesale — used by
+    /// the Esc-cancel-revert path to restore the pre-open snapshot.
+    pub fn set_input(&mut self, tab: MailboxTab, kind: MailboxInputKind, value: String) {
+        match kind {
+            MailboxInputKind::Filter => *self.filter_text_mut(tab) = value,
+            MailboxInputKind::Search => *self.search_text_mut(tab) = value,
+        }
+        self.clamp_cursor(tab);
+    }
+
+    /// Clamp the per-tab cursor to the current visible_indices range.
+    /// Called from every input mutation and from extend()'s drain
+    /// path so a stale `selected_idx` can never index past the
+    /// visible set.
+    fn clamp_cursor(&mut self, tab: MailboxTab) {
+        let len = self.visible_indices(tab).len();
+        let cur = self.cursor_mut(tab);
+        if len == 0 {
+            cur.selected_idx = 0;
+        } else if cur.selected_idx >= len {
+            cur.selected_idx = len - 1;
+        }
     }
 
     pub fn cursor(&self, tab: MailboxTab) -> &CursorState {
@@ -975,6 +1110,173 @@ mod tests {
         buf.page_cursor_down(MailboxTab::Inbox);
         buf.page_cursor_up(MailboxTab::Inbox);
         buf.cursor_home(MailboxTab::Inbox);
+        buf.cursor_end(MailboxTab::Inbox);
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 0);
+    }
+
+    // T-131 PR-2: filter + search semantics.
+
+    fn mixed_rows() -> Vec<MessageRow> {
+        vec![
+            row(1, "p:ada", "p:dev", "ready for review"),
+            row(2, "p:kian", "p:dev", "release pipeline notes"),
+            row(3, "p:ada", "p:dev", "shipping the patch"),
+            row(4, "user:telegram", "p:dev", "any blockers?"),
+            row(5, "p:kian", "p:dev", "Release smoke green"),
+        ]
+    }
+
+    #[test]
+    fn visible_indices_identity_when_no_filter_no_search() {
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, mixed_rows());
+        assert_eq!(
+            buf.visible_indices(MailboxTab::Inbox),
+            vec![0, 1, 2, 3, 4],
+            "no filter + no search must recover PR-1 identity exactly"
+        );
+    }
+
+    #[test]
+    fn filter_restricts_to_sender_substring_case_insensitive() {
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, mixed_rows());
+        buf.set_input(MailboxTab::Inbox, MailboxInputKind::Filter, "ADA".into());
+        assert_eq!(
+            buf.visible_indices(MailboxTab::Inbox),
+            vec![0, 2],
+            "filter `ADA` (case-insensitive) must match `p:ada` rows only"
+        );
+    }
+
+    #[test]
+    fn search_restricts_to_body_substring_case_insensitive() {
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, mixed_rows());
+        buf.set_input(
+            MailboxTab::Inbox,
+            MailboxInputKind::Search,
+            "release".into(),
+        );
+        assert_eq!(
+            buf.visible_indices(MailboxTab::Inbox),
+            vec![1, 4],
+            "search `release` must match both `release pipeline notes` and \
+             `Release smoke green` case-insensitively"
+        );
+    }
+
+    #[test]
+    fn filter_and_search_compose_via_intersection() {
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, mixed_rows());
+        buf.set_input(MailboxTab::Inbox, MailboxInputKind::Filter, "kian".into());
+        buf.set_input(
+            MailboxTab::Inbox,
+            MailboxInputKind::Search,
+            "release".into(),
+        );
+        assert_eq!(
+            buf.visible_indices(MailboxTab::Inbox),
+            vec![1, 4],
+            "filter `kian` ∩ search `release` must keep only kian's release rows"
+        );
+        // Pin "compose" semantics: each axis on its own would be a
+        // superset; intersection is strictly smaller-or-equal.
+        let only_filter = {
+            let mut b = MailboxBuffers::default();
+            b.extend(MailboxTab::Inbox, mixed_rows());
+            b.set_input(MailboxTab::Inbox, MailboxInputKind::Filter, "kian".into());
+            b.visible_indices(MailboxTab::Inbox)
+        };
+        assert_eq!(only_filter, vec![1, 4]); // here filter alone happens to coincide
+    }
+
+    #[test]
+    fn empty_axis_is_noop() {
+        // The empty-input contract: empty = clear that axis. Issue AC.
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, mixed_rows());
+        // Set then clear filter — visible_indices returns to identity.
+        buf.set_input(MailboxTab::Inbox, MailboxInputKind::Filter, "ada".into());
+        assert_eq!(buf.visible_indices(MailboxTab::Inbox), vec![0, 2]);
+        buf.set_input(MailboxTab::Inbox, MailboxInputKind::Filter, String::new());
+        assert_eq!(
+            buf.visible_indices(MailboxTab::Inbox),
+            vec![0, 1, 2, 3, 4],
+            "clearing the filter must restore identity"
+        );
+    }
+
+    #[test]
+    fn input_push_pop_updates_visible_and_clamps_cursor() {
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, mixed_rows()); // cursor lands at 4 (tail)
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 4);
+        // Type `a`-`d`-`a` → filter shrinks visible to {0, 2}, len 2.
+        // The cursor was at 4 (out of range for the shorter list), so
+        // clamp_cursor must bring it to len-1 = 1.
+        buf.input_push_char(MailboxTab::Inbox, MailboxInputKind::Filter, 'a');
+        buf.input_push_char(MailboxTab::Inbox, MailboxInputKind::Filter, 'd');
+        buf.input_push_char(MailboxTab::Inbox, MailboxInputKind::Filter, 'a');
+        assert_eq!(buf.filter_text(MailboxTab::Inbox), "ada");
+        assert_eq!(buf.visible_indices(MailboxTab::Inbox), vec![0, 2]);
+        assert_eq!(
+            buf.cursor(MailboxTab::Inbox).selected_idx,
+            1,
+            "cursor must clamp to the shorter visible_indices len-1"
+        );
+        // Backspace twice → filter becomes `a`, visible widens but
+        // cursor stays where it landed (in range).
+        buf.input_pop_char(MailboxTab::Inbox, MailboxInputKind::Filter);
+        buf.input_pop_char(MailboxTab::Inbox, MailboxInputKind::Filter);
+        assert_eq!(buf.filter_text(MailboxTab::Inbox), "a");
+    }
+
+    #[test]
+    fn filter_and_search_are_per_tab() {
+        // Issue AC: "Filter state is per-tab." So is search.
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, mixed_rows());
+        buf.extend(MailboxTab::Sent, mixed_rows());
+        buf.set_input(MailboxTab::Inbox, MailboxInputKind::Filter, "ada".into());
+        buf.set_input(MailboxTab::Sent, MailboxInputKind::Search, "release".into());
+        assert_eq!(buf.filter_text(MailboxTab::Inbox), "ada");
+        assert_eq!(buf.filter_text(MailboxTab::Sent), "");
+        assert_eq!(buf.search_text(MailboxTab::Inbox), "");
+        assert_eq!(buf.search_text(MailboxTab::Sent), "release");
+        assert_eq!(buf.visible_indices(MailboxTab::Inbox), vec![0, 2]);
+        assert_eq!(buf.visible_indices(MailboxTab::Sent), vec![1, 4]);
+    }
+
+    #[test]
+    fn reset_clears_filter_and_search() {
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, mixed_rows());
+        buf.set_input(MailboxTab::Inbox, MailboxInputKind::Filter, "ada".into());
+        buf.set_input(MailboxTab::Inbox, MailboxInputKind::Search, "ship".into());
+        buf.reset();
+        assert_eq!(buf.filter_text(MailboxTab::Inbox), "");
+        assert_eq!(buf.search_text(MailboxTab::Inbox), "");
+        assert!(buf.rows(MailboxTab::Inbox).is_empty());
+    }
+
+    #[test]
+    fn empty_visible_keeps_cursor_at_zero_not_panic() {
+        // Filter that matches no rows yields empty visible_indices.
+        // clamp_cursor must leave cursor at 0 rather than underflow.
+        let mut buf = MailboxBuffers::default();
+        buf.extend(MailboxTab::Inbox, mixed_rows());
+        buf.set_input(
+            MailboxTab::Inbox,
+            MailboxInputKind::Filter,
+            "no-such-sender".into(),
+        );
+        assert!(buf.visible_indices(MailboxTab::Inbox).is_empty());
+        assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 0);
+        // Cursor methods on an empty visible set must not panic.
+        buf.move_cursor_down(MailboxTab::Inbox);
+        buf.move_cursor_up(MailboxTab::Inbox);
         buf.cursor_end(MailboxTab::Inbox);
         assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 0);
     }

@@ -22,7 +22,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::app::App;
 use crate::data::{state_glyph, tree_row_meta, AgentInfo, TreeRowMeta};
-use crate::mailbox::{render_row, MailboxTab};
+use crate::mailbox::{render_row, MailboxInputKind, MailboxTab};
 use crate::theme::ColorMode;
 
 /// Top-level layout selector for the main view (Stage::Triptych).
@@ -469,15 +469,72 @@ fn render_mailbox(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
 
-    // Reserve the top line for the tab indicator; everything below
-    // is rows from the active tab's buffer.
+    // T-131 PR-2: between tabs and body, conditionally reserve one
+    // line for either the open filter / search input bar OR the
+    // always-visible filter-state indicator when filter / search are
+    // non-empty but the input is closed. Neither condition active →
+    // height 0, body gets all the space (matches PR-1 layout).
+    let tab = app.mailbox_tab;
+    let input_open = app.mailbox_input_mode.is_some();
+    let filter = app.mailbox.filter_text(tab);
+    let search = app.mailbox.search_text(tab);
+    let indicator_visible = !input_open && (!filter.is_empty() || !search.is_empty());
+    let aux_height = if input_open || indicator_visible {
+        1
+    } else {
+        0
+    };
+
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(1),          // tabs
+            Constraint::Length(aux_height), // input bar OR state indicator (0 when neither)
+            Constraint::Min(0),             // body
+        ])
         .split(inner);
 
     render_mailbox_tabs(buf, layout[0], app);
-    render_mailbox_body(buf, layout[1], app);
+    if aux_height == 1 {
+        render_mailbox_aux(buf, layout[1], app);
+    }
+    render_mailbox_body(buf, layout[2], app);
+}
+
+fn render_mailbox_aux(buf: &mut Buffer, area: Rect, app: &App) {
+    // T-131 PR-2: one-line auxiliary row between mailbox tabs and
+    // body. Either:
+    //   - the active input bar (`filter: foo█` / `search: bar█`,
+    //     with a faux cursor block at the end of the typed text),
+    //     when an input is open; or
+    //   - the always-visible filter-state indicator (`filter: foo
+    //     search: bar`) when input is closed but at least one axis
+    //     is non-empty — without this, closing the input leaves a
+    //     shorter row list with no signal why rows disappeared,
+    //     the UX bug the issue flagged.
+    let tab = app.mailbox_tab;
+    let muted = Style::default().fg(app.capabilities.muted());
+    let text = match app.mailbox_input_mode {
+        Some(MailboxInputKind::Filter) => {
+            format!("filter: {}\u{2588}", app.mailbox.filter_text(tab))
+        }
+        Some(MailboxInputKind::Search) => {
+            format!("search: {}\u{2588}", app.mailbox.search_text(tab))
+        }
+        None => {
+            // Closed input but at least one axis non-empty (caller
+            // gated; this branch is the indicator only).
+            let filter = app.mailbox.filter_text(tab);
+            let search = app.mailbox.search_text(tab);
+            match (filter.is_empty(), search.is_empty()) {
+                (false, false) => format!("filter: {filter}  search: {search}"),
+                (false, true) => format!("filter: {filter}"),
+                (true, false) => format!("search: {search}"),
+                (true, true) => String::new(), // unreachable per gate
+            }
+        }
+    };
+    Paragraph::new(text).style(muted).render(area, buf);
 }
 
 fn render_mailbox_tabs(buf: &mut Buffer, area: Rect, app: &App) {
