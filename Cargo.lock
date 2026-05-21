@@ -2651,6 +2651,7 @@ version = "0.8.6"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
+ "chrono",
  "crossterm",
  "dirs",
  "insta",

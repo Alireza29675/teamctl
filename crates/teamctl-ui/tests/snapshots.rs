@@ -1119,3 +1119,46 @@ fn mailbox_pane_shows_filter_indicator_when_filter_set_and_input_closed() {
     );
     insta::assert_snapshot!("mailbox_filter_indicator_120x30", s);
 }
+
+#[test]
+fn mailbox_detail_modal_renders_metadata_and_body() {
+    // T-131 PR-3: open the detail modal on a selected row and pin
+    // its rendered shape — metadata header (from / to / kind / time /
+    // transport) + the wrapped body. Title carries the message id.
+    use teamctl_ui::app::Stage;
+    use teamctl_ui::mailbox::MailboxTab;
+    let mut app = fresh_app();
+    app.dismiss_splash();
+    app.replace_team(fixture_team(
+        "writing-team",
+        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
+    ));
+    app.mailbox.extend(
+        MailboxTab::Inbox,
+        vec![message(
+            42,
+            "user:telegram",
+            "writing:manager",
+            "shipping the detail modal — please review when you have a moment.",
+        )],
+    );
+    // Cycle focus to Mailbox (Roster → Detail → Mailbox).
+    app.cycle_focus();
+    app.cycle_focus();
+    app.open_mailbox_detail_modal();
+    assert_eq!(app.stage, Stage::MailboxDetailModal);
+    let buf = render_to_buffer(&app, 120, 30);
+    let s = buffer_to_string(&buf);
+    assert!(s.contains("MESSAGE"), "modal title missing:\n{s}");
+    assert!(s.contains("id 42"), "message id missing:\n{s}");
+    assert!(
+        s.contains("via telegram"),
+        "transport heuristic missing:\n{s}"
+    );
+    assert!(s.contains("DM"), "kind label missing:\n{s}");
+    assert!(
+        s.contains("shipping the detail modal"),
+        "body missing:\n{s}"
+    );
+    insta::assert_snapshot!("mailbox_detail_modal_120x30", s);
+}
