@@ -21,8 +21,8 @@ expression: buffer_to_string(&buf)
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
 │                          ││ Inbox    Sent    Channel    Wire                                                         │
-│                          ││[user:cli] 0.7.1 release cut · CHANGELOG updated                                       now│
-│                          ││[writing:eng_lead] T-079 cluster Wave 3 dispatching                                    now│
+│                          ││[user:cli] 0.7.1 release cut · CHANGELOG updated                                     00:00│
+│                          ││[writing:eng_lead] T-079 cluster Wave 3 dispatching                                  00:00│
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │

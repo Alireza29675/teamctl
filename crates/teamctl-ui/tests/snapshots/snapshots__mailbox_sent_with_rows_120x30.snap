@@ -21,9 +21,9 @@ expression: buffer_to_string(&buf)
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
 │                          ││ Inbox    Sent    Channel    Wire                                                         │
-│                          ││[→writing:dev1] T-079 needs the wave-3 split first                                     now│
-│                          ││[→#devs] blocking on review for #88                                                    now│
-│                          ││[→user:telegram] all 5 PRs merged · 0.7.1 ready                                        now│
+│                          ││[→writing:dev1] T-079 needs the wave-3 split first                                   00:00│
+│                          ││[→#devs] blocking on review for #88                                                  00:00│
+│                          ││[→user:telegram] all 5 PRs merged · 0.7.1 ready                                      00:00│
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │

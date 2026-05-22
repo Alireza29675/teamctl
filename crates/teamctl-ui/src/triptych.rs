@@ -614,14 +614,18 @@ fn render_mailbox_body(buf: &mut Buffer, area: Rect, app: &App) {
     let focused = app.focused_pane == Pane::Mailbox;
     let highlight = Style::default().add_modifier(Modifier::REVERSED);
     let muted = Style::default().fg(app.capabilities.muted());
-    // T-131 PR-4: per-row relative-time indicator, right-aligned at
-    // the pane edge. Computed at render time from the current clock
-    // so values stay fresh across the 1s refresh tick without an
-    // explicit event. Reserve 4 columns for the indicator (`123d` is
-    // the worst case) plus 1 column of gutter; truncate the left
-    // content to fit so the right-side indicator never wraps.
+    // T-131 PR-4: per-row absolute-time indicator, right-aligned at
+    // the pane edge. Computed at render time from `app.now_secs` so
+    // values stay fresh across the 1s refresh tick without an
+    // explicit event AND so test snapshots are deterministic (the
+    // wall-clock read lives in the run loop, not here). Owner
+    // ratified the today-fold + 24h shape (tg 3388): same-day rows
+    // render `HH:MM` (5 chars), prior-day rows render `%b %d %H:%M`
+    // (12 chars). Reserve the worst case (12 cols) + 1 col gutter;
+    // truncate the left content to fit so the right-side indicator
+    // never wraps onto a new line.
     let now_secs = app.now_secs;
-    const TIME_INDICATOR_WIDTH: usize = 4;
+    const TIME_INDICATOR_WIDTH: usize = 12;
     const TIME_INDICATOR_GUTTER: usize = 1;
     let row_width = area.width as usize;
     // T-231: pass the active tab so render_row can pick the right
@@ -631,7 +635,7 @@ fn render_mailbox_body(buf: &mut Buffer, area: Rect, app: &App) {
         .map(|&row_idx| {
             let row = &rows[row_idx];
             let left = render_row(row, &app.team, app.mailbox_tab);
-            let rtime = crate::mailbox::relative_time(now_secs, row.sent_at);
+            let rtime = crate::mailbox::row_timestamp(now_secs, row.sent_at);
             // Right-pad the left content so the indicator sits at
             // the pane edge. Truncate when the body would overflow
             // the reserved indicator space (chars-not-bytes to keep

@@ -22,8 +22,8 @@ expression: s
 │                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
 │                          ││ Inbox    Sent    Channel    Wire                                                         │
 │                          ││filter: ada                                                                               │
-│                          ││[writing:ada] ready for review                                                         now│
-│                          ││[writing:ada] shipping the patch                                                       now│
+│                          ││[writing:ada] ready for review                                                       00:00│
+│                          ││[writing:ada] shipping the patch                                                     00:00│
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
