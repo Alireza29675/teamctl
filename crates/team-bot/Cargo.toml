@@ -29,3 +29,6 @@ rusqlite.workspace = true
 # cleanly to every target dist supports.
 teloxide = { version = "0.13", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
 reqwest.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

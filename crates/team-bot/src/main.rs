@@ -1564,12 +1564,29 @@ async fn download_to(bot: &Bot, file_id: &str, path: &Path, dir: &Path) -> Resul
         .get_file(file_id)
         .await
         .map_err(|e| format!("get_file: {e}"))?;
-    let mut handle = tokio::fs::File::create(path)
+
+    // #332: disk-fill counterpart of #279's RAM-OOM defense. Layer 1 —
+    // fast-fail when Telegram already reports a size over the ceiling,
+    // before creating any destination file on disk. Layer 2 (below) —
+    // a `BoundedWriter` wrapping the file handle catches a lying-small
+    // upstream that tries to stream past the ceiling mid-download.
+    if (file.size as usize) > MAX_DOWNLOAD_BYTES {
+        return Err(media_size_pre_reject(
+            "media file",
+            file.size,
+            MAX_DOWNLOAD_BYTES,
+        ));
+    }
+
+    let handle = tokio::fs::File::create(path)
         .await
         .map_err(|e| format!("create file `{}`: {e}", path.display()))?;
-    bot.download_file(&file.path, &mut handle)
+    let mut bounded = BoundedWriter::new("media file", handle, MAX_DOWNLOAD_BYTES);
+    bot.download_file(&file.path, &mut bounded)
         .await
         .map_err(|e| format!("download_file: {e}"))?;
+
+    let mut handle = bounded.into_inner();
     handle.flush().await.ok();
     drop(handle);
     let meta = tokio::fs::metadata(path)
@@ -1999,43 +2016,69 @@ async fn handle_voice_stt_missing(bot: &Bot, msg: &Message) -> ResponseResult<()
 /// a lying-small upstream can't flood the `Vec` mid-download either.
 const MAX_VOICE_BYTES: usize = 2 * 1024 * 1024;
 
-/// Operator-facing error when Telegram already reports a voice file
-/// over the ceiling — fast-fail before allocating anything. Pure for
-/// unit-testability; names both numbers per the operator-visibility
-/// call so the operator sees what was attempted vs. what's allowed.
-fn voice_size_pre_reject(reported: u32, max: usize) -> String {
-    format!("voice file too large: {reported} bytes (max {max})")
+/// Hard upper bound on disk-bound media downloads ([`download_to`]).
+///
+/// #332: same upstream-trust boundary as the voice path (`file.size`
+/// is reported by Telegram, not verified), different downstream
+/// threat — RAM-OOM on the voice path, **disk-fill** here. Telegram's
+/// default bot-API limit is 50 MB for documents; 50 MiB matches that
+/// and stays an order of magnitude below typical operator disk
+/// budgets, while comfortably covering photo + document payloads
+/// teamctl operators actually exchange. Bump requires a release-notes
+/// entry + this constant — #332.
+const MAX_DOWNLOAD_BYTES: usize = 50 * 1024 * 1024;
+
+/// Operator-facing error when Telegram already reports a media file
+/// over the ceiling — fast-fail before opening any sink. The `kind`
+/// label distinguishes voice (RAM-OOM defense, #279) from media
+/// (disk-fill defense, #332) so operators can tell which boundary
+/// fired without log-diving. Pure for unit-testability.
+fn media_size_pre_reject(kind: &str, reported: u32, max: usize) -> String {
+    format!("{kind} too large: {reported} bytes (max {max})")
 }
 
 /// Operator-facing error when cumulative bytes mid-download would pass
 /// the ceiling — fires from [`BoundedWriter`] when `file.size` lied
-/// small but the actual stream tries to flood us. Pure for
-/// unit-testability.
-fn voice_size_mid_reject(sofar: usize, incoming: usize, max: usize) -> String {
+/// small but the actual stream tries to flood us. The `kind` label
+/// threads from the wrapper's construction so the message names the
+/// right boundary (`voice file` vs `media file`).
+fn media_size_mid_reject(kind: &str, sofar: usize, incoming: usize, max: usize) -> String {
     let proposed = sofar.saturating_add(incoming);
     format!(
-        "voice file exceeded ceiling mid-download \
+        "{kind} exceeded ceiling mid-download \
          (max {max} bytes; upstream sent at least {proposed})"
     )
 }
 
+// #279 voice-path pre-check helper — thin wrapper over the generic
+// pair above so the voice pre-reject call site stays readable. No
+// `voice_size_mid_reject` wrapper needed: `BoundedWriter::poll_write`
+// calls `media_size_mid_reject` directly with the kind from the
+// wrapper's construction.
+fn voice_size_pre_reject(reported: u32, max: usize) -> String {
+    media_size_pre_reject("voice file", reported, max)
+}
+
 /// `tokio::io::AsyncWrite` adapter that aborts with
 /// `io::ErrorKind::InvalidData` once cumulative bytes would exceed
-/// `max`. #279 wraps the voice-download `Vec<u8>` in this so a lying
-/// upstream can't stream past the ceiling even when Telegram's reported
-/// `file.size` looked small. Wrapping `Vec<u8>` (itself `AsyncWrite +
-/// Unpin + Send`) keeps the call signature `teloxide::net::Download::
-/// download_file` already accepts — no new workspace dep, consistent
-/// with the disk-write call at the image/file path above.
+/// `max`. Wraps the voice-download `Vec<u8>` (#279) AND the disk-write
+/// `tokio::fs::File` handle in [`download_to`] (#332) so a lying
+/// upstream can't stream past the ceiling even when Telegram's
+/// reported `file.size` looked small. Generic over `W: AsyncWrite +
+/// Unpin + Send`, so the same wrapper works at both sinks; the `kind`
+/// label threads into mid-download error messages so operators can
+/// tell which boundary fired.
 struct BoundedWriter<W> {
+    kind: &'static str,
     inner: W,
     max: usize,
     written: usize,
 }
 
 impl<W> BoundedWriter<W> {
-    fn new(inner: W, max: usize) -> Self {
+    fn new(kind: &'static str, inner: W, max: usize) -> Self {
         Self {
+            kind,
             inner,
             max,
             written: 0,
@@ -2054,7 +2097,7 @@ impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for BoundedWriter<W
     ) -> std::task::Poll<std::io::Result<usize>> {
         let this = self.get_mut();
         if this.written.saturating_add(buf.len()) > this.max {
-            let msg = voice_size_mid_reject(this.written, buf.len(), this.max);
+            let msg = media_size_mid_reject(this.kind, this.written, buf.len(), this.max);
             return std::task::Poll::Ready(Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 msg,
@@ -2110,7 +2153,7 @@ async fn download_voice_bytes(bot: &Bot, file_id: &str) -> Result<Vec<u8>, Strin
     }
 
     let buf: Vec<u8> = Vec::with_capacity(file.size as usize);
-    let mut bounded = BoundedWriter::new(buf, MAX_VOICE_BYTES);
+    let mut bounded = BoundedWriter::new("voice file", buf, MAX_VOICE_BYTES);
     bot.download_file(&file.path, &mut bounded)
         .await
         .map_err(|e| format!("download_file: {e}"))?;
@@ -3781,11 +3824,14 @@ mod tests {
     }
 
     #[test]
-    fn voice_size_mid_reject_names_both_numbers_and_distinguishes() {
-        // The mid-download wording must be distinguishable from the
-        // pre-reject one so the operator can tell which defense fired
-        // (and therefore whether the upstream is lying about size).
-        let msg = voice_size_mid_reject(1_000_000, 1_500_000, MAX_VOICE_BYTES);
+    fn voice_path_mid_reject_names_both_numbers_and_distinguishes() {
+        // The voice-path BoundedWriter constructs its mid-reject via
+        // `media_size_mid_reject("voice file", ...)` — verify that
+        // call shape still produces a distinguishable message naming
+        // both numbers (#279 invariant, kept by the #332 generalization
+        // of the helper).
+        let msg = media_size_mid_reject("voice file", 1_000_000, 1_500_000, MAX_VOICE_BYTES);
+        assert!(msg.contains("voice file"), "msg carries voice kind: {msg}");
         assert!(msg.contains("2500000"), "msg names cumulative: {msg}");
         assert!(
             msg.contains(&MAX_VOICE_BYTES.to_string()),
@@ -3800,7 +3846,7 @@ mod tests {
     #[tokio::test]
     async fn bounded_writer_passes_through_when_under_max() {
         use tokio::io::AsyncWriteExt;
-        let mut bw = BoundedWriter::new(Vec::<u8>::new(), 16);
+        let mut bw = BoundedWriter::new("voice file", Vec::<u8>::new(), 16);
         bw.write_all(b"hello").await.unwrap();
         bw.write_all(b" world").await.unwrap();
         bw.flush().await.unwrap();
@@ -3812,7 +3858,7 @@ mod tests {
         // Boundary: cumulative `max` bytes succeed; only `max + 1`
         // trips the abort. Mirrors the strict `>` comparison.
         use tokio::io::AsyncWriteExt;
-        let mut bw = BoundedWriter::new(Vec::<u8>::new(), 5);
+        let mut bw = BoundedWriter::new("voice file", Vec::<u8>::new(), 5);
         bw.write_all(b"hello").await.unwrap();
         assert_eq!(bw.into_inner(), b"hello");
     }
@@ -3820,7 +3866,7 @@ mod tests {
     #[tokio::test]
     async fn bounded_writer_errors_when_chunk_would_exceed_max() {
         use tokio::io::AsyncWriteExt;
-        let mut bw = BoundedWriter::new(Vec::<u8>::new(), 4);
+        let mut bw = BoundedWriter::new("voice file", Vec::<u8>::new(), 4);
         // First write fits exactly.
         bw.write_all(b"abcd").await.unwrap();
         // Second write would push past — must error, must not append.
@@ -3828,7 +3874,7 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(
             err.to_string().contains("mid-download"),
-            "error must use voice_size_mid_reject format: {err}"
+            "error must use media_size_mid_reject format: {err}"
         );
         assert_eq!(
             bw.into_inner().as_slice(),
@@ -3843,13 +3889,93 @@ mod tests {
         // nothing written — covers a lying upstream that dumps the
         // whole body in one chunk.
         use tokio::io::AsyncWriteExt;
-        let mut bw = BoundedWriter::new(Vec::<u8>::new(), 4);
+        let mut bw = BoundedWriter::new("voice file", Vec::<u8>::new(), 4);
         let err = bw.write_all(b"abcde").await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("mid-download"));
         assert!(
             bw.into_inner().is_empty(),
             "no bytes must land when the chunk overshoots"
+        );
+    }
+
+    // ── #332: disk-fill defense on the `download_to` path ──────────
+
+    #[test]
+    fn media_size_pre_reject_carries_kind_and_names_both_numbers() {
+        // The `kind` label distinguishes voice (#279, RAM-OOM) from
+        // media (#332, disk-fill) so operators can tell which boundary
+        // fired without log-diving.
+        let msg = media_size_pre_reject("media file", 60_000_000, MAX_DOWNLOAD_BYTES);
+        assert!(msg.contains("media file"), "msg carries kind: {msg}");
+        assert!(msg.contains("60000000"), "msg names reported: {msg}");
+        assert!(
+            msg.contains(&MAX_DOWNLOAD_BYTES.to_string()),
+            "msg names max: {msg}"
+        );
+        assert!(msg.contains("too large"), "msg flags the rejection: {msg}");
+    }
+
+    #[test]
+    fn media_size_mid_reject_carries_kind_and_distinguishes() {
+        let msg = media_size_mid_reject("media file", 40_000_000, 20_000_000, MAX_DOWNLOAD_BYTES);
+        assert!(msg.contains("media file"), "msg carries kind: {msg}");
+        assert!(msg.contains("60000000"), "msg names cumulative: {msg}");
+        assert!(
+            msg.contains(&MAX_DOWNLOAD_BYTES.to_string()),
+            "msg names max: {msg}"
+        );
+        assert!(
+            msg.contains("mid-download"),
+            "msg distinguishes from pre-reject: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_writer_aborts_mid_stream_on_tokio_fs_file_without_excess_disk_bytes() {
+        // #332 disk-path pin: `BoundedWriter` wrapping a real
+        // `tokio::fs::File` aborts the over-cap chunk WITHOUT having
+        // written it to disk. Proves the streaming-abort defense holds
+        // at the actual sink `download_to` uses, not just the `Vec<u8>`
+        // sink from #279 — the `>` check fires before
+        // `inner.poll_write`, so no disk write occurs for the rejected
+        // chunk.
+        use tokio::io::AsyncWriteExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("media");
+        let f = tokio::fs::File::create(&path).await.unwrap();
+        let mut bw = BoundedWriter::new("media file", f, 4);
+        bw.write_all(b"abcd").await.unwrap();
+        let err = bw.write_all(b"e").await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("media file"),
+            "mid-reject must carry the `media file` kind: {err}"
+        );
+        let mut f = bw.into_inner();
+        f.flush().await.ok();
+        drop(f);
+        let bytes = tokio::fs::read(&path).await.unwrap();
+        assert_eq!(
+            bytes, b"abcd",
+            "rejected chunk must not have hit disk — bounded handle saw \
+             the over-cap chunk and aborted before `inner.poll_write`"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn max_download_bytes_strictly_exceeds_max_voice_bytes() {
+        // Bump-policy invariant: the disk path accepts strictly larger
+        // files than the voice path (different threat model — disk
+        // tolerates more than RAM-OOM). Catches an accidental swap or
+        // misordering of the constants. The assertion is on consts by
+        // design (that's the invariant); clippy's `assertions_on_
+        // constants` would flag it otherwise.
+        assert!(
+            MAX_DOWNLOAD_BYTES > MAX_VOICE_BYTES,
+            "MAX_DOWNLOAD_BYTES ({MAX_DOWNLOAD_BYTES}) must exceed \
+             MAX_VOICE_BYTES ({MAX_VOICE_BYTES})"
         );
     }
 }

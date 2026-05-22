@@ -2581,6 +2581,7 @@ dependencies = [
  "serde_json",
  "team-core",
  "teloxide",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
