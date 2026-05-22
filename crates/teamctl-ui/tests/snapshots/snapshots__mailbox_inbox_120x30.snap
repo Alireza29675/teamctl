@@ -21,8 +21,8 @@ expression: buffer_to_string(&buf)
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
 │                          ││ Inbox    Sent    Channel    Wire                                                         │
-│                          ││[writing:dev1] ready for review                                                           │
-│                          ││[user:telegram] any blockers?                                                             │
+│                          ││[writing:dev1] ready for review                                                        now│
+│                          ││[user:telegram] any blockers?                                                          now│
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │

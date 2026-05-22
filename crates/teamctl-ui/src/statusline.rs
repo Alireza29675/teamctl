@@ -68,7 +68,14 @@ impl Widget for Statusline<'_> {
             // focused so stream-keys is discoverable without
             // opening the help overlay.
             Pane::Detail => "Ctrl+E stream keys · / filter · w wall · @ send · q quit",
-            Pane::Mailbox => "← / → tabs · ⏎ open · ! broadcast · q quit",
+            // T-131 PR-4: per-row mailbox UX is the load-bearing
+            // discoverability surface on a fresh install — operators
+            // hovering on the mailbox should see the new keystrokes
+            // here. Trimmed to ~50 cols of context: row nav, filter,
+            // search, detail modal, quit; ← → tab cycle and !
+            // broadcast both stay discoverable via the visible tabs
+            // row and the help overlay respectively.
+            Pane::Mailbox => "j/k row · f filter · / search · ⏎ detail · q quit",
         };
 
         let left = Line::from(vec![tab_hint, sep, Span::styled(contextual, muted)]);

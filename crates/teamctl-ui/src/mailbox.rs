@@ -138,6 +138,31 @@ pub fn render_row(row: &MessageRow, team: &crate::data::TeamSnapshot, tab: Mailb
     }
 }
 
+/// T-131 PR-4: short relative-time stamp (`2m` / `1h` / `3d`) for
+/// the right-side mailbox-row indicator. Recomputed every render
+/// from `now_secs` (clock reading at render time) and the row's
+/// `sent_at` (epoch seconds). Bounded grain per the issue spec:
+/// minutes, hours, days. A future-send timestamp (clock skew or
+/// test fixture with `sent_at > now`) renders `now`. Anything
+/// under 60 seconds also renders `now` — the sub-minute grain
+/// would churn every render tick for no operator value.
+pub fn relative_time(now_secs: f64, sent_at: f64) -> String {
+    let diff = now_secs - sent_at;
+    if diff < 60.0 {
+        // Includes the negative / future-send case — operators
+        // see `now` rather than e.g. `-1m`.
+        return "now".to_string();
+    }
+    let secs = diff as u64;
+    if secs < 60 * 60 {
+        format!("{}m", secs / 60)
+    } else if secs < 60 * 60 * 24 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
+
 /// T-131 PR-3: human-readable kind label for the detail modal.
 /// Derived from the recipient shape — the same prefix classes the
 /// module-doc INVARIANT pins (`<project>:<agent>` DM,
@@ -1351,5 +1376,45 @@ mod tests {
         assert_eq!(transport_label(&r), "via mcp"); // agent emit, recipient class doesn't matter
         let r = row(1, "weird-no-colon", "p:a", "x");
         assert_eq!(transport_label(&r), "—"); // graceful degrade
+    }
+
+    // T-131 PR-4: relative_time boundary tests. The issue specifies
+    // `2m` / `1h` / `3d`-style output; these pin the boundary between
+    // sub-minute, minute, hour, and day grain plus the future-send +
+    // exact-boundary edge cases.
+
+    #[test]
+    fn relative_time_sub_minute_renders_now() {
+        // Anything under 60s renders `now` — sub-minute would churn
+        // every render tick for no operator value, and includes the
+        // future-send case (negative diff, e.g. clock skew or fixture).
+        assert_eq!(relative_time(1000.0, 1000.0), "now"); // exact
+        assert_eq!(relative_time(1059.99, 1000.0), "now"); // 59.99s ago
+        assert_eq!(relative_time(1000.0, 1100.0), "now"); // future (clock skew)
+    }
+
+    #[test]
+    fn relative_time_minutes_grain() {
+        // [60s, 1h) renders as `Nm`.
+        assert_eq!(relative_time(1060.0, 1000.0), "1m"); // 60s = exactly 1m
+        assert_eq!(relative_time(1120.0, 1000.0), "2m"); // 120s
+        assert_eq!(relative_time(1000.0 + 59.0 * 60.0, 1000.0), "59m"); // upper edge
+    }
+
+    #[test]
+    fn relative_time_hours_grain() {
+        // [1h, 24h) renders as `Nh`.
+        assert_eq!(relative_time(1000.0 + 60.0 * 60.0, 1000.0), "1h");
+        assert_eq!(relative_time(1000.0 + 3.0 * 3600.0, 1000.0), "3h");
+        assert_eq!(relative_time(1000.0 + 23.0 * 3600.0, 1000.0), "23h"); // upper edge
+    }
+
+    #[test]
+    fn relative_time_days_grain() {
+        // [24h, ∞) renders as `Nd`. Issue caps grain at days; weeks
+        // / months / years all show as days (e.g. `30d`, `365d`).
+        assert_eq!(relative_time(1000.0 + 86_400.0, 1000.0), "1d");
+        assert_eq!(relative_time(1000.0 + 3.0 * 86_400.0, 1000.0), "3d");
+        assert_eq!(relative_time(1000.0 + 30.0 * 86_400.0, 1000.0), "30d");
     }
 }

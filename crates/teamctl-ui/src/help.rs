@@ -133,6 +133,44 @@ pub const APPROVALS: &[Binding] = &[
     },
 ];
 
+// T-131: per-row mailbox UX — row scroll (PR-1), filter+search
+// (PR-2), detail modal (PR-3), time indicator (PR-4). All gated on
+// `Pane::Mailbox` focused.
+pub const MAILBOX: &[Binding] = &[
+    Binding {
+        chord: "j / k / ↓ / ↑",
+        description: "row down / up (when mailbox focused)",
+    },
+    Binding {
+        chord: "PageDown / PageUp",
+        description: "jump a screen down / up",
+    },
+    Binding {
+        chord: "Home / End",
+        description: "jump to first / last row",
+    },
+    Binding {
+        chord: "← / →",
+        description: "cycle mailbox tabs",
+    },
+    Binding {
+        chord: "f",
+        description: "filter rows by sender substring (Esc reverts, Enter keeps)",
+    },
+    Binding {
+        chord: "/",
+        description: "search rows by body substring (Esc reverts, Enter keeps)",
+    },
+    Binding {
+        chord: "Enter",
+        description: "open detail modal on the selected row",
+    },
+    Binding {
+        chord: "Esc / q (in modal)",
+        description: "close the detail modal",
+    },
+];
+
 pub const SYSTEM: &[Binding] = &[
     Binding {
         chord: "?",
@@ -170,6 +208,10 @@ pub const ALL_GROUPS: &[BindingGroup] = &[
         bindings: STREAM_KEYS,
     },
     BindingGroup {
+        title: "Mailbox",
+        bindings: MAILBOX,
+    },
+    BindingGroup {
         title: "Approvals",
         bindings: APPROVALS,
     },
@@ -184,10 +226,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_covers_six_groups() {
-        // T-108 added a Stream-keys group between Compose and
+    fn registry_covers_seven_groups() {
+        // T-108 added Stream-keys between Compose and Approvals;
+        // T-131 PR-4 added Mailbox between Stream-keys and
         // Approvals. Update this count when groups change.
-        assert_eq!(ALL_GROUPS.len(), 6);
+        assert_eq!(ALL_GROUPS.len(), 7);
     }
 
     #[test]
@@ -209,6 +252,14 @@ mod tests {
             "t",
             "q",
             "Esc Enter",
+            // T-131 PR-4: mailbox UX chords surfaced in the
+            // registry so the help overlay never lies about what's
+            // wired up.
+            "f",
+            "/",
+            "PageDown / PageUp",
+            "Home / End",
+            "Esc / q (in modal)",
         ] {
             assert!(
                 bindings.contains(&must_have),

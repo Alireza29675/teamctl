@@ -21,7 +21,7 @@ expression: s
 │                   │                                                                              │───────────────────┘
 │                   │                                                                              │───────────────────┐
 │                   │                                                                              │                   │
-│                   │                                                                              │ a moment.         │
+│                   │                                                                              │ a moment.      now│
 │                   │                                                                              │                   │
 │                   │                                                                              │                   │
 │                   │                                                                              │                   │
@@ -30,5 +30,5 @@ expression: s
 │                   │                                                                              │                   │
 │                   └──────────────────────────────────────────────────────────────────────────────┘                   │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
-Tab cycle panes  ·  ← / → tabs · ⏎ open · ! broadcast · q quit                                       ? help · t tutorial
+Tab cycle panes  ·  j/k row · f filter · / search · ⏎ detail · q quit                                ? help · t tutorial
 /fixture                                                                                           CPU 0% · RAM 0.0/0 GB
