@@ -28,6 +28,15 @@ INSTALL_DIR="${TEAMCTL_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${TEAMCTL_VERSION:-latest}"
 VERIFY="${TEAMCTL_VERIFY:-1}"
 
+# Minimum Claude Code version for the teamctl plugin install path.
+# T-118 / T-174 lineage: `claude --session-id` had substrate bugs
+# pre-2.1.141 that confused supervised `teamctl up` resume. Installing
+# the plugin against an older runtime sets the operator up for a
+# confusing first-run failure; the binary install (above) is NOT gated
+# on this — only the Claude Code plugin step is. Bump requires a
+# release-notes entry + this constant — #262.
+CLAUDE_CODE_PLUGIN_FLOOR="2.1.141"
+
 # Allow `--version vX.Y.Z` as a positional flag for parity with cargo-dist's
 # generated installer.
 while [ $# -gt 0 ]; do
@@ -132,6 +141,9 @@ echo "installed $installed binaries to $INSTALL_DIR."
 
 # T-099: Claude Code plugin install/update flow.
 # - claude not on PATH               → silent skip
+# - claude version < FLOOR (#262)    → skip with remediation message
+#                                      (binaries above stay installed)
+# - claude --version unparseable     → skip with one-line note
 # - plugin already installed         → silent update (best-effort; warns on
 #                                      failure but does not fail the install
 #                                      since the binaries are already in place)
@@ -150,8 +162,39 @@ marketplace_present() {
     | grep -q '"name"[[:space:]]*:[[:space:]]*"teamctl"'
 }
 
+# Parse the first whitespace token of `claude --version`. Documented
+# output shape: `<semver> (Claude Code)` (e.g. `2.1.141 (Claude Code)`).
+# Empty on parse failure or non-zero exit.
+claude_installed_version() {
+  claude --version 2>/dev/null | awk '{print $1; exit}'
+}
+
+# True (exit 0) iff $1 is a semver >= $2, using version-aware sort
+# (handles 2.1.10 > 2.1.9 correctly, unlike string compare). Equality
+# returns true. Returns false (non-zero) on unparseable input — caller
+# guards against empty $1 separately so the skip message can name the
+# installed version.
+version_ge() {
+  printf '%s\n%s\n' "$2" "$1" | sort -V -C 2>/dev/null
+}
+
 if command -v claude >/dev/null 2>&1; then
-  if plugin_installed; then
+  installed_claude_version="$(claude_installed_version)"
+  if [ -z "$installed_claude_version" ]; then
+    # claude is on PATH but `--version` didn't produce a parseable
+    # semver. Skip plugin install silently with a one-line note —
+    # binary install above is already done.
+    echo "note: could not read 'claude --version' output; skipping plugin install" >&2
+  elif ! version_ge "$installed_claude_version" "$CLAUDE_CODE_PLUGIN_FLOOR"; then
+    # Floor-gated skip (#262). Print the verbatim remediation message
+    # from the issue; fall through to the PATH check below — binaries
+    # are installed, only the plugin step is gated.
+    echo "teamctl Claude Code plugin requires Claude Code >= $CLAUDE_CODE_PLUGIN_FLOOR (installed: $installed_claude_version)."
+    echo "Please update Claude Code first:"
+    echo "    claude --upgrade   (or your platform's update path)"
+    echo "Then re-run the teamctl installer:"
+    echo "    curl -fsSL https://teamctl.run/install | sh"
+  elif plugin_installed; then
     # Best-effort update path. Suppress noise on success; warn on failure but
     # don't kill the script — the binaries above are the install's main job.
     # `plugin marketplace update` takes the bare marketplace name
