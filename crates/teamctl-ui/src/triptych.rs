@@ -613,12 +613,52 @@ fn render_mailbox_body(buf: &mut Buffer, area: Rect, app: &App) {
     let end = (start + cap).min(visible.len());
     let focused = app.focused_pane == Pane::Mailbox;
     let highlight = Style::default().add_modifier(Modifier::REVERSED);
+    let muted = Style::default().fg(app.capabilities.muted());
+    // T-131 PR-4: per-row absolute-time indicator, right-aligned at
+    // the pane edge. Computed at render time from `app.now_secs` so
+    // values stay fresh across the 1s refresh tick without an
+    // explicit event AND so test snapshots are deterministic (the
+    // wall-clock read lives in the run loop, not here). Owner
+    // ratified the today-fold + 24h shape (tg 3388): same-day rows
+    // render `HH:MM` (5 chars), prior-day rows render `%b %d %H:%M`
+    // (12 chars). Reserve the worst case (12 cols) + 1 col gutter;
+    // truncate the left content to fit so the right-side indicator
+    // never wraps onto a new line.
+    let now_secs = app.now_secs;
+    const TIME_INDICATOR_WIDTH: usize = 12;
+    const TIME_INDICATOR_GUTTER: usize = 1;
+    let row_width = area.width as usize;
     // T-231: pass the active tab so render_row can pick the right
     // prefix (sender for Inbox/Channel/Wire, recipient for Sent).
     let lines: Vec<Line<'_>> = visible[start..end]
         .iter()
         .map(|&row_idx| {
-            let line = Line::raw(render_row(&rows[row_idx], &app.team, app.mailbox_tab));
+            let row = &rows[row_idx];
+            let left = render_row(row, &app.team, app.mailbox_tab);
+            let rtime = crate::mailbox::row_timestamp(now_secs, row.sent_at);
+            // Right-pad the left content so the indicator sits at
+            // the pane edge. Truncate when the body would overflow
+            // the reserved indicator space (chars-not-bytes to keep
+            // multi-byte glyphs sane).
+            let reserved = TIME_INDICATOR_WIDTH + TIME_INDICATOR_GUTTER;
+            let left_chars = left.chars().count();
+            let max_left = row_width.saturating_sub(reserved);
+            let left_trimmed = if left_chars > max_left {
+                left.chars().take(max_left).collect::<String>()
+            } else {
+                left
+            };
+            let pad_n = max_left.saturating_sub(left_trimmed.chars().count());
+            let pad = " ".repeat(pad_n);
+            // Pad/truncate the indicator to exactly TIME_INDICATOR_WIDTH
+            // so right-alignment is stable across `now` / `2m` / `123d`.
+            let indicator = format!("{rtime:>width$}", width = TIME_INDICATOR_WIDTH);
+            let line = Line::from(vec![
+                ratatui::text::Span::raw(left_trimmed),
+                ratatui::text::Span::raw(pad),
+                ratatui::text::Span::raw(" ".repeat(TIME_INDICATOR_GUTTER)),
+                ratatui::text::Span::styled(indicator, muted),
+            ]);
             if focused && row_idx == visible[selected] {
                 line.style(highlight)
             } else {

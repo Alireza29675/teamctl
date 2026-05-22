@@ -21,14 +21,14 @@ expression: s
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
 │                          ││ Inbox    Sent    Channel    Wire                                                         │
-│                          ││[writing:dev1] msg #01                                                                    │
-│                          ││[writing:dev1] msg #02                                                                    │
-│                          ││[writing:dev1] msg #03                                                                    │
-│                          ││[writing:dev1] msg #04                                                                    │
-│                          ││[writing:dev1] msg #05                                                                    │
-│                          ││[writing:dev1] msg #06                                                                    │
-│                          ││[writing:dev1] msg #07                                                                    │
-│                          ││[writing:dev1] msg #08                                                                    │
+│                          ││[writing:dev1] msg #01                                                               00:00│
+│                          ││[writing:dev1] msg #02                                                               00:00│
+│                          ││[writing:dev1] msg #03                                                               00:00│
+│                          ││[writing:dev1] msg #04                                                               00:00│
+│                          ││[writing:dev1] msg #05                                                               00:00│
+│                          ││[writing:dev1] msg #06                                                               00:00│
+│                          ││[writing:dev1] msg #07                                                               00:00│
+│                          ││[writing:dev1] msg #08                                                               00:00│
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
 Tab cycle panes  ·  / search · ⏎ open · @ send · q quit                                              ? help · t tutorial
 /fixture                                                                                           CPU 0% · RAM 0.0/0 GB

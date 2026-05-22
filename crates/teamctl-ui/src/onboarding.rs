@@ -37,6 +37,10 @@ pub const STEPS: &[Step] = &[
         body: "Inbox / Sent / Channel / Wire — `→` walks forward, `←` walks back, when the mailbox pane is focused. Tab itself always cycles pane focus, never tabs. Inbox is DMs to the focused agent; Sent is everything that agent has emitted (DMs, telegram replies, channel posts, wire broadcasts); Wire is project-wide broadcasts.",
     },
     Step {
+        heading: "Mailbox row UX",
+        body: "Inside the mailbox: j/k walks rows, PageDown/PageUp jumps a screen, Home/End jumps to ends. `f` filters by sender substring, `/` searches by body substring — both compose, both per-tab, Esc reverts, Enter keeps. ⏎ on a selected row opens a detail modal with the full body + metadata; Esc or q closes. Every row carries a short relative-time stamp (`2m`/`1h`/`3d`) on the right.",
+    },
+    Step {
         heading: "Approvals",
         body: "When an agent files request_approval, a stripe appears at the top. Press `a` to open the modal, then `y` to approve or Shift-`N` to deny. j/k cycle if multiple are pending.",
     },
@@ -97,8 +101,11 @@ mod tests {
 
     #[test]
     fn step_count_under_ten() {
-        // SPEC budget: <90s skim. 9 short steps fits the budget;
-        // landmark this so future drift isn't silent.
+        // SPEC budget: <90s skim. 10 short steps is the cap (T-131
+        // PR-4 added a Mailbox-row-UX step to cover scroll / filter /
+        // search / detail modal / time indicator); we're at the
+        // ceiling now — adding more steps means revisiting the
+        // skim-budget.
         assert!(
             STEPS.len() <= 10,
             "tutorial bloated to {} steps",

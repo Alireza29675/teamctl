@@ -21,8 +21,8 @@ expression: buffer_to_string(&buf)
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
 │                          ││ Inbox    Sent    Channel    Wire                                                         │
-│                          ││[#devs] [writing:dev1] stack rebased on main                                              │
-│                          ││[#devs] [writing:critic] looks tight                                                      │
+│                          ││[#devs] [writing:dev1] stack rebased on main                                         00:00│
+│                          ││[#devs] [writing:critic] looks tight                                                 00:00│
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
@@ -30,5 +30,5 @@ expression: buffer_to_string(&buf)
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
-Tab cycle panes  ·  ← / → tabs · ⏎ open · ! broadcast · q quit                                       ? help · t tutorial
+Tab cycle panes  ·  j/k row · f filter · / search · ⏎ detail · q quit                                ? help · t tutorial
 /fixture                                                                                           CPU 0% · RAM 0.0/0 GB

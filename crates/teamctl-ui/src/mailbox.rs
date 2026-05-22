@@ -138,6 +138,50 @@ pub fn render_row(row: &MessageRow, team: &crate::data::TeamSnapshot, tab: Mailb
     }
 }
 
+/// T-131 PR-4: short absolute-datetime stamp for the right-side
+/// mailbox-row indicator. Computed every render from `now_secs`
+/// (clock reading at render time) and the row's `sent_at` (epoch
+/// seconds). Format is **today-folded** to save column budget on
+/// the common case:
+///
+/// - same calendar day in the operator's local timezone → `HH:MM`
+///   (24-hour, 5 chars; e.g. `15:42`).
+/// - any earlier day → `%b %d %H:%M` (12 chars; e.g. `May 22 15:42`).
+///
+/// Variants ratified by owner (tg 3388):
+/// - (1) today-vs-not folding: YES.
+/// - (2) 24-hour clock: YES.
+///
+/// Silent defaults preserved: no seconds; local-to-operator TZ
+/// (the detail modal already shows UTC for the precise reference);
+/// past-day format `%b %d %H:%M`.
+///
+/// Production callers use [`row_timestamp`] (wraps `Local`); tests
+/// drive [`row_timestamp_in`] with `chrono::Utc` for determinism.
+pub fn row_timestamp(now_secs: f64, sent_at: f64) -> String {
+    row_timestamp_in(&chrono::Local, now_secs, sent_at)
+}
+
+/// TZ-injected variant of [`row_timestamp`] — keeps the production
+/// path on `Local` while tests pin behaviour with `Utc`.
+pub fn row_timestamp_in<Tz>(tz: &Tz, now_secs: f64, sent_at: f64) -> String
+where
+    Tz: chrono::TimeZone,
+    Tz::Offset: std::fmt::Display,
+{
+    let Some(now) = tz.timestamp_opt(now_secs as i64, 0).single() else {
+        return "—".to_string();
+    };
+    let Some(sent) = tz.timestamp_opt(sent_at as i64, 0).single() else {
+        return "—".to_string();
+    };
+    if now.date_naive() == sent.date_naive() {
+        sent.format("%H:%M").to_string()
+    } else {
+        sent.format("%b %d %H:%M").to_string()
+    }
+}
+
 /// T-131 PR-3: human-readable kind label for the detail modal.
 /// Derived from the recipient shape — the same prefix classes the
 /// module-doc INVARIANT pins (`<project>:<agent>` DM,
@@ -1351,5 +1395,78 @@ mod tests {
         assert_eq!(transport_label(&r), "via mcp"); // agent emit, recipient class doesn't matter
         let r = row(1, "weird-no-colon", "p:a", "x");
         assert_eq!(transport_label(&r), "—"); // graceful degrade
+    }
+
+    // T-131 PR-4: row_timestamp today-fold tests. Owner ratified
+    // (tg 3388) (1) today-fold YES + (2) 24h YES; silent defaults
+    // intact (no seconds, local-TZ, past-day `%b %d %H:%M`). Tests
+    // drive `row_timestamp_in(&Utc, …)` so the assertions are
+    // timezone-stable regardless of the dev machine's `Local`.
+
+    fn ts(year: i32, month: u32, day: u32, hour: u32, minute: u32, sec: u32) -> f64 {
+        use chrono::TimeZone;
+        chrono::Utc
+            .with_ymd_and_hms(year, month, day, hour, minute, sec)
+            .unwrap()
+            .timestamp() as f64
+    }
+
+    #[test]
+    fn row_timestamp_same_day_renders_24h_hhmm() {
+        let now = ts(2026, 5, 22, 15, 42, 30);
+        // Sent earlier today at 10:15:00 UTC: `10:15`.
+        let sent = ts(2026, 5, 22, 10, 15, 0);
+        assert_eq!(row_timestamp_in(&chrono::Utc, now, sent), "10:15");
+        // Sent exactly now (truncates the :30 seconds): `15:42`.
+        assert_eq!(row_timestamp_in(&chrono::Utc, now, now), "15:42");
+        // Sent at exact midnight same day: `00:00`.
+        let sent_midnight = ts(2026, 5, 22, 0, 0, 0);
+        assert_eq!(row_timestamp_in(&chrono::Utc, now, sent_midnight), "00:00");
+    }
+
+    #[test]
+    fn row_timestamp_prior_day_renders_b_d_hhmm() {
+        let now = ts(2026, 5, 22, 15, 42, 30);
+        // Yesterday: full `%b %d %H:%M` past-day format.
+        let sent_yesterday = ts(2026, 5, 21, 23, 59, 0);
+        assert_eq!(
+            row_timestamp_in(&chrono::Utc, now, sent_yesterday),
+            "May 21 23:59"
+        );
+        // A month earlier: same shape, different date.
+        let sent_earlier_month = ts(2026, 4, 22, 12, 0, 0);
+        assert_eq!(
+            row_timestamp_in(&chrono::Utc, now, sent_earlier_month),
+            "Apr 22 12:00"
+        );
+    }
+
+    #[test]
+    fn row_timestamp_future_send_uses_sent_timestamp() {
+        // Clock skew or test fixture with `sent_at > now`. The
+        // helper folds purely by date equality, so a future-send on
+        // the same day still renders `HH:MM`; a future-send on a
+        // later day renders that day's `%b %d %H:%M`. No special
+        // negative handling — matches the simplicity-first model.
+        let now = ts(2026, 5, 22, 15, 42, 30);
+        let sent_future_same_day = ts(2026, 5, 22, 16, 42, 30);
+        assert_eq!(
+            row_timestamp_in(&chrono::Utc, now, sent_future_same_day),
+            "16:42"
+        );
+        let sent_future_next_day = ts(2026, 5, 23, 15, 42, 30);
+        assert_eq!(
+            row_timestamp_in(&chrono::Utc, now, sent_future_next_day),
+            "May 23 15:42"
+        );
+    }
+
+    #[test]
+    fn row_timestamp_zero_epoch_is_same_day_as_itself() {
+        // Snapshot tests use `App::new` (now_secs=0.0) + fixture
+        // rows (sent_at=0.0) — both map to the Unix epoch, same
+        // day, format `HH:MM` deterministically across machines
+        // (snapshots.rs sets TZ=UTC so `Local` resolves to UTC).
+        assert_eq!(row_timestamp_in(&chrono::Utc, 0.0, 0.0), "00:00");
     }
 }

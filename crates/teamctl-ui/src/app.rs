@@ -159,6 +159,16 @@ pub struct App {
     /// opens; bumped by `j` / `Down` / `k` / `Up` while the modal
     /// is the active stage. Ignored when no modal is open.
     pub mailbox_detail_scroll: u16,
+    /// T-131 PR-4: wall-clock seconds at the last render tick. The
+    /// mailbox-row relative-time indicator (`2m` / `1h` / `3d`)
+    /// reads from here so render is a pure function of `App` —
+    /// snapshot tests can pin time deterministically by setting
+    /// this field (otherwise wall-clock would diff snapshots every
+    /// run). The `run` loop refreshes this before each
+    /// `terminal.draw`; defaults to 0 in `App::new` so a freshly
+    /// constructed test app + sent_at=0 fixture rows render `now`
+    /// stably.
+    pub now_secs: f64,
     /// Pending approvals snapshot (PR-UI-4). Drives the conditional
     /// stripe at the top of Triptych and the modal opened by `a`.
     pub pending_approvals: Vec<Approval>,
@@ -287,6 +297,7 @@ impl App {
             mailbox_input_snapshot: String::new(),
             mailbox_detail_modal: None,
             mailbox_detail_scroll: 0,
+            now_secs: 0.0,
             pending_approvals: Vec::new(),
             selected_approval: 0,
             approval_error: None,
@@ -1103,6 +1114,11 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
     refresh_with_default_sources(&mut app, &pane_source);
     let mut watch = Watch::try_new(&app.team.root.join("state"));
     while app.running {
+        // T-131 PR-4: refresh the render-tick clock so the mailbox
+        // relative-time indicator reads a fresh `now_secs` each
+        // draw. Keeping this on App (not in render) makes render a
+        // pure function — tests can pin time deterministically.
+        app.now_secs = chrono::Utc::now().timestamp() as f64;
         terminal.draw(|f| draw(f, &app))?;
         // T-199: after every frame, push the focused agent's inner
         // tmux pane to match teamctl-ui's Detail rect so claude

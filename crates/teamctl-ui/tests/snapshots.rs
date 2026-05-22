@@ -29,6 +29,11 @@ fn buffer_to_string(buf: &Buffer) -> String {
 fn fresh_app() -> App {
     // Force monochrome so snapshots don't capture ANSI colour state.
     std::env::set_var("NO_COLOR", "1");
+    // T-131 PR-4: pin the timezone so the mailbox-row absolute-time
+    // indicator (chrono::Local in production) is deterministic
+    // across CI / dev machines. With sent_at=0.0 + now_secs=0.0 in
+    // fixtures, this renders `00:00` (same-day fold).
+    std::env::set_var("TZ", "UTC");
     App::new()
 }
 
