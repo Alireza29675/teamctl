@@ -16,7 +16,7 @@ use ratatui::backend::Backend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 use ratatui::{Frame, Terminal};
 
 use crate::approvals::{
@@ -27,7 +27,7 @@ use crate::data::TeamSnapshot;
 use crate::keysender::{encode_key, KeySender, ScrollDirection, TmuxKeySender};
 use crate::layouts;
 use crate::mailbox::{
-    BrokerMailboxSource, MailboxBuffers, MailboxInputKind, MailboxSource, MailboxTab,
+    BrokerMailboxSource, MailboxBuffers, MailboxInputKind, MailboxSource, MailboxTab, MessageRow,
 };
 use crate::pane::{PaneSource, TmuxPaneSource};
 use crate::splash;
@@ -75,6 +75,17 @@ pub enum Stage {
     /// agent prints in response — so the operator interacts with
     /// the agent in real time without leaving the UI.
     StreamKeys,
+    /// Mailbox detail modal (T-131 PR-3). `Enter` on a selected
+    /// mailbox row snapshots that row into `mailbox_detail_modal`
+    /// and flips here; the modal renders the full message body
+    /// (wrapped, j/k-scrollable) plus sender / recipient / kind /
+    /// absolute timestamp / transport / message id. The snapshot is
+    /// captured AT open-time so the rendered content is stable
+    /// across any subsequent underlying-buffer drain (PR-3 variant
+    /// (a) locked: snapshot-at-open, not id-tracking — resolves the
+    /// PR-1 kian-#1 identity question at the point it actually
+    /// matters). `Esc` or `q` closes.
+    MailboxDetailModal,
 }
 
 /// Splitscreen orientation per detail-pane split (PR-UI-7 lift
@@ -134,6 +145,20 @@ pub struct App {
     /// `Esc` (cancel-revert) so the operator can back out without
     /// losing the prior filter/search. Empty between sessions.
     pub mailbox_input_snapshot: String,
+    /// T-131 PR-3: mailbox detail modal — the row content the
+    /// operator opened. Captured AT open-time and rendered from
+    /// here independent of the underlying mailbox buffer: any
+    /// subsequent `extend()` drain that would shift indices on the
+    /// row cursor leaves this snapshot intact, so the operator
+    /// sees the message they clicked, not whatever now happens to
+    /// sit at the same index (variant (a) locked). `None` when no
+    /// modal is open.
+    pub mailbox_detail_modal: Option<MessageRow>,
+    /// T-131 PR-3: vertical scroll offset (in wrapped body lines)
+    /// within an open detail modal. Reset to 0 when the modal
+    /// opens; bumped by `j` / `Down` / `k` / `Up` while the modal
+    /// is the active stage. Ignored when no modal is open.
+    pub mailbox_detail_scroll: u16,
     /// Pending approvals snapshot (PR-UI-4). Drives the conditional
     /// stripe at the top of Triptych and the modal opened by `a`.
     pub pending_approvals: Vec<Approval>,
@@ -260,6 +285,8 @@ impl App {
             mailbox: MailboxBuffers::default(),
             mailbox_input_mode: None,
             mailbox_input_snapshot: String::new(),
+            mailbox_detail_modal: None,
+            mailbox_detail_scroll: 0,
             pending_approvals: Vec::new(),
             selected_approval: 0,
             approval_error: None,
@@ -619,6 +646,55 @@ impl App {
         }
         self.mailbox_input_mode = None;
         self.mailbox_input_snapshot.clear();
+    }
+
+    // T-131 PR-3: mailbox detail modal — snapshot-at-open, Esc/q
+    // close, j/k scroll. The snapshot captures the row content at
+    // open time so the rendered modal is stable across underlying
+    // buffer drain (variant (a) locked).
+
+    /// Open the detail modal on the currently-selected mailbox row.
+    /// No-op when `visible_indices` is empty (no row to select) so
+    /// `Enter` on an empty / fully-filtered tab silently does
+    /// nothing rather than opening a modal on garbage.
+    pub fn open_mailbox_detail_modal(&mut self) {
+        let tab = self.mailbox_tab;
+        let visible = self.mailbox.visible_indices(tab);
+        if visible.is_empty() {
+            return;
+        }
+        let idx = self.mailbox.cursor(tab).selected_idx.min(visible.len() - 1);
+        let row_idx = visible[idx];
+        let row = self.mailbox.rows(tab).get(row_idx).cloned();
+        if let Some(row) = row {
+            self.mailbox_detail_modal = Some(row);
+            self.mailbox_detail_scroll = 0;
+            self.stage = Stage::MailboxDetailModal;
+        }
+    }
+
+    /// Close the detail modal and return to the Triptych. Clears
+    /// the snapshot; the row cursor underneath is untouched.
+    pub fn close_mailbox_detail_modal(&mut self) {
+        self.mailbox_detail_modal = None;
+        self.mailbox_detail_scroll = 0;
+        self.stage = Stage::Triptych;
+    }
+
+    /// Scroll the detail modal body one wrapped line down. Caller
+    /// supplies the maximum scroll value (lines beyond which there
+    /// is no content); we clamp.
+    pub fn mailbox_detail_scroll_down(&mut self) {
+        // The renderer enforces the upper bound at draw time when it
+        // knows the wrapped-body height; this helper just bumps the
+        // offset. Saturating add caps at u16::MAX which is far
+        // beyond any realistic body length.
+        self.mailbox_detail_scroll = self.mailbox_detail_scroll.saturating_add(1);
+    }
+
+    /// Scroll the detail modal body one wrapped line up.
+    pub fn mailbox_detail_scroll_up(&mut self) {
+        self.mailbox_detail_scroll = self.mailbox_detail_scroll.saturating_sub(1);
     }
 
     pub fn cycle_focus_back(&mut self) {
@@ -1177,6 +1253,11 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
             let buf = f.buffer_mut();
             render_tutorial(area, buf, app);
         }
+        Stage::MailboxDetailModal => {
+            draw_main(f, area, app);
+            let buf = f.buffer_mut();
+            render_mailbox_detail_modal(area, buf, app);
+        }
     }
 }
 
@@ -1205,6 +1286,90 @@ fn render_help_overlay(area: Rect, buf: &mut Buffer, app: &App) {
         lines.push(ratatui::text::Line::styled("", muted));
     }
     Paragraph::new(lines).render(inner, buf);
+}
+
+/// T-131 PR-3: detail modal — full message body (wrapped + scrollable)
+/// plus sender / recipient / kind / absolute timestamp / transport /
+/// message id. Renders only when `app.mailbox_detail_modal` is `Some`;
+/// otherwise a silent no-op so a render race during close-tearing
+/// can't crash. The snapshot is the source of truth for everything
+/// the modal shows — the underlying buffer is NOT consulted, which
+/// is the variant-(a) snapshot-at-open contract.
+fn render_mailbox_detail_modal(area: Rect, buf: &mut Buffer, app: &App) {
+    let Some(row) = app.mailbox_detail_modal.as_ref() else {
+        return;
+    };
+    let popup_w = 80u16.min(area.width.saturating_sub(4));
+    let popup_h = 24u16.min(area.height.saturating_sub(2));
+    let popup = centered_rect(popup_w, popup_h, area);
+    Clear.render(popup, buf);
+    let title = format!("MESSAGE · id {} · Esc/q to close", row.id);
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.capabilities.accent()));
+    let inner = block.inner(popup);
+    block.render(popup, buf);
+    if inner.height == 0 {
+        return;
+    }
+
+    // Metadata header (5 lines) + 1 blank separator + body fills the
+    // rest. Fixed metadata height keeps the body scroll math simple:
+    // body height = inner.height - 6, and Paragraph::scroll((n, 0))
+    // hides the first n wrapped lines.
+    const META_LINES: u16 = 6;
+    let meta_h = META_LINES.min(inner.height);
+    let body_h = inner.height.saturating_sub(meta_h);
+    let meta_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: meta_h,
+    };
+    let body_area = Rect {
+        x: inner.x,
+        y: inner.y + meta_h,
+        width: inner.width,
+        height: body_h,
+    };
+
+    // Format the absolute timestamp in UTC with timezone (matches
+    // issue's "absolute, with timezone"). UTC is unambiguous across
+    // operator timezones — the local-time variant would need extra
+    // care for the dogfood team's mixed-locale operators.
+    let ts = chrono::DateTime::<chrono::Utc>::from_timestamp(
+        row.sent_at as i64,
+        ((row.sent_at.fract() * 1_000_000_000.0) as u32).min(999_999_999),
+    )
+    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+    .unwrap_or_else(|| "—".to_string());
+
+    let muted = Style::default().fg(app.capabilities.muted());
+    let meta_lines = vec![
+        ratatui::text::Line::raw(format!("from:      {}", row.sender)),
+        ratatui::text::Line::raw(format!("to:        {}", row.recipient)),
+        ratatui::text::Line::raw(format!("kind:      {}", crate::mailbox::kind_label(row))),
+        ratatui::text::Line::raw(format!("time:      {ts}")),
+        ratatui::text::Line::raw(format!(
+            "transport: {}",
+            crate::mailbox::transport_label(row)
+        )),
+        ratatui::text::Line::styled("", muted),
+    ];
+    Paragraph::new(meta_lines)
+        .style(Style::default())
+        .render(meta_area, buf);
+
+    // Body: wrap to inner width, scroll by the operator's offset.
+    // No upper-bound clamp on scroll here — Paragraph's scroll
+    // semantics tolerate values past the end (renders empty), and
+    // the j/k handlers' saturating_add caps at u16::MAX which is
+    // far beyond any realistic body length.
+    Paragraph::new(row.text.clone())
+        .wrap(Wrap { trim: false })
+        .scroll((app.mailbox_detail_scroll, 0))
+        .render(body_area, buf);
 }
 
 fn render_tutorial(area: Rect, buf: &mut Buffer, app: &App) {
@@ -1760,6 +1925,19 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
                 KeyCode::Char('/') if app.focused_pane == Pane::Mailbox => {
                     app.open_mailbox_search_input()
                 }
+                // T-131 PR-3: Enter on a selected mailbox row opens
+                // the detail modal — captures the row content at
+                // snapshot-at-open (variant (a) locked) and flips
+                // Stage to MailboxDetailModal. No-op when
+                // visible_indices is empty (`open_…` handles the
+                // gate). Placed AFTER the input-mode `Enter`
+                // confirm arm at the top of this match — that arm
+                // fires when the operator presses Enter from
+                // inside an open filter/search, not from cursor
+                // selection, so the two are disjoint by mode.
+                KeyCode::Enter if app.focused_pane == Pane::Mailbox => {
+                    app.open_mailbox_detail_modal()
+                }
                 // Roster navigation — only when roster is the
                 // focused pane. j/k mirror Vim; arrows mirror
                 // every-day navigation.
@@ -1851,6 +2029,17 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
             }
             Stage::HelpOverlay => match k.code {
                 KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => app.close_help_overlay(),
+                _ => {}
+            },
+            // T-131 PR-3: mailbox detail modal. Esc OR q close;
+            // j/k or Up/Down scroll the wrapped body when it
+            // overflows the modal height. Other keys are swallowed
+            // so a stray chord doesn't accidentally act on the
+            // Triptych rendered underneath.
+            Stage::MailboxDetailModal => match k.code {
+                KeyCode::Esc | KeyCode::Char('q') => app.close_mailbox_detail_modal(),
+                KeyCode::Char('j') | KeyCode::Down => app.mailbox_detail_scroll_down(),
+                KeyCode::Char('k') | KeyCode::Up => app.mailbox_detail_scroll_up(),
                 _ => {}
             },
             Stage::Tutorial => match k.code {
@@ -1959,6 +2148,10 @@ pub fn render_to_buffer(app: &App, width: u16, height: u16) -> Buffer {
         Stage::Tutorial => {
             render_main(app, area, &mut buf);
             render_tutorial(area, &mut buf, app);
+        }
+        Stage::MailboxDetailModal => {
+            render_main(app, area, &mut buf);
+            render_mailbox_detail_modal(area, &mut buf, app);
         }
     }
     buf
@@ -3837,6 +4030,151 @@ mod tests {
             app.mailbox.filter_text(app.mailbox_tab),
             "q",
             "q must land in the filter buffer"
+        );
+    }
+
+    // T-131 PR-3: mailbox detail modal — open/close/scroll +
+    // snapshot-at-open contract.
+
+    fn seed_inbox_rows(app: &mut App, n: i64) {
+        let rows: Vec<MessageRow> = (1..=n)
+            .map(|i| MessageRow {
+                id: i,
+                sender: "p:dev".into(),
+                recipient: "p:mgr".into(),
+                text: format!("body #{i}"),
+                sent_at: 1_700_000_000.0 + i as f64,
+            })
+            .collect();
+        app.mailbox.extend(MailboxTab::Inbox, rows);
+    }
+
+    #[test]
+    fn enter_on_mailbox_opens_detail_modal_with_snapshot() {
+        let mut app = app_with_mailbox_focused();
+        seed_inbox_rows(&mut app, 5);
+        // Cursor seats at tail (row id 5) per PR-1 contract.
+        dispatch(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.stage, Stage::MailboxDetailModal);
+        let snap = app.mailbox_detail_modal.as_ref().expect("modal open");
+        assert_eq!(snap.id, 5);
+        assert_eq!(snap.text, "body #5");
+        assert_eq!(app.mailbox_detail_scroll, 0, "scroll resets on open");
+    }
+
+    #[test]
+    fn enter_on_empty_visible_indices_is_noop() {
+        // Filter to nothing → Enter must NOT flip stage or snapshot.
+        let mut app = app_with_mailbox_focused();
+        seed_inbox_rows(&mut app, 3);
+        app.mailbox.set_input(
+            MailboxTab::Inbox,
+            MailboxInputKind::Filter,
+            "no-such-sender".into(),
+        );
+        assert!(app.mailbox.visible_indices(MailboxTab::Inbox).is_empty());
+        dispatch(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.stage, Stage::Triptych);
+        assert!(app.mailbox_detail_modal.is_none());
+    }
+
+    #[test]
+    fn snapshot_stable_across_underlying_drain() {
+        // The variant-(a) killer test: open modal on row id 3, then
+        // drain the buffer past it. Modal still renders id 3 because
+        // the snapshot owns the content, not the underlying buffer.
+        let mut app = app_with_mailbox_focused();
+        seed_inbox_rows(&mut app, 5);
+        app.mailbox.cursor_home(MailboxTab::Inbox);
+        app.mailbox.move_cursor_down(MailboxTab::Inbox);
+        app.mailbox.move_cursor_down(MailboxTab::Inbox); // selected_idx = 2 → row id 3
+        dispatch(&mut app, key(KeyCode::Enter));
+        let snap_id = app.mailbox_detail_modal.as_ref().expect("open").id;
+        assert_eq!(snap_id, 3);
+        // Now drain the front by pushing enough rows to trim past
+        // row id 3. MAX_TAB_ROWS = 500.
+        let more: Vec<MessageRow> = (6..=600)
+            .map(|i| MessageRow {
+                id: i,
+                sender: "p:dev".into(),
+                recipient: "p:mgr".into(),
+                text: format!("body #{i}"),
+                sent_at: 1_700_000_000.0 + i as f64,
+            })
+            .collect();
+        app.mailbox.extend(MailboxTab::Inbox, more);
+        // The original row id 3 should no longer be in the buffer.
+        let still_there = app
+            .mailbox
+            .rows(MailboxTab::Inbox)
+            .iter()
+            .any(|r| r.id == 3);
+        assert!(!still_there, "row id 3 must have been drained");
+        // But the modal snapshot is unchanged — operator sees the
+        // message they clicked, full stop.
+        let snap = app.mailbox_detail_modal.as_ref().expect("still open");
+        assert_eq!(snap.id, 3, "snapshot id must survive underlying drain");
+        assert_eq!(snap.text, "body #3");
+    }
+
+    #[test]
+    fn esc_closes_detail_modal() {
+        let mut app = app_with_mailbox_focused();
+        seed_inbox_rows(&mut app, 3);
+        dispatch(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.stage, Stage::MailboxDetailModal);
+        dispatch(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.stage, Stage::Triptych);
+        assert!(app.mailbox_detail_modal.is_none());
+    }
+
+    #[test]
+    fn q_closes_detail_modal() {
+        let mut app = app_with_mailbox_focused();
+        seed_inbox_rows(&mut app, 3);
+        dispatch(&mut app, key(KeyCode::Enter));
+        dispatch(&mut app, key(KeyCode::Char('q')));
+        assert_eq!(app.stage, Stage::Triptych);
+        assert!(app.mailbox_detail_modal.is_none());
+    }
+
+    #[test]
+    fn j_and_k_scroll_body_in_modal() {
+        let mut app = app_with_mailbox_focused();
+        seed_inbox_rows(&mut app, 3);
+        dispatch(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.mailbox_detail_scroll, 0);
+        dispatch(&mut app, key(KeyCode::Char('j')));
+        dispatch(&mut app, key(KeyCode::Char('j')));
+        dispatch(&mut app, key(KeyCode::Down));
+        assert_eq!(app.mailbox_detail_scroll, 3);
+        dispatch(&mut app, key(KeyCode::Char('k')));
+        dispatch(&mut app, key(KeyCode::Up));
+        assert_eq!(app.mailbox_detail_scroll, 1);
+        // Saturating: more `k`s than current offset clamp at 0.
+        for _ in 0..10 {
+            dispatch(&mut app, key(KeyCode::Char('k')));
+        }
+        assert_eq!(app.mailbox_detail_scroll, 0);
+    }
+
+    #[test]
+    fn unrelated_keys_swallowed_in_modal() {
+        // While modal open, `f` / `/` / `Tab` must not trigger their
+        // Triptych meanings — the modal owns the stage.
+        let mut app = app_with_mailbox_focused();
+        seed_inbox_rows(&mut app, 3);
+        dispatch(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.stage, Stage::MailboxDetailModal);
+        let focused_before = app.focused_pane;
+        dispatch(&mut app, key(KeyCode::Char('f')));
+        dispatch(&mut app, key(KeyCode::Char('/')));
+        dispatch(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.stage, Stage::MailboxDetailModal, "stage stays");
+        assert!(app.mailbox_input_mode.is_none(), "filter/search not opened");
+        assert_eq!(
+            app.focused_pane, focused_before,
+            "Tab must not cycle panes underneath an open modal"
         );
     }
 }

@@ -23,6 +23,11 @@ ansi-to-tui = "7"
 # disk/network/component/user crates we don't render — keeps the
 # compile cost trimmed and the runtime surface narrow.
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+# T-131 PR-3: detail modal renders the mailbox row's `sent_at` (f64
+# Unix epoch) as an absolute timestamp with timezone. Mirrors
+# team-core's pattern (default-features = false + "clock") so we
+# pull in only the date-format surface, not the locale/serde extras.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
 insta = "1"

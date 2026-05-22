@@ -138,6 +138,49 @@ pub fn render_row(row: &MessageRow, team: &crate::data::TeamSnapshot, tab: Mailb
     }
 }
 
+/// T-131 PR-3: human-readable kind label for the detail modal.
+/// Derived from the recipient shape — the same prefix classes the
+/// module-doc INVARIANT pins (`<project>:<agent>` DM,
+/// `channel:<project>:all` wire, other `channel:` channel,
+/// `user:` DM-from-or-to-a-user).
+pub fn kind_label(row: &MessageRow) -> &'static str {
+    if let Some(rest) = row.recipient.strip_prefix("channel:") {
+        // `channel:<project>:all` is the project-wide wire; anything
+        // else under `channel:` is a named channel.
+        if rest.ends_with(":all") {
+            "wire broadcast"
+        } else {
+            "channel broadcast"
+        }
+    } else {
+        // Agent id (`<project>:<agent>`) or `user:<handle>` —
+        // either way, a directed message.
+        "DM"
+    }
+}
+
+/// T-131 PR-3: best-effort transport / origin label for the detail
+/// modal. Heuristic from the sender prefix (variant (b) locked):
+///
+/// - `user:telegram` → "via telegram" — by far the most common
+///   non-agent origin, worth its own label.
+/// - any other `user:<handle>` → "via user" — DMs from a different
+///   human-facing adapter, future-proof against new `user:*` shapes.
+/// - agent id (`<project>:<agent>`) → "via mcp" — every agent emits
+///   through the MCP broker.
+/// - else → "—" (unparseable / future schema).
+pub fn transport_label(row: &MessageRow) -> &'static str {
+    if row.sender.starts_with("user:telegram") {
+        "via telegram"
+    } else if row.sender.starts_with("user:") {
+        "via user"
+    } else if row.sender.contains(':') {
+        "via mcp"
+    } else {
+        "—"
+    }
+}
+
 /// Lookup contract: each method returns rows newer than `after_id`
 /// for the given filter, in ascending id order. Callers fold the
 /// returned rows into a per-tab buffer and bump `after_id` to the
@@ -1279,5 +1322,34 @@ mod tests {
         buf.move_cursor_up(MailboxTab::Inbox);
         buf.cursor_end(MailboxTab::Inbox);
         assert_eq!(buf.cursor(MailboxTab::Inbox).selected_idx, 0);
+    }
+
+    // T-131 PR-3: kind_label + transport_label derivation.
+
+    #[test]
+    fn kind_label_distinguishes_dm_channel_wire() {
+        let r = row(1, "p:a", "p:dev", "x"); // agent-to-agent DM
+        assert_eq!(kind_label(&r), "DM");
+        let r = row(1, "p:a", "user:telegram", "x"); // agent-to-user DM
+        assert_eq!(kind_label(&r), "DM");
+        let r = row(1, "p:a", "channel:p:dev", "x"); // named channel
+        assert_eq!(kind_label(&r), "channel broadcast");
+        let r = row(1, "p:a", "channel:p:all", "x"); // project-wide wire
+        assert_eq!(kind_label(&r), "wire broadcast");
+    }
+
+    #[test]
+    fn transport_label_heuristic_covers_documented_cases() {
+        // Issue's "if discernible" — heuristic from sender prefix.
+        let r = row(1, "user:telegram", "p:a", "x");
+        assert_eq!(transport_label(&r), "via telegram");
+        let r = row(1, "user:discord", "p:a", "x");
+        assert_eq!(transport_label(&r), "via user");
+        let r = row(1, "p:agent", "p:other", "x");
+        assert_eq!(transport_label(&r), "via mcp");
+        let r = row(1, "p:agent", "channel:p:dev", "x");
+        assert_eq!(transport_label(&r), "via mcp"); // agent emit, recipient class doesn't matter
+        let r = row(1, "weird-no-colon", "p:a", "x");
+        assert_eq!(transport_label(&r), "—"); // graceful degrade
     }
 }
