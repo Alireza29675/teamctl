@@ -77,6 +77,83 @@ fn validate_passes_on_clean_compose() {
     assert!(stdout.contains("2 agents"), "got: {stdout}");
 }
 
+// ── T-325: init Stage 4 emits cascading role_prompt list form ───────────
+// The init skill writes role_prompt: as a YAML list. Managers cascade
+// `[_base.md, <name>.md]`; workers cascade
+// `[_base.md, _worker.md, <name>.md]` (asymmetric tier-shape by owner
+// direction, matching the merged #295 dogfood convention). The render
+// layer already concats list form at boot (covered in team-core tests);
+// this test pins the CLI-level contract — validate accepts what the
+// skill emits, so the skill's emission round-trips through the rest of
+// the stack without schema regression.
+#[test]
+fn validate_accepts_cascading_role_prompt_list_form() {
+    let tmp = tempdir().unwrap();
+    fs::write(
+        tmp.path().join("team-compose.yaml"),
+        r#"
+version: 2
+broker:
+  type: sqlite
+  path: state/mailbox.db
+supervisor:
+  type: tmux
+  tmux_prefix: cascade-
+projects:
+  - file: projects/cascade.yaml
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join("projects")).unwrap();
+    fs::write(
+        tmp.path().join("projects/cascade.yaml"),
+        r#"
+version: 2
+project:
+  id: cascade
+  name: Cascade
+  cwd: .
+channels:
+  - name: all
+    members: "*"
+managers:
+  pm:
+    runtime: claude-code
+    model: claude-opus-4-7
+    role_prompt:
+      - roles/_base.md
+      - roles/pm.md
+    can_dm: [eng]
+    can_broadcast: [all]
+workers:
+  eng:
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    reports_to: pm
+    role_prompt:
+      - roles/_base.md
+      - roles/_worker.md
+      - roles/eng.md
+    can_dm: [pm]
+    can_broadcast: [all]
+"#,
+    )
+    .unwrap();
+
+    let out = Command::new(bin())
+        .args(["--root", tmp.path().to_str().unwrap(), "validate"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "validate should accept cascade list-form role_prompt; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("1 project"), "got: {stdout}");
+    assert!(stdout.contains("2 agents"), "got: {stdout}");
+}
+
 #[test]
 fn validate_fails_on_unknown_dm_target() {
     let tmp = tempdir().unwrap();

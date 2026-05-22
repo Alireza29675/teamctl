@@ -41,8 +41,10 @@ These are positioning *invariants* — every command implements **with** them, n
 
 ## Canonical flow — domain-over-function
 
-`/teamctl:init` does not hand users a template menu. It walks them through a discovery conversation that surfaces the user's *domains* — things with their own state, history, and decisions — and synthesises a team from those. The cut is by domain ownership, not by job function.
+`/teamctl:init` does not hand users a template menu **for domain discovery**. Stage 2 (the discovery conversation) walks the user through surfacing their own *domains* — things with their own state, history, and decisions — and synthesises a team from those. The cut is by domain ownership, not by job function. Free-form prose only at Stage 2; no template menu, no multiple-choice for the domain set itself.
 
-The legacy template-pick stage and the four named defaults (OSS maintainer, Editorial room, Indie studio, Solo triage) live on only as **inspirations**: shape-references the user can compare against after they've named their own domains. Never as pickable starts.
+**Intent routing is allowed to use option menus.** The intent on-ramp (the "Mode pick" question — `Co-design` / `Advanced co-design` / `Delegate a job` / `Just give me something`) is an `AskUserQuestion` menu by design. The invariant above protects the *discovery method*, not the on-ramp altitude — picking which path through `init` is a finite-set decision the user makes once, before discovery runs. See [INTERACTIVE.md §1](./INTERACTIVE.md) for when option menus are the right shape.
+
+The legacy template-pick stage and the four named defaults (OSS maintainer, Editorial room, Indie studio, Solo triage) live on only as **inspirations**: shape-references the user can compare against after they've named their own domains. Never as pickable starts for the *team shape*.
 
 The canonical companion is [`docs/src/content/docs/concepts/teams.md`](../../docs/src/content/docs/concepts/teams.md) — the methodology there is the source of truth. If anything in `/teamctl:init` drifts from that page, the page wins.
