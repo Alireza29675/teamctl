@@ -28,7 +28,7 @@
 #   subsection from any existing role's §6 Memory section so the
 #   convention stays uniform.
 
-version: 2
+version: "2.0.0"
 
 # SQLite mailbox at `state/mailbox.db` (relative to this file).
 # `state/` is gitignored — runtime state never leaves the host.

@@ -30,7 +30,7 @@ preserved as a reference recipe.
 
 ```yaml
 # .team/team-compose.yaml
-version: 2
+version: "2.0.0"
 
 broker:
   type: sqlite
@@ -47,7 +47,7 @@ projects:
 
 ```yaml
 # .team/projects/product.yaml
-version: 2
+version: "2.0.0"
 
 project:
   id: product
@@ -75,7 +75,7 @@ workers:
 
 ```yaml
 # .team/projects/blog.yaml
-version: 2
+version: "2.0.0"
 
 project:
   id: blog

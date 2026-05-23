@@ -287,7 +287,7 @@ mod tests {
         Compose {
             root: PathBuf::from("/teamctl"),
             global: Global {
-                version: 2,
+                version: crate::compose::SchemaVersion::new("2.0.0"),
                 broker: Broker {
                     r#type: "sqlite".into(),
                     path: PathBuf::from("state/mailbox.db"),

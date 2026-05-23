@@ -571,7 +571,7 @@ mod tests {
         Compose {
             root: root.to_path_buf(),
             global: Global {
-                version: 2,
+                version: team_core::compose::SchemaVersion::new("2.0.0"),
                 broker: Default::default(),
                 supervisor: Default::default(),
                 budget: Default::default(),
