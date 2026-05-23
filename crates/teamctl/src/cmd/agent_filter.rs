@@ -175,6 +175,7 @@ mod tests {
                 channels: vec![],
                 managers,
                 workers,
+                interfaces: None,
             }],
         }
     }
