@@ -18,7 +18,7 @@ recipe.
 
 ```yaml
 # .team/projects/mixed.yaml
-version: 2
+version: "2.0.0"
 
 project:
   id: mixed

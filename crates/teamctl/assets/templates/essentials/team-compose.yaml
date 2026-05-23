@@ -8,7 +8,7 @@
 #
 # Move/rename this file and `teamctl up` stops finding the team.
 
-version: 2
+version: "2.0.0"
 
 # How agents talk. SQLite is the default; the path is relative to this
 # `.team/` folder. Each project gets isolated channels — `main` and

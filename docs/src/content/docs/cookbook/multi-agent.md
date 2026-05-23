@@ -17,7 +17,7 @@ a reference recipe.
 
 ```yaml
 # .team/projects/swarm.yaml
-version: 2
+version: "2.0.0"
 
 project:
   id: swarm

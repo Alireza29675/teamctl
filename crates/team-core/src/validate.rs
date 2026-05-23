@@ -83,6 +83,11 @@ pub enum ValidationError {
     DrainTimeoutOutOfRange(u64),
 
     #[error(
+        "compose schema `version: {got}` is not a valid semver string (expected e.g. `\"2.0.0\"`)"
+    )]
+    SchemaVersionInvalid { got: String },
+
+    #[error(
         "project `{project}`: agent `{agent}` has a blank `role_prompt` (empty string or empty list)"
     )]
     BlankRolePrompt { project: String, agent: String },
@@ -149,6 +154,20 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
         errs.push(ValidationError::DrainTimeoutOutOfRange(
             compose.global.supervisor.drain_timeout_secs,
         ));
+    }
+
+    // T-265 PR-a: compose schema version must be a valid semver
+    // string. Deserialization already accepted only (a) a string
+    // (passed verbatim into `SchemaVersion::value`) or (b) the
+    // legacy integer `2` (coerced to `"2.0.0"`); this validate-time
+    // check rejects in-string garbage like `"abc"` or `"2"` (the
+    // bare `"2"` is NOT semver — it needs the `.0.0` suffix).
+    // Delegated to the `semver` crate to get prerelease /
+    // build-metadata edge cases right rather than hand-rolling.
+    if semver::Version::parse(&compose.global.version.value).is_err() {
+        errs.push(ValidationError::SchemaVersionInvalid {
+            got: compose.global.version.value.clone(),
+        });
     }
 
     let mut seen_projects = BTreeSet::new();
@@ -331,7 +350,7 @@ mod tests {
         Compose {
             root: PathBuf::from("."),
             global: Global {
-                version: 2,
+                version: crate::compose::SchemaVersion::new("2.0.0"),
                 broker: Default::default(),
                 supervisor: Default::default(),
                 budget: Default::default(),
@@ -688,5 +707,74 @@ mod tests {
                 .any(|e| matches!(e, ValidationError::InvalidProjectId(s) if s == "foo:bar")),
             "expected InvalidProjectId on colon, got {errs:?}",
         );
+    }
+
+    // T-265 PR-a: schema version semver-shape check. Deserialize
+    // accepts any string verbatim (narrow concern); this validate
+    // step is what enforces the shape.
+
+    #[test]
+    fn valid_semver_string_validates() {
+        // Default fixture uses "2.0.0" — the canonical form.
+        let c = toy_compose("dev");
+        assert!(
+            !validate(&c)
+                .iter()
+                .any(|e| matches!(e, ValidationError::SchemaVersionInvalid { .. })),
+            "canonical version `2.0.0` must validate"
+        );
+    }
+
+    #[test]
+    fn malformed_semver_string_flags() {
+        let mut c = toy_compose("dev");
+        c.global.version = crate::compose::SchemaVersion::new("abc");
+        let errs = validate(&c);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::SchemaVersionInvalid { got } if got == "abc"
+            )),
+            "non-semver string must surface SchemaVersionInvalid; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn bare_two_string_flags_too() {
+        // `"2"` is NOT semver (needs `.0.0`). Bare-2-string would
+        // sneak past if our check were too loose; pin it explicitly.
+        let mut c = toy_compose("dev");
+        c.global.version = crate::compose::SchemaVersion::new("2");
+        assert!(
+            validate(&c).iter().any(|e| matches!(
+                e,
+                ValidationError::SchemaVersionInvalid { got } if got == "2"
+            )),
+            "bare-2-string must NOT pass the semver shape check"
+        );
+    }
+
+    #[test]
+    fn semver_with_prerelease_and_build_metadata_validates() {
+        // Real-world semver supports `-pre` + `+build` suffixes.
+        // Delegating to the `semver` crate gets these right;
+        // pin the contract so a future "let's hand-roll a regex"
+        // refactor surfaces here.
+        for ok in [
+            "1.0.0",
+            "2.3.4",
+            "2.0.0-alpha",
+            "1.0.0+build.5",
+            "2.0.0-rc.1+build.7",
+        ] {
+            let mut c = toy_compose("dev");
+            c.global.version = crate::compose::SchemaVersion::new(ok);
+            assert!(
+                !validate(&c)
+                    .iter()
+                    .any(|e| matches!(e, ValidationError::SchemaVersionInvalid { .. })),
+                "semver `{ok}` must validate"
+            );
+        }
     }
 }

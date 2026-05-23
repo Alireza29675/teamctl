@@ -1,14 +1,112 @@
 //! YAML schema for `team-compose.yaml` and `projects/<id>.yaml`.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// T-265 PR-a: compose schema version. Stored as a semver string;
+/// validate-time check (`validate::validate`) enforces the semver
+/// shape via the `semver` crate.
+///
+/// **Custom Deserialize accepts two shapes:**
+///
+/// - YAML string (e.g. `version: "2.0.0"`) — taken verbatim; semver
+///   shape is checked later at validate time, NOT here, so the
+///   deserializer's job stays narrow (parse, not validate).
+/// - YAML integer literal `2` only (the one legacy value that ever
+///   shipped in any in-tree compose) → coerced to `SchemaVersion`
+///   carrying `"2.0.0"` AND flagged `from_legacy_int = true`. The
+///   load orchestration in [`Compose::load`] reads that flag to
+///   decide whether to auto-rewrite the on-disk file so the
+///   integer self-heals to the semver shape (owner-ratified tg
+///   2989 + tg 3440, "option 1 + variant A").
+///
+/// Anything else — `version: 1`, `version: 3`, `version: true`,
+/// `version: [1,2,3]` — fails to deserialize with a message that
+/// names the constraint: only `"X.Y.Z"` or the legacy `2`.
+///
+/// `from_legacy_int` is `#[serde(skip)]` so it never round-trips
+/// through serialize; it's a deserialize-side signal only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct SchemaVersion {
+    pub value: String,
+    #[serde(skip)]
+    pub from_legacy_int: bool,
+}
+
+impl SchemaVersion {
+    /// Construct directly from a semver-shaped string; for fixtures
+    /// and tests + the in-memory legacy coercion.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            from_legacy_int: false,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SchemaVersion {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{self, Visitor};
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = SchemaVersion;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str(
+                    "a semver string like \"2.0.0\" (legacy integer `2` also accepted \
+                     and auto-rewritten to \"2.0.0\" on next save)",
+                )
+            }
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<SchemaVersion, E> {
+                Ok(SchemaVersion {
+                    value: s.to_string(),
+                    from_legacy_int: false,
+                })
+            }
+            fn visit_string<E: de::Error>(self, s: String) -> Result<SchemaVersion, E> {
+                Ok(SchemaVersion {
+                    value: s,
+                    from_legacy_int: false,
+                })
+            }
+            fn visit_u64<E: de::Error>(self, n: u64) -> Result<SchemaVersion, E> {
+                if n == 2 {
+                    Ok(SchemaVersion {
+                        value: "2.0.0".to_string(),
+                        from_legacy_int: true,
+                    })
+                } else {
+                    Err(E::custom(format!(
+                        "compose schema version must be a semver string like \"2.0.0\"; \
+                         got integer {n} — only legacy `2` is auto-coerced"
+                    )))
+                }
+            }
+            fn visit_i64<E: de::Error>(self, n: i64) -> Result<SchemaVersion, E> {
+                if n == 2 {
+                    Ok(SchemaVersion {
+                        value: "2.0.0".to_string(),
+                        from_legacy_int: true,
+                    })
+                } else {
+                    Err(E::custom(format!(
+                        "compose schema version must be a semver string like \"2.0.0\"; \
+                         got integer {n} — only legacy `2` is auto-coerced"
+                    )))
+                }
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
 
 /// Top-level `team-compose.yaml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Global {
-    pub version: u32,
+    pub version: SchemaVersion,
 
     #[serde(default)]
     pub broker: Broker,
@@ -599,11 +697,37 @@ impl Compose {
     pub fn load(root: impl AsRef<Path>) -> anyhow::Result<Self> {
         let root = root.as_ref().to_path_buf();
         let global_path = root.join("team-compose.yaml");
-        let global: Global = serde_yaml::from_str(
-            &std::fs::read_to_string(&global_path)
-                .map_err(|e| anyhow::anyhow!("read {}: {e}", global_path.display()))?,
-        )
-        .map_err(|e| anyhow::anyhow!("parse {}: {e}", global_path.display()))?;
+        let raw = std::fs::read_to_string(&global_path)
+            .map_err(|e| anyhow::anyhow!("read {}: {e}", global_path.display()))?;
+        let global: Global = serde_yaml::from_str(&raw)
+            .map_err(|e| anyhow::anyhow!("parse {}: {e}", global_path.display()))?;
+
+        // T-265 PR-a: legacy-`2` auto-rewrite on load. When the
+        // operator's compose still uses the pre-semver shape
+        // (`version: 2`, integer literal), the Deserialize impl on
+        // `SchemaVersion` has already coerced the in-memory value to
+        // `"2.0.0"` and flagged `from_legacy_int = true`. Now we
+        // best-effort rewrite the file so the on-disk shape matches
+        // the runtime semantics — eliminating the file-vs-runtime
+        // divergence the operator would otherwise see in git diff
+        // forever. On RO filesystems (CI sandboxes, immutable image
+        // mounts) or any other write failure, we emit a single warn
+        // and proceed with the in-memory normalized value rather
+        // than hard-erroring — owner-ratified (tg 3440, "RO-FS
+        // degrades to in-memory + warning"). Single hardcoded
+        // legacy-value exception, NOT the general migration engine
+        // — that stays deferred to its own ticket per #265's
+        // non-goals.
+        if global.version.from_legacy_int {
+            if let Err(e) = rewrite_legacy_version_in_file(&global_path, &raw) {
+                tracing::warn!(
+                    target: "team-core::compose",
+                    "could not rewrite legacy `version: 2` in {}: {e}; \
+                     proceeding with in-memory `\"2.0.0\"`",
+                    global_path.display()
+                );
+            }
+        }
 
         let mut projects = Vec::with_capacity(global.projects.len());
         for r in &global.projects {
@@ -642,6 +766,17 @@ impl Compose {
                 }))
         })
     }
+}
+
+/// T-265 PR-a: rewrite the legacy `version: 2` integer literal in
+/// `team-compose.yaml` to the semver string form `"2.0.0"`,
+/// preserving comments + key ordering via the `yaml_edit` substrate.
+/// Caller has already loaded the raw text (passed as `raw` to avoid
+/// a second disk read) and decided we're in the legacy path.
+fn rewrite_legacy_version_in_file(path: &Path, raw: &str) -> anyhow::Result<()> {
+    let updated = crate::yaml_edit::set_top_level_scalar(raw, "version", "\"2.0.0\"")?;
+    std::fs::write(path, updated).map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -868,6 +1003,138 @@ interfaces:
         assert_eq!(
             got,
             vec![Path::new("a.md"), Path::new("b.md"), Path::new("c.md")]
+        );
+    }
+
+    // T-265 PR-a: SchemaVersion Deserialize semantics. The owner-
+    // ratified contract is: accept YAML string verbatim; accept the
+    // single legacy integer `2` (coerce to "2.0.0", flag
+    // `from_legacy_int = true` so Compose::load knows to rewrite
+    // the file); reject anything else with a message naming the
+    // constraint.
+
+    #[test]
+    fn schema_version_accepts_semver_string() {
+        let v: SchemaVersion = serde_yaml::from_str("\"2.0.0\"").unwrap();
+        assert_eq!(v.value, "2.0.0");
+        assert!(!v.from_legacy_int, "string form is NOT the legacy path");
+    }
+
+    #[test]
+    fn schema_version_accepts_arbitrary_semver_string_for_later_validation() {
+        // Deserialize doesn't enforce the semver shape — validate
+        // does. So `"abc"` parses fine here; the validate-time check
+        // rejects it later. Test pins this contract — keeps the
+        // deserialize impl narrow.
+        let v: SchemaVersion = serde_yaml::from_str("\"abc\"").unwrap();
+        assert_eq!(v.value, "abc");
+    }
+
+    #[test]
+    fn schema_version_coerces_legacy_integer_two() {
+        let v: SchemaVersion = serde_yaml::from_str("2").unwrap();
+        assert_eq!(v.value, "2.0.0");
+        assert!(v.from_legacy_int, "integer-2 must be flagged for rewrite");
+    }
+
+    #[test]
+    fn schema_version_rejects_other_integers() {
+        // The hardcoded-legacy-exception is EXACTLY `2`. Anything
+        // else (`1`, `3`, `99`) hard-errors with a message naming
+        // the constraint.
+        for n in [0u64, 1, 3, 99] {
+            let err = serde_yaml::from_str::<SchemaVersion>(&n.to_string())
+                .expect_err("non-2 integer must fail");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("only legacy `2` is auto-coerced"),
+                "error must name the constraint; got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn schema_version_rejects_non_string_non_int_shapes() {
+        // Booleans, lists, mappings — none of them are a version.
+        for yaml in ["true", "[1,2,3]", "{a: b}"] {
+            let res = serde_yaml::from_str::<SchemaVersion>(yaml);
+            assert!(res.is_err(), "yaml `{yaml}` must fail to deserialize");
+        }
+    }
+
+    /// T-265 PR-a: Compose::load orchestration test — legacy `2`
+    /// file gets auto-rewritten to the semver string AND the
+    /// in-memory representation is `"2.0.0"` + `from_legacy_int =
+    /// true` (the flag the load logic reads to decide whether to
+    /// rewrite). The on-disk content after load must be `version:
+    /// "2.0.0"`, comments preserved.
+    #[test]
+    fn load_rewrites_legacy_version_two_in_file_and_in_memory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".team");
+        std::fs::create_dir_all(&root).unwrap();
+        let yaml = "\
+# T-265 fixture — legacy version
+version: 2
+broker:
+  type: sqlite
+  path: state/mailbox.db
+";
+        std::fs::write(root.join("team-compose.yaml"), yaml).unwrap();
+        let compose = Compose::load(&root).expect("load succeeds on legacy file");
+        // In-memory: normalized + flagged legacy.
+        assert_eq!(compose.global.version.value, "2.0.0");
+        // On-disk: rewritten to the semver string.
+        let after = std::fs::read_to_string(root.join("team-compose.yaml")).unwrap();
+        assert!(
+            after.contains("version: \"2.0.0\""),
+            "file must be rewritten;\n{after}"
+        );
+        assert!(
+            !after.contains("\nversion: 2\n"),
+            "no legacy literal must survive;\n{after}"
+        );
+        // Comment preserved.
+        assert!(
+            after.contains("# T-265 fixture"),
+            "comment must survive the rewrite;\n{after}"
+        );
+        // broker block survives.
+        assert!(after.contains("type: sqlite"));
+    }
+
+    #[test]
+    fn load_leaves_canonical_semver_file_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".team");
+        std::fs::create_dir_all(&root).unwrap();
+        let yaml = "\
+version: \"2.0.0\"
+broker:
+  type: sqlite
+";
+        std::fs::write(root.join("team-compose.yaml"), yaml).unwrap();
+        let compose = Compose::load(&root).expect("load succeeds");
+        assert_eq!(compose.global.version.value, "2.0.0");
+        assert!(
+            !compose.global.version.from_legacy_int,
+            "canonical file must NOT be flagged for rewrite"
+        );
+        // File content byte-identical (no auto-rewrite when not legacy).
+        let after = std::fs::read_to_string(root.join("team-compose.yaml")).unwrap();
+        assert_eq!(after, yaml, "canonical file must NOT be mutated on load");
+    }
+
+    #[test]
+    fn load_hard_errors_on_non_two_integer_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".team");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("team-compose.yaml"), "version: 3\n").unwrap();
+        let err = Compose::load(&root).expect_err("must reject integer-3 at parse");
+        assert!(
+            err.to_string().contains("only legacy `2` is auto-coerced"),
+            "error must name the constraint; got: {err}"
         );
     }
 }

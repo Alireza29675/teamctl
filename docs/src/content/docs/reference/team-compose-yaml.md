@@ -10,7 +10,7 @@ The compose tree has two layers:
 ## Global
 
 ```yaml
-version: 2
+version: "2.0.0"
 
 broker:
   type: sqlite                        # sqlite (default); redis-streams is planned
@@ -56,7 +56,7 @@ projects:
 ## Per-project
 
 ```yaml
-version: 2
+version: "2.0.0"
 
 project:
   id: newsroom

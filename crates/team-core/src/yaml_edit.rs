@@ -63,6 +63,68 @@ pub fn save(doc: &Document, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Replace a top-level scalar value (T-265 PR-a).
+///
+/// Walks `source` line-by-line to find a top-level (indent = 0)
+/// mapping entry whose key is `key`, then rewrites that single line
+/// to `key: value` while leaving every other byte of the document
+/// (comments, blank lines, key order, every nested block) untouched.
+///
+/// **This is a sibling helper to [`set_nested_mapping`], not a
+/// generalization of it** — the per-pm scope-lock at the top of
+/// this module covers the nested-mapping insert gap; the top-level
+/// scalar gap is structurally distinct (no parent path, no
+/// indent-arithmetic, no leaf-block detection) and warrants its
+/// own focused helper rather than bolting onto the nested one.
+/// Used by [`crate::compose::Compose::load`] to auto-rewrite the
+/// legacy `version: 2` integer literal to the semver string
+/// `"2.0.0"` per owner ratification (tg 2989 + 3440).
+///
+/// # Errors
+/// Returns an error if no top-level mapping entry named `key` is
+/// found in the document. Document re-parse failures (which
+/// shouldn't happen for the bounded edit this performs) are
+/// surfaced as errors.
+pub fn set_top_level_scalar(source: &str, key: &str, value: &str) -> Result<String> {
+    let trailing_newline = source.ends_with('\n');
+    let mut out_lines: Vec<String> = Vec::new();
+    let mut rewrote = false;
+    for line in source.lines() {
+        if !rewrote {
+            // Top-level means indent = 0 (no leading whitespace).
+            // Skip blank lines and comment lines (full-line `#`).
+            let trimmed = line.trim_start();
+            let indent = line.len() - trimmed.len();
+            if indent == 0 && !trimmed.is_empty() && !trimmed.starts_with('#') {
+                if let Some((found_key, _rest)) = trimmed.split_once(':') {
+                    if found_key == key {
+                        out_lines.push(format!("{key}: {value}"));
+                        rewrote = true;
+                        continue;
+                    }
+                }
+            }
+        }
+        out_lines.push(line.to_string());
+    }
+    if !rewrote {
+        return Err(anyhow!(
+            "set_top_level_scalar: no top-level key `{key}` found in document"
+        ));
+    }
+    let mut joined = out_lines.join("\n");
+    if trailing_newline && !joined.ends_with('\n') {
+        joined.push('\n');
+    }
+    // T-265 PR-a: deliberately return the spliced String directly
+    // rather than round-tripping through `Document::parse` →
+    // `Document::to_string` — the yaml_edit 0.2.x upstream has a
+    // pre-document-trivia limitation that strips leading comments
+    // on round-trip, and the splice already preserves them
+    // line-perfectly. The caller writes this straight to disk.
+    Ok(joined)
+}
+
 /// Insert or replace a nested mapping at the given parent path.
 ///
 /// `parent_path` is a sequence of mapping keys descending from the root.
@@ -561,6 +623,82 @@ managers:
             tg["chat_ids_env"].as_str(),
             Some("TEAMCTL_TG_BUILDER_CHATS"),
             "chat_ids_env must be nested under telegram:\n{after}"
+        );
+    }
+
+    // T-265 PR-a: set_top_level_scalar sibling helper.
+
+    #[test]
+    fn set_top_level_scalar_replaces_integer_with_quoted_string() {
+        // The headline use case: legacy `version: 2` integer →
+        // canonical `version: "2.0.0"` semver string.
+        let src = "\
+# leading comment
+version: 2
+broker:
+  type: sqlite
+";
+        let edited = set_top_level_scalar(src, "version", "\"2.0.0\"").unwrap();
+        let out = edited;
+        assert!(
+            out.contains("version: \"2.0.0\""),
+            "rewrite missing:\n{out}"
+        );
+        assert!(
+            !out.contains("\nversion: 2\n"),
+            "old literal survived:\n{out}"
+        );
+        // Comment + other top-level keys preserved.
+        assert!(out.contains("# leading comment"));
+        assert!(out.contains("broker:"));
+        assert!(out.contains("type: sqlite"));
+    }
+
+    #[test]
+    fn set_top_level_scalar_is_idempotent() {
+        let src = "version: \"2.0.0\"\nbroker:\n  type: sqlite\n";
+        let edited = set_top_level_scalar(src, "version", "\"2.0.0\"").unwrap();
+        let out = edited;
+        assert_eq!(
+            out.matches("version:").count(),
+            1,
+            "no duplicate version line:\n{out}"
+        );
+        assert!(out.contains("version: \"2.0.0\""));
+    }
+
+    #[test]
+    fn set_top_level_scalar_errors_on_missing_key() {
+        let src = "broker:\n  type: sqlite\n";
+        let err = set_top_level_scalar(src, "version", "\"2.0.0\"").expect_err("missing key");
+        assert!(
+            err.to_string().contains("no top-level key `version` found"),
+            "error must name the missing key: {err}"
+        );
+    }
+
+    #[test]
+    fn set_top_level_scalar_only_touches_top_level_key() {
+        // A nested `version:` inside another mapping must NOT be
+        // rewritten — only the top-level one. Crucial for
+        // projects/*.yaml which is OUT of PR-a's scope (still has
+        // `version: u32`) but might be referenced inside a future
+        // nested block.
+        let src = "\
+version: 2
+nested:
+  version: 99
+  other: ok
+";
+        let edited = set_top_level_scalar(src, "version", "\"2.0.0\"").unwrap();
+        let out = edited;
+        assert!(
+            out.contains("version: \"2.0.0\""),
+            "top-level rewritten:\n{out}"
+        );
+        assert!(
+            out.contains("  version: 99"),
+            "nested version: 99 must be left alone:\n{out}"
         );
     }
 }
