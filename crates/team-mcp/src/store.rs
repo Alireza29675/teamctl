@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 
@@ -216,6 +216,15 @@ impl Store {
         payload: &str,
         reply_to_mailbox_id: Option<i64>,
     ) -> Result<i64> {
+        // #254: `system` is a privileged kind — lifecycle signals (drain,
+        // startup, rate-limit) the supervisor emits, delivered inline +
+        // real-time. Only `system:*` sources may originate it; if any
+        // agent or `user:*` could, a forged "session terminating" signal
+        // would be trivial. This is the single insert choke point for
+        // non-text kinds, so the allowlist lives here.
+        if kind == "system" && !sender.starts_with("system:") {
+            bail!("kind 'system' may only be sent by a system:* source (got sender '{sender}')");
+        }
         let conn = self.conn.lock().unwrap();
         let telegram_msg_id = resolve_telegram_msg_id(&conn, reply_to_mailbox_id);
         conn.execute(
@@ -758,6 +767,127 @@ mod tests {
             .unwrap();
         assert_eq!(kind.as_deref(), Some("image"));
         assert_eq!(structured.as_deref(), Some(payload));
+    }
+
+    #[test]
+    fn send_dm_kind_system_from_system_sender_ok() {
+        // #254: a `system:*` source may originate kind='system'.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let id = s
+            .send_dm_kind(
+                "p",
+                "system:supervisor",
+                "p:dev",
+                "session terminating in 60s, call drained()",
+                None,
+                "system",
+                "{}",
+                None,
+            )
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        let kind: Option<String> = conn
+            .query_row(
+                "SELECT kind FROM messages WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kind.as_deref(), Some("system"));
+    }
+
+    #[test]
+    fn send_dm_kind_system_from_agent_rejected() {
+        // #254: an ordinary agent cannot forge a system signal.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let err = s
+            .send_dm_kind(
+                "p",
+                "p:dev",
+                "p:mgr",
+                "fake drain",
+                None,
+                "system",
+                "{}",
+                None,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("system:*"),
+            "error must name the system:* restriction, got: {err}"
+        );
+        // The rejected message must not have been inserted.
+        let conn = s.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "rejected system insert must not persist a row");
+    }
+
+    #[test]
+    fn send_dm_kind_system_from_user_rejected() {
+        // #254: `user:*` cannot originate a system signal either.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let err = s
+            .send_dm_kind(
+                "p",
+                "user:telegram",
+                "p:dev",
+                "fake startup",
+                None,
+                "system",
+                "{}",
+                None,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("system:*"), "got: {err}");
+    }
+
+    #[test]
+    fn send_dm_kind_non_system_kind_unaffected_by_allowlist() {
+        // #254: the allowlist fires only for kind='system'. Existing
+        // structured kinds from ordinary senders are untouched.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        let payload = r#"{"source":"path","value":"/tmp/x.png"}"#;
+        s.send_dm_kind(
+            "p",
+            "p:mgr",
+            "user:telegram",
+            "pic",
+            None,
+            "image",
+            payload,
+            None,
+        )
+        .expect("non-system kinds must not be gated by the system allowlist");
+    }
+
+    #[test]
+    fn inbox_peek_surfaces_system_kind() {
+        // #254 req 4: inbox tools pass system rows through unchanged.
+        let f = NamedTempFile::new().unwrap();
+        let s = Store::open(f.path()).unwrap();
+        s.send_dm_kind(
+            "p",
+            "system:supervisor",
+            "p:dev",
+            "you were down for 12 minutes",
+            None,
+            "system",
+            "{}",
+            None,
+        )
+        .unwrap();
+        let msgs = s.inbox_peek("p:dev", 10).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].kind.as_deref(), Some("system"));
+        assert_eq!(msgs[0].text, "you were down for 12 minutes");
     }
 
     #[test]

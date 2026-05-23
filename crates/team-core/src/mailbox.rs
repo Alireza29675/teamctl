@@ -146,6 +146,13 @@ pub fn ensure(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // T-086-A: discriminator + structured payload for non-text mailbox kinds
         // (image, file, reaction). Existing text rows have NULL on both — readers
         // treat NULL kind as 'text' for back-compat.
+        // #254: `'system'` is also a recognized kind value — lifecycle/system
+        // signals (drain, startup, rate-limit) the supervisor emits. No schema
+        // change is needed: `kind` is free-form TEXT with no CHECK/enum and the
+        // db has no version mechanism, so the value's contract lives in code —
+        // `system:*`-only at the insert choke point (store::send_dm_kind) and
+        // always-inline channel delivery (team-mcp format_channel_event), never
+        // a lazy stub.
         "ALTER TABLE messages ADD COLUMN kind TEXT",
         "ALTER TABLE messages ADD COLUMN structured_payload TEXT",
         // T-086-B: Telegram message id this row pertains to. Direction-
