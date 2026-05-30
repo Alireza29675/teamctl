@@ -18,6 +18,7 @@ managers:
     model: claude-opus-4-8
     role_prompt:
     - roles/_base.md
+    - roles/_telegram.md
     - roles/sage.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -40,6 +41,7 @@ managers:
     model: claude-opus-4-8
     role_prompt:
     - roles/_base.md
+    - roles/_telegram.md
     - roles/hugo.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -65,6 +67,7 @@ managers:
     model: claude-opus-4-8
     role_prompt:
     - roles/_base.md
+    - roles/_telegram.md
     - roles/_engineer.md
     - roles/ada.md
     permission_mode: auto
@@ -89,6 +92,7 @@ managers:
     model: claude-opus-4-8
     role_prompt:
     - roles/_base.md
+    - roles/_telegram.md
     - roles/_engineer.md
     - roles/kian.md
     permission_mode: auto
@@ -113,6 +117,7 @@ managers:
     model: claude-opus-4-8
     role_prompt:
     - roles/_base.md
+    - roles/_telegram.md
     - roles/neda.md
     permission_mode: auto
     autonomy: low_risk_only

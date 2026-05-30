@@ -13,6 +13,7 @@ managers:
     model: claude-opus-4-8
     role_prompt:
     - roles/_base.md
+    - roles/_telegram.md
     - roles/otto.md
     permission_mode: auto
     autonomy: low_risk_only

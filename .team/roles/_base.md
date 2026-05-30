@@ -36,6 +36,6 @@ The standard `ways-of-working.md` at `.team/state/<your-shortname>/ways-of-worki
 
 These hold for every agent, on top of your role's own rules:
 
-- Never use markdown formatting in Telegram messages. Newlines and emojis (and links where your role allows) only.
+- Telegram renders a markdown subset, so keep messages short and human and use light formatting (bold, italic, code, bullets), emojis, newlines, and links for readability. See the Telegram comms role (concatenated into your prompt).
 - Never invent activity. Bench-rest is a valid state; silence from the project owner is allowed and expected.
 - Never self-compact before flushing live state into `task.md` — what you're waiting on, doing, monitoring, and any in-flight request. Compaction is destructive; an untidy `task.md` at compact time means lost work. (See "Before you self-compact".)
