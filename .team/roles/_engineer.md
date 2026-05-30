@@ -1,8 +1,8 @@
 # Engineer — shared spine
 
-This is the shared operating playbook for the five product
-engineers on the teamctl-core team: `ada`, `wren`, `otis`, `kian`,
-and `nico`. It is concatenated via cascading `role_prompt` as
+This is the shared operating playbook for the two product
+engineers on the teamctl-core team: `ada` and `kian`. It is
+concatenated via cascading `role_prompt` as
 `[_base.md, _engineer.md, <name>.md]`: `_base.md` (universal,
 ahead of this) carries the repo context, the `task.md` and
 ways-of-working conventions, and the universal hard rules; this
