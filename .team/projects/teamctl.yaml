@@ -10,10 +10,7 @@ channels:
   members:
   - hugo
   - ada
-  - wren
-  - otis
   - kian
-  - nico
 managers:
   sage:
     display_name: Sage (Visionary)
@@ -27,7 +24,6 @@ managers:
     can_dm:
     - hugo
     - neda
-    - vera
     can_broadcast:
     - all
     interfaces:
@@ -51,10 +47,7 @@ managers:
     - sage
     - neda
     - ada
-    - wren
-    - otis
     - kian
-    - nico
     can_broadcast:
     - all
     - dev
@@ -78,10 +71,7 @@ managers:
     autonomy: low_risk_only
     can_dm:
     - hugo
-    - wren
-    - otis
     - kian
-    - nico
     can_broadcast:
     - all
     - dev
@@ -89,60 +79,6 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_ADA_TOKEN
         chat_ids_env: TEAMCTL_TG_ADA_CHATS
-        speech_to_text:
-          provider: groq
-          api_key_env: GROQ_API_KEY
-          model: whisper-large-v3
-  wren:
-    display_name: Wren (Engineer)
-    runtime: claude-code
-    model: claude-opus-4-7
-    role_prompt:
-    - roles/_base.md
-    - roles/_engineer.md
-    - roles/wren.md
-    permission_mode: auto
-    autonomy: low_risk_only
-    can_dm:
-    - hugo
-    - ada
-    - otis
-    - kian
-    - nico
-    can_broadcast:
-    - all
-    - dev
-    interfaces:
-      telegram:
-        bot_token_env: TEAMCTL_TG_WREN_TOKEN
-        chat_ids_env: TEAMCTL_TG_WREN_CHATS
-        speech_to_text:
-          provider: groq
-          api_key_env: GROQ_API_KEY
-          model: whisper-large-v3
-  otis:
-    display_name: Otis (Engineer)
-    runtime: claude-code
-    model: claude-opus-4-7
-    role_prompt:
-    - roles/_base.md
-    - roles/_engineer.md
-    - roles/otis.md
-    permission_mode: auto
-    autonomy: low_risk_only
-    can_dm:
-    - hugo
-    - ada
-    - wren
-    - kian
-    - nico
-    can_broadcast:
-    - all
-    - dev
-    interfaces:
-      telegram:
-        bot_token_env: TEAMCTL_TG_OTIS_TOKEN
-        chat_ids_env: TEAMCTL_TG_OTIS_CHATS
         speech_to_text:
           provider: groq
           api_key_env: GROQ_API_KEY
@@ -160,9 +96,6 @@ managers:
     can_dm:
     - hugo
     - ada
-    - wren
-    - otis
-    - nico
     can_broadcast:
     - all
     - dev
@@ -170,33 +103,6 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_KIAN_TOKEN
         chat_ids_env: TEAMCTL_TG_KIAN_CHATS
-        speech_to_text:
-          provider: groq
-          api_key_env: GROQ_API_KEY
-          model: whisper-large-v3
-  nico:
-    display_name: Nico (Engineer)
-    runtime: claude-code
-    model: claude-opus-4-7
-    role_prompt:
-    - roles/_base.md
-    - roles/_engineer.md
-    - roles/nico.md
-    permission_mode: auto
-    autonomy: low_risk_only
-    can_dm:
-    - hugo
-    - ada
-    - wren
-    - otis
-    - kian
-    can_broadcast:
-    - all
-    - dev
-    interfaces:
-      telegram:
-        bot_token_env: TEAMCTL_TG_NICO_TOKEN
-        chat_ids_env: TEAMCTL_TG_NICO_CHATS
         speech_to_text:
           provider: groq
           api_key_env: GROQ_API_KEY
@@ -219,28 +125,6 @@ managers:
       telegram:
         bot_token_env: TEAMCTL_TG_NEDA_TOKEN
         chat_ids_env: TEAMCTL_TG_NEDA_CHATS
-        speech_to_text:
-          provider: groq
-          api_key_env: GROQ_API_KEY
-          model: whisper-large-v3
-  vera:
-    display_name: Vera (DX Research)
-    runtime: claude-code
-    model: claude-opus-4-7
-    role_prompt:
-    - roles/_base.md
-    - roles/vera.md
-    permission_mode: auto
-    autonomy: low_risk_only
-    can_dm:
-    - sage
-    - neda
-    can_broadcast:
-    - all
-    interfaces:
-      telegram:
-        bot_token_env: TEAMCTL_TG_VERA_TOKEN
-        chat_ids_env: TEAMCTL_TG_VERA_CHATS
         speech_to_text:
           provider: groq
           api_key_env: GROQ_API_KEY
