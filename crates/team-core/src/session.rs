@@ -16,6 +16,11 @@
 //! agent name changes — that's the right semantics: a renamed agent
 //! is a new agent.
 
+use std::ffi::OsString;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
 use uuid::Uuid;
 
 /// Frozen UUIDv5 namespace for teamctl session-id derivation.
@@ -45,6 +50,62 @@ pub fn derive_session_id(project: &str, agent: &str) -> Uuid {
         &TEAMCTL_SESSION_NAMESPACE,
         session_name(project, agent).as_bytes(),
     )
+}
+
+/// `~/.claude`, derived from `$HOME` — the same base the agent wrapper
+/// probes (`$HOME/.claude/projects/*/<uuid>.jsonl`, agent-wrapper.sh:166).
+/// `None` when `$HOME` is unset, so callers can warn-and-skip rather than
+/// guess a path.
+pub fn claude_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude"))
+}
+
+/// T-352: move aside the on-disk Claude session JSONL for `(project, agent)`
+/// so the wrapper's resume-probe misses on the next spawn and Claude opens a
+/// brand-new conversation at the *same* deterministic UUID (re-running
+/// `BOOTSTRAP_PROMPT`). The `--fresh` escape hatch from always-on resume
+/// (T-118); durable on-disk files are never touched — only the session JSONL.
+///
+/// `claude_home` is `~/.claude` (injected so tests don't touch the real home).
+/// Globs `projects/*/<uuid>.jsonl` exactly like the wrapper, because Claude's
+/// cwd→project-dir slug is observed-not-documented; the UUIDv5 is globally
+/// unique so at most one file ever matches.
+///
+/// The move is a single `rename(2)` to `<uuid>.jsonl.bak` within the same
+/// directory — atomic, with no half-moved state. The prior conversation is
+/// preserved (not deleted) as a one-slot recovery; a subsequent `--fresh`
+/// replaces it. A crash after the rename but before respawn is fail-safe: the
+/// next boot finds no JSONL and comes up fresh anyway, which is exactly the
+/// requested intent. A non-`--fresh` boot never moves anything, so a session
+/// the operator wanted to keep can never be lost by this path.
+///
+/// Returns the `.bak` path on a successful move, or `None` when there was no
+/// session on disk (agent never ran, or already fresh).
+pub fn freshen_session(
+    claude_home: &Path,
+    project: &str,
+    agent: &str,
+) -> io::Result<Option<PathBuf>> {
+    let filename = format!("{}.jsonl", derive_session_id(project, agent));
+    let projects_dir = claude_home.join("projects");
+    let entries = match fs::read_dir(&projects_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    for entry in entries.flatten() {
+        let candidate = entry.path().join(&filename);
+        if candidate.is_file() {
+            // Append `.bak` to the full filename — `with_extension` would
+            // drop `.jsonl` and produce `<uuid>.bak`.
+            let mut bak: OsString = candidate.clone().into_os_string();
+            bak.push(".bak");
+            let bak = PathBuf::from(bak);
+            fs::rename(&candidate, &bak)?;
+            return Ok(Some(bak));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -109,5 +170,68 @@ mod tests {
         // collision (would be astronomical, but) is debuggable from
         // the human-readable name alone.
         assert_eq!(session_name("hello", "mgr"), "teamctl:hello:mgr");
+    }
+
+    // ── T-352: freshen_session ───────────────────────────────────────
+
+    /// Stage `<claude_home>/projects/<slug>/<uuid>.jsonl` for an agent and
+    /// return its path. Mirrors Claude's on-disk layout the wrapper probes.
+    fn stage_session(claude_home: &Path, slug: &str, project: &str, agent: &str) -> PathBuf {
+        let dir = claude_home.join("projects").join(slug);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jsonl = dir.join(format!("{}.jsonl", derive_session_id(project, agent)));
+        std::fs::write(&jsonl, "session-bytes").unwrap();
+        jsonl
+    }
+
+    #[test]
+    fn freshen_moves_existing_session_aside() {
+        let home = tempfile::tempdir().unwrap();
+        let jsonl = stage_session(home.path(), "-Users-x-proj", "hello", "mgr");
+
+        let bak = freshen_session(home.path(), "hello", "mgr").unwrap();
+
+        let bak = bak.expect("a staged session is reported moved");
+        assert!(!jsonl.exists(), "original JSONL is gone after freshen");
+        assert!(bak.exists(), "the .bak recovery copy exists");
+        assert_eq!(bak.extension().unwrap(), "bak");
+        // `.jsonl` is preserved before `.bak` (not clobbered by with_extension).
+        assert!(bak.to_string_lossy().ends_with(".jsonl.bak"));
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "session-bytes");
+    }
+
+    #[test]
+    fn freshen_is_noop_when_no_matching_session() {
+        let home = tempfile::tempdir().unwrap();
+        // A different agent's session is present; ours is not.
+        stage_session(home.path(), "-Users-x-proj", "hello", "other");
+
+        let bak = freshen_session(home.path(), "hello", "mgr").unwrap();
+        assert!(bak.is_none(), "no move when our UUID has no JSONL on disk");
+    }
+
+    #[test]
+    fn freshen_is_noop_when_projects_dir_absent() {
+        let home = tempfile::tempdir().unwrap();
+        // `~/.claude/projects` never created — agent never ran.
+        let bak = freshen_session(home.path(), "hello", "mgr").unwrap();
+        assert!(bak.is_none());
+    }
+
+    #[test]
+    fn freshen_only_touches_the_session_jsonl() {
+        // Durable on-disk state must survive --fresh. Stage a sibling file
+        // next to the session and assert freshen leaves it alone.
+        let home = tempfile::tempdir().unwrap();
+        let jsonl = stage_session(home.path(), "-Users-x-proj", "hello", "mgr");
+        let sibling = jsonl.with_file_name("task.md");
+        std::fs::write(&sibling, "durable").unwrap();
+
+        freshen_session(home.path(), "hello", "mgr")
+            .unwrap()
+            .unwrap();
+
+        assert!(!jsonl.exists());
+        assert_eq!(std::fs::read_to_string(&sibling).unwrap(), "durable");
     }
 }

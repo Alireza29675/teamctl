@@ -114,6 +114,13 @@ enum Command {
     Up {
         #[command(flatten)]
         scope: AgentScope,
+        /// Start agents in a brand-new Claude conversation (re-runs the
+        /// bootstrap prompt) instead of resuming the prior session.
+        /// Durable on-disk files (task.md, memory, ways-of-working) are
+        /// kept. Only affects agents this command actually starts;
+        /// already-running agents are untouched. Claude runtime only.
+        #[arg(long)]
+        fresh: bool,
     },
     /// Stop agents' tmux sessions. State is preserved.
     ///
@@ -139,6 +146,14 @@ enum Command {
         dry_run: bool,
         #[command(flatten)]
         scope: AgentScope,
+        /// Restart agents into a brand-new Claude conversation (re-runs
+        /// the bootstrap prompt) instead of resuming the prior session.
+        /// Durable on-disk files are kept. Applies to the agents this
+        /// reload restarts; to fresh-restart specific unchanged agents
+        /// use the scoped form `reload <project> <agent> --fresh`.
+        /// Composes with `--force`. Claude runtime only.
+        #[arg(long)]
+        fresh: bool,
     },
 
     // ── Inspection ───────────────────────────────────────────────────
@@ -440,17 +455,21 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Validate => cmd::validate::run(&root),
-        Command::Up { scope } => {
+        Command::Up { scope, fresh } => {
             let sel = cmd::agent_filter::AgentSelector::from_args(scope.agents, scope.except);
-            cmd::up::run(&root, scope.project.as_deref(), &sel)
+            cmd::up::run(&root, scope.project.as_deref(), &sel, fresh)
         }
         Command::Down { scope } => {
             let sel = cmd::agent_filter::AgentSelector::from_args(scope.agents, scope.except);
             cmd::down::run(&root, scope.project.as_deref(), &sel)
         }
-        Command::Reload { dry_run, scope } => {
+        Command::Reload {
+            dry_run,
+            scope,
+            fresh,
+        } => {
             let sel = cmd::agent_filter::AgentSelector::from_args(scope.agents, scope.except);
-            cmd::reload::run(&root, dry_run, scope.project.as_deref(), &sel)
+            cmd::reload::run(&root, dry_run, scope.project.as_deref(), &sel, fresh)
         }
         Command::Ps => cmd::status::run(&root),
         Command::Logs { target } => cmd::logs::run(&root, &target),

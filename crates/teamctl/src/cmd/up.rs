@@ -12,7 +12,7 @@ use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
 use super::agent_filter::AgentSelector;
 
-pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()> {
+pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool) -> Result<()> {
     let compose = super::load(root)?;
     super::update_check::maybe_print_banner(&compose.root);
     let errs = team_core::validate::validate(&compose);
@@ -68,12 +68,16 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
         // (sup.up() is a no-op for a running session) — this only adds
         // a clearer line, never an error.
         if targets.is_some() && matches!(sup.state(&spec)?, AgentState::Running) {
+            // `up` never restarts a running agent, so there's nothing to
+            // bring up fresh here — `reload --fresh` is the path to
+            // refresh an already-running agent's conversation.
             println!("up · {} (already running)", h.id());
             touched += 1;
             continue;
         }
+        freshen_for_spec(&spec, &h.spec.runtime, fresh);
         sup.up(&spec)?;
-        println!("up · {}", h.id());
+        println!("up · {}{}", h.id(), fresh_suffix(fresh));
         touched += 1;
     }
 
@@ -131,6 +135,45 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
     };
     super::snapshot::write(&compose.root, &snap)?;
     Ok(())
+}
+
+/// T-352: when `--fresh` is set, move the agent's Claude session JSONL
+/// aside just before it (re)spawns so the wrapper opens a brand-new
+/// conversation at the same deterministic UUID (re-running
+/// `BOOTSTRAP_PROMPT`). Durable on-disk files are never touched.
+///
+/// Claude runtime only: codex/gemini have different (or no) session
+/// resume, so we warn-and-skip rather than abort a mixed-runtime team
+/// (parity gap, v1). Best-effort — a move failure warns but never blocks
+/// the respawn (coming up on the existing conversation is strictly safer
+/// than refusing to start).
+pub(crate) fn freshen_for_spec(spec: &AgentSpec, runtime: &str, fresh: bool) {
+    if !fresh {
+        return;
+    }
+    let id = format!("{}:{}", spec.project, spec.agent);
+    if runtime != "claude-code" {
+        eprintln!("warn · {id} (--fresh skipped: {runtime} runtime has no session resume yet)");
+        return;
+    }
+    let Some(home) = team_core::session::claude_home() else {
+        eprintln!("warn · {id} (--fresh skipped: $HOME unset)");
+        return;
+    };
+    if let Err(e) = team_core::session::freshen_session(&home, &spec.project, &spec.agent) {
+        eprintln!("warn · {id} (--fresh: could not move session aside: {e})");
+    }
+}
+
+/// `" (fresh)"` when a `--fresh` restart is in effect, else empty. Kept a
+/// free function so `up` and `reload` annotate their per-line logs and
+/// dry-run output identically.
+pub(crate) fn fresh_suffix(fresh: bool) -> &'static str {
+    if fresh {
+        " (fresh)"
+    } else {
+        ""
+    }
 }
 
 /// Render env + MCP for the named project's agents only. Mirrors
