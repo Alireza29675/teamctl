@@ -21,7 +21,7 @@ channels:
 managers:
   builder:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/builder.md
     # `auto` lets the builder run tools without per-action HITL;
     # `low_risk_only` keeps destructive operations (rm, force, push)

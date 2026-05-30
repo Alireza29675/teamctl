@@ -16,7 +16,7 @@ channels:
 managers:
   hub:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/hub.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -58,7 +58,7 @@ workers:
   # digests. Doesn't make product decisions; surfaces signal.
   analytics:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/analytics.md
     permission_mode: auto
     reports_to: hub

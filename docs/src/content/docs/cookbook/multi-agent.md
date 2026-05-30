@@ -35,7 +35,7 @@ channels:
 managers:
   manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     can_dm: [dev1, dev2, critic]
     can_broadcast: [product, all]
 
@@ -54,7 +54,7 @@ workers:
     can_broadcast: [product, internal]
   critic:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     permission_mode: plan
     reports_to: manager
     can_dm: [manager, dev1, dev2]

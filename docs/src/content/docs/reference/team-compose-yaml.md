@@ -72,7 +72,7 @@ channels:
 managers:
   head_editor:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/head_editor.md
     permission_mode: auto
     autonomy: low_risk_only

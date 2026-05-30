@@ -44,7 +44,7 @@ channels:
 managers:
   manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     can_dm: [dev]
     can_broadcast: [all]
 workers:
@@ -119,7 +119,7 @@ channels:
 managers:
   pm:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt:
       - roles/_base.md
       - roles/pm.md
@@ -667,7 +667,7 @@ project:
 managers:
   manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     can_dm: [dev]
 workers:
   dev:
@@ -689,7 +689,7 @@ project:
 managers:
   manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     can_dm: [dev]
 workers:
   dev:
@@ -1461,7 +1461,7 @@ project:
 managers:
   manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
 workers:
   dev:
     runtime: claude-code

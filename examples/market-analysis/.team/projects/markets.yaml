@@ -19,7 +19,7 @@ channels:
 managers:
   chief:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/chief.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -43,7 +43,7 @@ workers:
 
   interpreter:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/interpreter.md
     permission_mode: auto
     reports_to: chief
@@ -52,7 +52,7 @@ workers:
 
   risk:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/risk.md
     permission_mode: plan  # read-only by design; risk dissents, never trades
     reports_to: chief

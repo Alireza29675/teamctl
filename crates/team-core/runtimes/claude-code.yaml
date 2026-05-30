@@ -11,7 +11,7 @@
 
 binary: claude
 supports_mcp: true
-default_model: claude-opus-4-7
+default_model: claude-opus-4-8
 env:
   # Claude Code honors this when the compose file sets a project cwd.
   CLAUDE_PROJECT_DIR_MODE: "compose"

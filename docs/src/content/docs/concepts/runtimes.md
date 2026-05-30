@@ -18,7 +18,7 @@ Adapters live under `runtimes/<name>.yaml`:
 # runtimes/claude-code.yaml
 binary: claude
 supports_mcp: true
-default_model: claude-opus-4-7
+default_model: claude-opus-4-8
 env:
   CLAUDE_PROJECT_DIR_MODE: compose
 ```

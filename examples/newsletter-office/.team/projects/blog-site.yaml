@@ -14,7 +14,7 @@ channels:
 managers:
   web_manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/web_manager.md
     permission_mode: auto
     autonomy: low_risk_only

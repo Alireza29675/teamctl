@@ -19,7 +19,7 @@ channels:
 managers:
   director:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/director.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -34,7 +34,7 @@ managers:
 workers:
   designer:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/designer.md
     reports_to: director
     can_dm: [director, writer]
@@ -50,7 +50,7 @@ workers:
 
   playtest_critic:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     permission_mode: plan          # read-only: dissents, never mutates
     role_prompt: roles/playtest_critic.md
     reports_to: director

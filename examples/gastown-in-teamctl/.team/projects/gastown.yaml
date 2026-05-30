@@ -35,7 +35,7 @@ channels:
 managers:
   mayor:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/mayor.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -51,7 +51,7 @@ managers:
 
   crew:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/crew.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -61,7 +61,7 @@ managers:
 
   witness:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/witness.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -71,7 +71,7 @@ managers:
 
   deacon:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/deacon.md
     permission_mode: auto
     autonomy: low_risk_only

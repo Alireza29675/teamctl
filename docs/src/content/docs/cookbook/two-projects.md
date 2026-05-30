@@ -61,7 +61,7 @@ channels:
 managers:
   manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     can_dm: [dev]
     can_broadcast: [all]
 
@@ -89,7 +89,7 @@ channels:
 managers:
   editor:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     can_dm: [writer]
     can_broadcast: [all]
 
