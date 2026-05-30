@@ -24,7 +24,7 @@ channels:
 managers:
   maintainer:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/maintainer.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -68,7 +68,7 @@ workers:
   # approval prompts via `request_approval(action="release")`.
   release_manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/release_manager.md
     permission_mode: plan
     effort: max

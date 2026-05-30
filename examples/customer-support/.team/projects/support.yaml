@@ -12,7 +12,7 @@ channels:
 managers:
   triage:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/triage.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -29,7 +29,7 @@ workers:
   # and the context triage hands over. HITL on send.
   drafter:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/drafter.md
     permission_mode: auto
     reports_to: triage

@@ -316,7 +316,7 @@ mod tests {
             "mgr".into(),
             Agent {
                 runtime: "claude-code".into(),
-                model: Some("claude-opus-4-7".into()),
+                model: Some("claude-opus-4-8".into()),
                 role_prompt: None,
                 permission_mode: None,
                 autonomy: "low_risk_only".into(),

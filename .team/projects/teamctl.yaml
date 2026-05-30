@@ -15,7 +15,7 @@ managers:
   sage:
     display_name: Sage (Visionary)
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt:
     - roles/_base.md
     - roles/sage.md
@@ -37,7 +37,7 @@ managers:
   hugo:
     display_name: Hugo (Project Manager)
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt:
     - roles/_base.md
     - roles/hugo.md
@@ -62,7 +62,7 @@ managers:
   ada:
     display_name: Ada (Engineer)
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt:
     - roles/_base.md
     - roles/_engineer.md
@@ -86,7 +86,7 @@ managers:
   kian:
     display_name: Kian (Engineer)
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt:
     - roles/_base.md
     - roles/_engineer.md
@@ -110,7 +110,7 @@ managers:
   neda:
     display_name: Neda (Comms)
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt:
     - roles/_base.md
     - roles/neda.md

@@ -32,7 +32,7 @@ channels:
 managers:
   manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     can_dm: [backend, researcher]
     can_broadcast: [all]
 

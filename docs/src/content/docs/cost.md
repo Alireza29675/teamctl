@@ -74,7 +74,7 @@ Rate-limit detection is per-runtime and **today** matches Claude Code's, Codex's
 
 Practical things you can do today to stay in control:
 
-- **Use cheaper models for workers, premium models for managers.** `model: claude-opus-4-7` on a manager + `model: claude-sonnet-4-6` on workers is a common pattern. Set per-agent in `team-compose.yaml`.
+- **Use cheaper models for workers, premium models for managers.** `model: claude-opus-4-8` on a manager + `model: claude-sonnet-4-6` on workers is a common pattern. Set per-agent in `team-compose.yaml`.
 - **Set a `daily_usd_limit` in your compose file.** Today this is documentary: the limit shows up in `teamctl budget` next to the (currently always-zero) USD column and anchors operator expectations. Real enforcement lands when cost parsers do.
 - **Set `message_ttl_hours`.** Old messages get garbage-collected by `teamctl gc`. Smaller mailbox → smaller per-call context → fewer tokens per turn.
 - **Cap the team size.** Three or four agents is plenty for most workflows. If you find yourself wanting eight, ask whether two of them are doing the same job.
@@ -97,7 +97,7 @@ budget:
 managers:
   lead:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
 
 workers:
   alpha: { runtime: claude-code, model: claude-sonnet-4-6, reports_to: lead }

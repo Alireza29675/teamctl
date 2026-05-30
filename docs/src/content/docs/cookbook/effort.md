@@ -16,7 +16,7 @@ entry lets you tune that knob per role.
 managers:
   release_manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/release_manager.md
     permission_mode: plan
     effort: max          # ← per-agent reasoning effort

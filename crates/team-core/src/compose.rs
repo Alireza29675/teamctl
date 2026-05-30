@@ -814,7 +814,7 @@ mod tests {
 
     #[test]
     fn agent_defaults_are_stable() {
-        let a: Agent = serde_yaml::from_str("model: claude-opus-4-7\n").unwrap();
+        let a: Agent = serde_yaml::from_str("model: claude-opus-4-8\n").unwrap();
         assert_eq!(a.runtime, "claude-code");
         assert_eq!(a.autonomy, "low_risk_only");
         assert!(a.interfaces.is_none());

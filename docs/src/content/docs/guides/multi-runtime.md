@@ -12,7 +12,7 @@ Each runtime lives in `runtimes/<name>.yaml`:
 # runtimes/claude-code.yaml
 binary: claude
 supports_mcp: true
-default_model: claude-opus-4-7
+default_model: claude-opus-4-8
 ```
 
 Reference one from an agent spec:

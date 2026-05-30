@@ -68,7 +68,7 @@ channels:
 managers:
   manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/manager.md
     interfaces:
       telegram:

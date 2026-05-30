@@ -95,7 +95,7 @@ options:
 #### Verb 1a — Add a manager
 
 Touches:
-- A new entry under `managers:` in the project YAML — `runtime: claude-code`, `model: claude-opus-4-7`, `role_prompt: roles/<name>.md`, `permission_mode: auto`, `autonomy: low_risk_only`, `can_dm: []`, `can_broadcast: [all]`.
+- A new entry under `managers:` in the project YAML — `runtime: claude-code`, `model: claude-opus-4-8`, `role_prompt: roles/<name>.md`, `permission_mode: auto`, `autonomy: low_risk_only`, `can_dm: []`, `can_broadcast: [all]`.
 - A new `roles/<name>.md` written per the [8-section spine](../role-prompt-style.md).
 - If the user mentions telegram (*"with telegram"*, *"for me to reach"*), inline an `interfaces.telegram` block with `bot_token_env: TEAMCTL_TG_<NAME>_TOKEN` / `chat_ids_env: TEAMCTL_TG_<NAME>_CHATS` (canonical pattern), and tell the user to run `teamctl bot setup` afterwards to register the actual bot.
 - If a named channel should include the new manager (the user might say so, or it's obvious from context — e.g. an `all` channel), update its `members:` list. If unclear, ask.
@@ -197,7 +197,7 @@ If the user names multiple dimensions in one breath, walk them in order, one gat
 
 Propose voice example (model swap, single dimension):
 
-> Swapping `maintainer` from `claude-sonnet-4-6` to `claude-opus-4-7`. Per [runtimes.md](../../../docs/src/content/docs/concepts/runtimes.md), Opus is the default for managers — stronger on planning + tool use. Cost goes up; that's the trade.
+> Swapping `maintainer` from `claude-sonnet-4-6` to `claude-opus-4-8`. Per [runtimes.md](../../../docs/src/content/docs/concepts/runtimes.md), Opus is the default for managers — stronger on planning + tool use. Cost goes up; that's the trade.
 
 ### Verb 6 — Open a bridge between two projects
 

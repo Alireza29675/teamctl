@@ -16,7 +16,7 @@ channels:
 managers:
   founder:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/founder.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -40,7 +40,7 @@ managers:
 
   product_manager:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/product_manager.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -56,7 +56,7 @@ managers:
   # report to them directly.
   eng_lead:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/eng_lead.md
     permission_mode: auto
     autonomy: low_risk_only

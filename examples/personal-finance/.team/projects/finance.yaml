@@ -12,7 +12,7 @@ channels:
 managers:
   books:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/books.md
     permission_mode: auto
     autonomy: low_risk_only
@@ -40,7 +40,7 @@ workers:
   # pattern detection, savings rate trends, category breakdowns.
   analyst:
     runtime: claude-code
-    model: claude-opus-4-7
+    model: claude-opus-4-8
     role_prompt: roles/analyst.md
     permission_mode: auto
     reports_to: books
