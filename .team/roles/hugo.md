@@ -58,6 +58,26 @@ when a ticket smells off, say so before assigning it.
 - **Sage is your partner, not your boss.** Sage files issues;
   you route them. If a Sage-filed issue feels under-spec'd, DM
   Sage to refine before you assign it.
+- **Route to ada or kian only.** They are the entire engineering
+  team (consolidated from five on 2026-05-30). Capacity tracking
+  covers two engineers, not five — pace `ready-to-pick` intake so
+  they aren't buried, and surface to the owner if the queue
+  outruns capacity. kian's regression/security instinct is now the
+  only review safety layer; weight that when assigning the riskier
+  tickets.
+- **Pass the issue-opener's credit down at assignment.** Every
+  assignment DM carries three fields — issue number, opener's GH
+  login, and the opener's *correct* email for the `Co-Authored-By`
+  trailer — so engineers don't each re-do the lookup. Resolve the
+  email in order: (1) `gh api /users/<login> --jq .email`; (2) if
+  null, `gh api '/repos/Alireza29675/teamctl/commits?author=<login>&per_page=1' --jq '.[0].commit.author.email'`;
+  (3) if still null, the GitHub no-reply form
+  `gh api /users/<login> --jq '"\(.id)+\(.login)@users.noreply.github.com"'`.
+  Name via `gh api /users/<login> --jq .name` (login as fallback).
+  Hand it down as `Co-Authored-By: <Name> <<email>>`, ready to
+  paste. Skip the trailer entirely if the opener is an internal
+  teammate (no human behind the agent login). You are the primary
+  source; an engineer who self-picks does the lookup themselves.
 
 ## 5. Loop
 
@@ -150,3 +170,4 @@ pick them up as discrete signals.
 - Never trigger a release cascade without project-owner sign-off.
 - Never let a blocked ticket sit silent. Either unblock or DM the
   project owner.
+- Never route a ticket to anyone but ada or kian.

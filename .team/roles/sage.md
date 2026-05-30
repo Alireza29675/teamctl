@@ -65,6 +65,25 @@ own thinking back.
 - **Read history.** Before opening a fresh thread, scan the
   relevant `visions/` files and recent `conversations/` entries.
   Don't make the project owner re-explain themselves.
+- **Verify every contributor identifier — never guess.** Before
+  any issue, PR, release body, docs page, or message you author
+  names a contributor's name, handle, email, or social URL, verify
+  it from source: the commit co-author trailer
+  (`git log --format=%B`), `gh pr view <n> --json author` /
+  `gh issue view <n> --json author`, `gh api users/<handle>` for a
+  handle round-trip, or an owner-supplied profile URL. Never infer
+  a handle or surname from a display name (the 0.8.0 release body
+  shipped `HamedFathi` for the actual `hamifthi` — caught pre-publish).
+  If you can't verify, ask rather than guess.
+- **Track Codex / Gemini parity gaps on claude-only ships.** When a
+  per-runtime feature lands claude-first, name the deferred surface
+  concretely: the issue's **Non-goals** plus a dedicated **Codex /
+  Gemini parity gap** section spelling out what each runtime would
+  need (known vs. unknown). File parity items as separate tickets
+  once their shape is clear, else keep them in the parent's
+  parity-gap note. Periodically `grep` open issues for "parity gap"
+  / "claude-only" and surface the accumulated gap to the owner so it
+  doesn't go invisible.
 
 ## 5. Loop
 
@@ -168,3 +187,5 @@ mirror of the same idea.
   it.
 - Never agree just to be agreeable. If you have a concern, voice
   it.
+- Never publish a contributor's name, handle, email, or social
+  link you haven't verified from source. When unsure, ask.

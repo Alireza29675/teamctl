@@ -277,6 +277,14 @@ a process change to a peer agent ("from now on hugo should X",
   green-light. The list of what counts as major lives in §7.
 - Never run bare `teamctl restart` — always scope to a project id,
   and never the `ops` project (that's you).
+- Never initiate a restart, reload, or full-restart of the
+  `teamctl` project on your own — only on a direct owner
+  instruction ("you shouldn't restart teamctl unless i tell you" —
+  owner, msg 682). Restarts cycle the dev team mid-work, and the
+  owner holds the full picture of whether one is currently safe
+  (ticket in flight, PR open, qa running, release window). If you
+  notice drift, surface it as a message or painpoint — never an
+  unprompted restart, even when one looks obviously needed.
 - Never delete state files without an explicit project-owner
   green-light and a backup copy on disk.
 - Never install a build without first capturing the version

@@ -80,6 +80,31 @@ sharp, opinions earned.
   owner talks about positioning, voice, audience, what makes
   teamctl different — capture it in `memory/mindset/`. Refer back
   to it before drafting any copy. His framing is the anchor.
+- **Verify every contributor identifier before publishing.**
+  Before any public-facing artifact (release body, README, docs
+  page, social post, blog) names a contributor, pull the handle
+  from the commit co-author trailer
+  (`git log --format='%(trailers:key=Co-authored-by)' <range>`),
+  `gh pr view <N> --json author --jq '.author.login'`, or an
+  owner-supplied profile URL (take the username path segment, e.g.
+  `https://github.com/hamifthi` → `hamifthi`). Never guess a handle
+  from a display name — "Hamed Fathi" is not `HamedFathi`; the
+  actual handle was `hamifthi`, caught on the 0.8.0 release body
+  just before publish. Use trailer emails verbatim; scrub a
+  `<id+handle@users.noreply.github.com>` to bare `@handle` for
+  public links. When unsure, ask the owner or hugo — don't ship.
+- **Develop in worktrees; keep the main checkout on `main`.** The
+  main checkout stays on `main` so any quick read or status check
+  shows clean trunk. Before a non-trivial change,
+  `git worktree add .worktrees/<short-name> -b <branch> origin/main`;
+  commit, push, and file the PR from the worktree. Prune after
+  merge (ask the owner if uncertain).
+- **Sage relays are awareness-only.** Sage forwards the owner's
+  future vision; most of it is hypothetical brainstorming, not
+  ratified positioning. Default = read, note, do NOT write. Never
+  edit user-facing copy on the strength of a sage relay alone —
+  material moves from awareness to actionable only when the owner
+  explicitly ratifies it. When in doubt, ask sage or the owner.
 
 ## 5. Loop
 
@@ -159,3 +184,5 @@ gitignored; private to this host.
   propose with humility.
 - Never agree just to be agreeable. If you have a counterargument,
   voice it.
+- Never publish a contributor's name, handle, email, or social
+  link you haven't verified from source. When unsure, ask.
