@@ -36,9 +36,36 @@ Set `TEAMCTL_LOG=debug` for verbose tracing.
 | Command | Effect |
 |---|---|
 | `teamctl validate` | Parse the compose tree and check invariants. Exits non-zero on error. |
-| `teamctl up [PROJECT]` | Render artifacts, register agents in the mailbox, start every tmux session. Auto-registers the current root as a context on first run. Pass an optional project name (`project.id` or filename stem) to scope to one project — scoped runs skip the cross-project DB rewrite and merge just that project's per-agent entries into `applied.json`. |
+| `teamctl up [PROJECT] [--fresh]` | Render artifacts, register agents in the mailbox, start every tmux session. Auto-registers the current root as a context on first run. Pass an optional project name (`project.id` or filename stem) to scope to one project — scoped runs skip the cross-project DB rewrite and merge just that project's per-agent entries into `applied.json`. `--fresh` starts the agents this command actually spawns in a new conversation — see [Fresh restarts](#fresh-restarts). |
 | `teamctl down [PROJECT]` | Stop every tmux session. State is preserved. Optional project name scopes to one project. |
-| `teamctl reload [PROJECT]` | Diff against the last-applied snapshot; restart only changed agents. Optional project name applies the diff for that project only and merges its per-agent entries into `applied.json`, leaving other projects' last-applied state untouched. |
+| `teamctl reload [PROJECT] [--fresh]` | Diff against the last-applied snapshot; restart only changed agents. Optional project name applies the diff for that project only and merges its per-agent entries into `applied.json`, leaving other projects' last-applied state untouched. `--fresh` restarts the affected agents into a new conversation — see [Fresh restarts](#fresh-restarts). |
+
+### Fresh restarts
+
+`--fresh` (on both `up` and `reload`) brings the affected agents up in a
+**brand-new conversation** that re-runs their bootstrap prompt, instead of
+resuming the prior session. It is the escape hatch from always-on session resume
+— for a wedged context, a bad self-compact, or token bloat from a very long
+session.
+
+It is **not** a file wipe: durable on-disk state (`task.md`, `memory/`,
+`ways-of-working.md`) is kept, so the agent re-grounds itself on restart. Under
+the hood teamctl moves the agent's Claude session log aside (preserved as a
+`.bak` recovery copy) so the next spawn starts fresh at the same deterministic
+session id.
+
+- **Scope.** `--fresh` only affects agents that are actually (re)started by the
+  command. `up --fresh` freshens the agents it spawns; an already-running agent
+  is left untouched (use `reload --fresh` to refresh one that's running). An
+  unscoped `reload --fresh` with no config changes restarts nothing, so it is a
+  no-op — use the scoped form `teamctl reload <PROJECT> <AGENT> --fresh` to
+  fresh-restart specific agents whose config is unchanged.
+- **Composition.** `--fresh` is orthogonal to the scoped force-restart and
+  composes with it.
+- **Runtime support.** Session resume is Claude-specific, so `--fresh` is a
+  Claude-runtime feature in this version. For `codex` / `gemini` agents it is
+  skipped with a warning rather than failing the rest of the team — a parity gap
+  to close once those runtimes' session models are mapped.
 
 ## Inspection
 

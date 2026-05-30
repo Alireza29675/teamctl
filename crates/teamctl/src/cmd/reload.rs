@@ -328,7 +328,10 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
     }
 
     // Kept agents that somehow stopped (e.g. tmux session crashed)
-    // get restarted in place. Same behaviour as v1 reload.
+    // get restarted in place. Same behaviour as v1 reload. `--fresh`
+    // applies here too — a stopped agent we restart is genuinely
+    // (re)spawned, so freshening it is consistent with every other
+    // restart path.
     for id in &plan.keep {
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
