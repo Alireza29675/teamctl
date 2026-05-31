@@ -12,7 +12,7 @@ use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
 use super::agent_filter::AgentSelector;
 
-pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()> {
+pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool) -> Result<()> {
     let compose = super::load(root)?;
     super::update_check::maybe_print_banner(&compose.root);
     let errs = team_core::validate::validate(&compose);
@@ -62,18 +62,29 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
             continue;
         }
         let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+        let running = matches!(sup.state(&spec)?, AgentState::Running);
         // In a per-agent scope the operator named this agent on the
         // command line, so an already-running session is worth calling
         // out explicitly rather than silently. `up` stays idempotent
         // (sup.up() is a no-op for a running session) — this only adds
         // a clearer line, never an error.
-        if targets.is_some() && matches!(sup.state(&spec)?, AgentState::Running) {
+        if targets.is_some() && running {
             println!("up · {} (already running)", h.id());
             touched += 1;
             continue;
         }
+        // Only `--fresh` an agent we're actually about to spawn. `up`
+        // never restarts a running agent (sup.up() is a no-op), so
+        // freshening a running one would move its live session aside with
+        // no respawn to replace it — a latent desync where the agent
+        // silently comes up fresh on its NEXT natural restart. Skip
+        // running agents here; `reload --fresh` is the path to refresh a
+        // running agent's conversation.
+        if !running {
+            freshen_for_spec(&spec, &h.spec.runtime, fresh);
+        }
         sup.up(&spec)?;
-        println!("up · {}", h.id());
+        println!("up · {}{}", h.id(), fresh_suffix(fresh && !running));
         touched += 1;
     }
 
@@ -131,6 +142,76 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
     };
     super::snapshot::write(&compose.root, &snap)?;
     Ok(())
+}
+
+/// What a `--fresh` request resolves to for one agent, before any I/O.
+/// Split out from [`freshen_for_spec`] so the runtime-gate decision —
+/// the codex/gemini parity carve-out — is unit-testable without touching
+/// the filesystem or `$HOME`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FreshenAction {
+    /// `--fresh` not set: do nothing.
+    Skip,
+    /// `--fresh` on a non-Claude runtime: warn and skip (parity gap).
+    UnsupportedRuntime,
+    /// `--fresh` on a Claude agent: move its session aside.
+    Freshen,
+}
+
+/// Resolve `(runtime, fresh)` to a [`FreshenAction`]. Pure — no I/O.
+pub(crate) fn freshen_action(runtime: &str, fresh: bool) -> FreshenAction {
+    if !fresh {
+        FreshenAction::Skip
+    } else if runtime == "claude-code" {
+        FreshenAction::Freshen
+    } else {
+        FreshenAction::UnsupportedRuntime
+    }
+}
+
+/// T-352: when `--fresh` is set, move the agent's Claude session JSONL
+/// aside just before it (re)spawns so the wrapper opens a brand-new
+/// conversation at the same deterministic UUID (re-running
+/// `BOOTSTRAP_PROMPT`). Durable on-disk files are never touched.
+///
+/// Claude runtime only: codex/gemini have different (or no) session
+/// resume, so we warn-and-skip rather than abort a mixed-runtime team
+/// (parity gap, v1). Best-effort — a move failure warns but never blocks
+/// the respawn (coming up on the existing conversation is strictly safer
+/// than refusing to start).
+///
+/// Call only for an agent that is actually being (re)spawned: freshening
+/// an agent that won't respawn would move its live session aside with no
+/// new conversation to replace it (a latent desync), so the callers gate
+/// on "about to start this agent" before calling here.
+pub(crate) fn freshen_for_spec(spec: &AgentSpec, runtime: &str, fresh: bool) {
+    let id = format!("{}:{}", spec.project, spec.agent);
+    match freshen_action(runtime, fresh) {
+        FreshenAction::Skip => {}
+        FreshenAction::UnsupportedRuntime => {
+            eprintln!("warn · {id} (--fresh skipped: {runtime} runtime has no session resume yet)");
+        }
+        FreshenAction::Freshen => {
+            let Some(home) = team_core::session::claude_home() else {
+                eprintln!("warn · {id} (--fresh skipped: $HOME unset)");
+                return;
+            };
+            if let Err(e) = team_core::session::freshen_session(&home, &spec.project, &spec.agent) {
+                eprintln!("warn · {id} (--fresh: could not move session aside: {e})");
+            }
+        }
+    }
+}
+
+/// `" (fresh)"` when a `--fresh` restart is in effect, else empty. Kept a
+/// free function so `up` and `reload` annotate their per-line logs and
+/// dry-run output identically.
+pub(crate) fn fresh_suffix(fresh: bool) -> &'static str {
+    if fresh {
+        " (fresh)"
+    } else {
+        ""
+    }
 }
 
 /// Render env + MCP for the named project's agents only. Mirrors
@@ -457,6 +538,24 @@ mod tests {
     /// fixed set of dialog-header substrings. A silent edit that drops
     /// one of them would re-strand agents at boot or mid-shift, so
     /// pin them here.
+    #[test]
+    fn freshen_action_gates_on_fresh_and_runtime() {
+        // Watch-out (c): the codex/gemini parity carve-out. Not fresh →
+        // nothing, regardless of runtime. Fresh → freshen only Claude;
+        // every other runtime is a warn-and-skip, never an abort.
+        assert_eq!(freshen_action("claude-code", false), FreshenAction::Skip);
+        assert_eq!(freshen_action("codex", false), FreshenAction::Skip);
+        assert_eq!(freshen_action("claude-code", true), FreshenAction::Freshen);
+        assert_eq!(
+            freshen_action("codex", true),
+            FreshenAction::UnsupportedRuntime
+        );
+        assert_eq!(
+            freshen_action("gemini", true),
+            FreshenAction::UnsupportedRuntime
+        );
+    }
+
     #[test]
     fn wrapper_auto_confirm_patterns_present() {
         for marker in [

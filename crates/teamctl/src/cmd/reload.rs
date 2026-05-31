@@ -43,7 +43,13 @@ use team_core::supervisor::{AgentSpec, AgentState, DrainOutcome, Supervisor, Tmu
 use super::agent_filter::AgentSelector;
 use super::snapshot::{self, AgentEntry, ReloadPlan, RemovedAgent};
 
-pub fn run(root: &Path, dry_run: bool, project: Option<&str>, sel: &AgentSelector) -> Result<()> {
+pub fn run(
+    root: &Path,
+    dry_run: bool,
+    project: Option<&str>,
+    sel: &AgentSelector,
+    fresh: bool,
+) -> Result<()> {
     let compose = super::load(root)?;
     let errs = team_core::validate::validate(&compose);
     if !errs.is_empty() {
@@ -66,7 +72,7 @@ pub fn run(root: &Path, dry_run: bool, project: Option<&str>, sel: &AgentSelecto
         if let Some(id) = scoped.as_deref() {
             let targets = super::agent_filter::resolve(&compose, id, sel)?
                 .expect("scoped selector resolves to a concrete agent set");
-            return force_restart_scoped(&compose, id, &targets, dry_run);
+            return force_restart_scoped(&compose, id, &targets, dry_run, fresh);
         }
     }
 
@@ -98,7 +104,7 @@ pub fn run(root: &Path, dry_run: bool, project: Option<&str>, sel: &AgentSelecto
     }
 
     if dry_run {
-        print_plan(&plan, true);
+        print_plan(&plan, true, fresh);
         return Ok(());
     }
 
@@ -116,7 +122,7 @@ pub fn run(root: &Path, dry_run: bool, project: Option<&str>, sel: &AgentSelecto
         super::up::register_all_public(&compose)?;
     }
 
-    apply_plan(&compose, &plan)?;
+    apply_plan(&compose, &plan, fresh)?;
     // Persist the snapshot. Scoped runs merge the named project's
     // per-agent entries into the existing applied.json (T-133) —
     // preserves diff correctness for the next unscoped reload without
@@ -143,6 +149,7 @@ fn force_restart_scoped(
     project_id: &str,
     targets: &BTreeSet<String>,
     dry_run: bool,
+    fresh: bool,
 ) -> Result<()> {
     // Stable manager-then-worker order, matching `compose.agents()`
     // ordering used everywhere else in the CLI.
@@ -161,7 +168,10 @@ fn force_restart_scoped(
 
     if dry_run {
         for id in &ids {
-            println!("reloaded · {id} (forced) (dry run)");
+            println!(
+                "reloaded · {id} (forced){} (dry run)",
+                super::up::fresh_suffix(fresh)
+            );
         }
         return Ok(());
     }
@@ -196,9 +206,14 @@ fn force_restart_scoped(
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+            super::up::freshen_for_spec(&spec, &h.spec.runtime, fresh);
             sup.up(&spec)?;
         }
-        println!("reloaded · {id} (forced){}", drain_suffix(outcome));
+        println!(
+            "reloaded · {id} (forced){}{}",
+            super::up::fresh_suffix(fresh),
+            drain_suffix(outcome)
+        );
     }
 
     // Persist the snapshot so the next *unscoped* reload diffs
@@ -247,20 +262,25 @@ fn filter_plan_to_project(plan: ReloadPlan, project_id: &str) -> ReloadPlan {
 /// Write the plan to stdout in the same per-line format the apply
 /// path produces, with a `(dry run)` annotation. Used by `--dry-run`
 /// so the operator sees exactly the lines a real reload would print.
-fn print_plan(plan: &ReloadPlan, dry: bool) {
-    let suffix = if dry { " (dry run)" } else { "" };
+fn print_plan(plan: &ReloadPlan, dry: bool, fresh: bool) {
+    let dry_suffix = if dry { " (dry run)" } else { "" };
+    let fresh_suffix = super::up::fresh_suffix(fresh);
+    // Removals are torn down, never brought up — `(fresh)` doesn't apply.
     for r in &plan.remove {
-        println!("removed · {}{suffix}", r.id);
+        println!("removed · {}{dry_suffix}", r.id);
     }
     for (id, inputs) in &plan.change {
-        println!("changed · {id} ({}){suffix}", inputs.label());
+        println!(
+            "changed · {id} ({}){fresh_suffix}{dry_suffix}",
+            inputs.label()
+        );
     }
     for id in &plan.add {
-        println!("added   · {id}{suffix}");
+        println!("added   · {id}{fresh_suffix}{dry_suffix}");
     }
 }
 
-fn apply_plan(compose: &Compose, plan: &ReloadPlan) -> Result<()> {
+fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
     let sup = TmuxSupervisor;
     let drain_timeout = Duration::from_secs(compose.global.supervisor.drain_timeout_secs);
 
@@ -285,11 +305,13 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan) -> Result<()> {
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+            super::up::freshen_for_spec(&spec, &h.spec.runtime, fresh);
             sup.up(&spec)?;
         }
         println!(
-            "changed · {id} ({}){}",
+            "changed · {id} ({}){}{}",
             inputs.label(),
+            super::up::fresh_suffix(fresh),
             drain_suffix(outcome)
         );
     }
@@ -299,20 +321,25 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan) -> Result<()> {
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+            super::up::freshen_for_spec(&spec, &h.spec.runtime, fresh);
             sup.up(&spec)?;
-            println!("added   · {id}");
+            println!("added   · {id}{}", super::up::fresh_suffix(fresh));
         }
     }
 
     // Kept agents that somehow stopped (e.g. tmux session crashed)
-    // get restarted in place. Same behaviour as v1 reload.
+    // get restarted in place. Same behaviour as v1 reload. `--fresh`
+    // applies here too — a stopped agent we restart is genuinely
+    // (re)spawned, so freshening it is consistent with every other
+    // restart path.
     for id in &plan.keep {
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
             if sup.state(&spec)? == AgentState::Stopped {
+                super::up::freshen_for_spec(&spec, &h.spec.runtime, fresh);
                 sup.up(&spec)?;
-                println!("started · {id}");
+                println!("started · {id}{}", super::up::fresh_suffix(fresh));
             }
         }
     }
@@ -369,6 +396,15 @@ mod tests {
     #[test]
     fn drain_suffix_annotates_timeout() {
         assert!(drain_suffix(DrainOutcome::TimedOutKilled).contains("drain timed out"));
+    }
+
+    #[test]
+    fn fresh_suffix_annotates_only_when_fresh() {
+        // The `(fresh)` annotation must compose after `(forced)` and
+        // before the drain suffix in the reload log lines, and vanish
+        // entirely on a non-fresh reload.
+        assert_eq!(super::super::up::fresh_suffix(true), " (fresh)");
+        assert_eq!(super::super::up::fresh_suffix(false), "");
     }
 
     fn entry(env: &str) -> AgentEntry {

@@ -4,6 +4,17 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+- `teamctl reload --fresh` and `teamctl up --fresh` restart agents into a
+  brand-new Claude conversation (re-running the bootstrap prompt) instead of
+  resuming the prior session, while keeping durable on-disk files (`task.md`,
+  memory, ways-of-working). The escape hatch from always-on session resume — for
+  a wedged context, a bad self-compact, or token bloat. `--fresh` only affects
+  agents the command actually (re)starts, and composes with the scoped
+  force-restart. Claude runtime only; `codex`/`gemini` agents are skipped with a
+  warning (parity gap). (#352)
+
 ## [0.8.6] — 2026-05-17
 
 ### Changed
