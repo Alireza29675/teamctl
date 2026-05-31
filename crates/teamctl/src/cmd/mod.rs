@@ -5,6 +5,7 @@ pub mod attach;
 pub mod bot;
 pub mod bridge;
 pub mod budget;
+pub mod caffeinate;
 pub mod context;
 pub mod down;
 pub mod env;
