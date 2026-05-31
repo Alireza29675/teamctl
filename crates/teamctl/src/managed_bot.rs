@@ -17,13 +17,14 @@
 //! consts (not config-tunable for v1 — YAGNI, per PR-1). The manager token is
 //! carried in the URL path and is **never logged**.
 //!
-//! v1 surface (verified vs core.telegram.org/bots/api):
-//! - `getManagedBotToken` — Bot API 9.6.
+//! v1 surface (Telegram Bot API 9.6):
+//! - `getManagedBotToken` — fetch a child's token by its `user_id`; the token
+//!   comes back as a bare string.
 //! - The `managed_bot` (`ManagedBotUpdated`) update + the `t.me/newbot` creation
 //!   link — the spawn flow.
 //!
-//! Out of scope for v1: `replaceManagedBotToken` (token rotation) and the Bot
-//! API 10.0 access-settings methods (`get`/`setManagedBotAccessSettings`) — the
+//! Out of scope for v1 (also 9.6): `replaceManagedBotToken` (token rotation) and
+//! the access-settings methods (`get`/`setManagedBotAccessSettings`) — the
 //! wizard only needs token-fetch.
 
 // Landed ahead of its consumer: the #344 `teamctl bot setup` wizard wires this
@@ -148,19 +149,17 @@ impl ManagedBotClient {
             .ok_or_else(|| anyhow!("{method}: ok response carried no result"))
     }
 
-    /// `getManagedBotToken` — fetch a spawned child bot's token by id.
-    pub async fn get_managed_bot_token(&self, managed_bot_id: i64) -> Result<String> {
-        #[derive(Deserialize)]
-        struct TokenResult {
-            token: String,
-        }
-        let r: TokenResult = self
-            .call(
-                "getManagedBotToken",
-                &serde_json::json!({ "managed_bot_id": managed_bot_id }),
-            )
-            .await?;
-        Ok(r.token)
+    /// `getManagedBotToken` — fetch a spawned child bot's token.
+    ///
+    /// `user_id` is the managed bot's user id (Telegram bots are users) — i.e.
+    /// `ManagedBotUpdated.bot.id`. The API returns the token as a bare string
+    /// (`{"ok":true,"result":"123:ABC"}`).
+    pub async fn get_managed_bot_token(&self, user_id: i64) -> Result<String> {
+        self.call(
+            "getManagedBotToken",
+            &serde_json::json!({ "user_id": user_id }),
+        )
+        .await
     }
 
     /// Long-poll the manager bot's update stream until a `managed_bot` update
@@ -229,7 +228,7 @@ pub fn token_from_env(var: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const TEST_TOKEN: &str = "TEST:TOKEN";
@@ -245,9 +244,17 @@ mod tests {
         }
     }
 
-    async fn mock_ok(server: &MockServer, method_name: &str, result: serde_json::Value) {
+    /// Mock a successful call, asserting BOTH the request body (catches
+    /// param-name/shape regressions) and returning `result` verbatim.
+    async fn mock_ok(
+        server: &MockServer,
+        method_name: &str,
+        expect_body: serde_json::Value,
+        result: serde_json::Value,
+    ) {
         Mock::given(method("POST"))
             .and(path(format!("/bot{TEST_TOKEN}/{method_name}")))
+            .and(body_json(expect_body))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(serde_json::json!({ "ok": true, "result": result })),
@@ -271,10 +278,12 @@ mod tests {
     #[tokio::test]
     async fn get_managed_bot_token_success() {
         let server = MockServer::start().await;
+        // Real wire shape: request `{ user_id }`, response a BARE string.
         mock_ok(
             &server,
             "getManagedBotToken",
-            serde_json::json!({ "token": "123456:CHILD-TOKEN" }),
+            serde_json::json!({ "user_id": 42 }),
+            serde_json::json!("123456:CHILD-TOKEN"),
         )
         .await;
         let token = client(server.uri())
@@ -304,6 +313,11 @@ mod tests {
         mock_ok(
             &server,
             "getUpdates",
+            serde_json::json!({
+                "offset": 0,
+                "timeout": 25,
+                "allowed_updates": ["managed_bot"]
+            }),
             serde_json::json!([{
                 "update_id": 7,
                 "managed_bot": {
