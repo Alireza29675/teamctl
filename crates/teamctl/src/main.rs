@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
 mod cmd;
+mod managed_bot;
 
 /// Shared project + per-agent scope for `up` / `down` / `reload`
 /// (T-305). Flattened into each so `--help` documents the same four
