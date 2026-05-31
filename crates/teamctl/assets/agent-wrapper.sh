@@ -80,8 +80,8 @@ log() {
 #     while team-mcp is off Anthropic's allowlist (Channels research
 #     preview).
 #   - "Bypass Permissions mode"        — fires on first launch under
-#     --dangerously-skip-permissions when the acceptance marker isn't
-#     on disk (fresh $HOME, fresh user, new VM).
+#     `permission_mode: bypassPermissions` (the opt-in escape hatch)
+#     when the acceptance marker isn't on disk (fresh $HOME, new VM).
 #   - "Stop and wait for limit to reset" — fires when claude hits a
 #     usage-limit cap and asks the operator whether to wait, switch
 #     to extra usage, or upgrade. Default-highlighted option is

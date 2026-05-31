@@ -571,6 +571,29 @@ mod tests {
         }
     }
 
+    /// T-361: headless claude-code agents default to `--permission-mode
+    /// auto` and no longer pass `--dangerously-skip-permissions`. The
+    /// attended opt-out keys off PERMISSION_MODE, which `render()` omits for
+    /// agents with no `permission_mode:` — so under `set -u` the comparison
+    /// must default the var. Pin the new shape so a silent edit can't bring
+    /// back the bypass-everything flag, drop the auto default, or break the
+    /// unset-safe attended branch.
+    #[test]
+    fn wrapper_defaults_headless_to_permission_mode_auto() {
+        assert!(
+            DEFAULT_WRAPPER.contains("--permission-mode \"${PERMISSION_MODE:-auto}\""),
+            "wrapper must default headless agents to --permission-mode auto",
+        );
+        assert!(
+            !DEFAULT_WRAPPER.contains("--dangerously-skip-permissions"),
+            "wrapper must not pass --dangerously-skip-permissions (#361)",
+        );
+        assert!(
+            DEFAULT_WRAPPER.contains("[ \"${PERMISSION_MODE:-}\" = \"attended\" ]"),
+            "wrapper must keep the set -u-safe attended opt-out branch",
+        );
+    }
+
     /// T-174: the wrapper picks `--resume` vs `--session-id` by
     /// probing the on-disk session jsonl. A silent edit that drops
     /// the resume branch would re-trigger "Session ID is already in
