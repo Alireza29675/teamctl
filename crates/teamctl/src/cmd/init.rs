@@ -392,6 +392,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn confirm_defaults_to_yes_on_empty_declines_on_n() {
+        // #356: the guided intent prompt defaults to Yes — a bare Enter
+        // (and y/yes, any case) proceeds; only an explicit n/no declines.
+        assert!(answer_is_yes(""));
+        assert!(answer_is_yes("\n"));
+        assert!(answer_is_yes("  "));
+        assert!(answer_is_yes("y"));
+        assert!(answer_is_yes("Y\n"));
+        assert!(answer_is_yes("yes"));
+        assert!(!answer_is_yes("n"));
+        assert!(!answer_is_yes("no"));
+        assert!(!answer_is_yes("N"));
+    }
+
+    #[test]
     fn slugify_basic() {
         assert_eq!(slugify("My Repo!"), "my-repo");
         assert_eq!(slugify("---weird___name"), "weird---name");
