@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use team_core::compose::Compose;
 
+use crate::managed_bot::ManagedBotClient;
+
 pub fn run(root: &Path, action: BotAction) -> Result<()> {
     match action {
         BotAction::Setup { force, manager } => setup(root, force, manager),
@@ -218,12 +220,87 @@ fn managed_setup(root: &Path, compose: &Compose, force: bool) -> Result<()> {
          \x20\x20✓ interfaces.telegram.manager_bot on project `{project_id}` is up to date"
     );
 
-    // TODO(#344): per-manager child-bot spawn via the #342 managed-bot
-    // client — emit `creation_link(@{mgr_username}, suggested)` → poll →
-    // `get_managed_bot_token` → write each child token to its bot_token_env.
-    // Wired once `team_bot::managed_bot` publishes (kian, #342).
-    println!("\nManager bot ready. Child-bot spawn step lands with the managed-bot client.");
+    // ── Flow A: spawn a child bot per manager via the manager bot ──────
+    // For each manager we emit a bot-creation link the operator confirms
+    // in Telegram; the manager bot mints a child bot, we pull its token,
+    // then run the same `/start` chat-authorization step as the manual
+    // flow so each child reaches the identical end-state (token + chat id).
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("tokio runtime for managed bots")?;
+    let client = ManagedBotClient::new(token.clone());
+    let roles: Vec<String> = compose
+        .projects
+        .iter()
+        .find(|p| p.project.id == project_id)
+        .map(|p| p.managers.keys().cloned().collect())
+        .unwrap_or_default();
+
+    let mut minted = 0usize;
+    let mut skipped = 0usize;
+    for role in roles {
+        let mgr = format!("{project_id}:{role}");
+        let (child_token_env, child_chats_env) = manager_telegram(compose, &mgr)
+            .unwrap_or_else(|| (default_token_env(&mgr), default_chats_env(&mgr)));
+
+        if !force
+            && trimmed_env(&child_token_env).is_some()
+            && trimmed_env(&child_chats_env).is_some()
+        {
+            println!("  ✓ {role} — child bot already set up (skipped)");
+            skipped += 1;
+            continue;
+        }
+
+        println!("\n── child bot · {role} ──");
+        let suggested = suggested_child_username(&project_id, &role);
+        let link = ManagedBotClient::creation_link(mgr_username, &suggested);
+        println!(
+            "Open this link in Telegram and confirm the new bot:\n  {link}\n\
+             (the bot is handed to @{mgr_username}; we pull its token automatically.)"
+        );
+        let updated = rt.block_on(client.poll_for_managed_bot())?;
+        let child_token = rt.block_on(client.get_managed_bot_token(updated.bot.id))?;
+
+        let child_me = telegram_get_me(&child_token)?;
+        let child_username = child_me.username.as_deref().unwrap_or("your-bot");
+        println!(
+            "  ✓ minted @{child_username}\n\
+             Step — Authorize your chat: open @{child_username} and send /start."
+        );
+        let chat_id = poll_for_start(&child_token, Duration::from_secs(120))?.to_string();
+
+        write_env_file(
+            root,
+            &child_token_env,
+            &child_token,
+            &child_chats_env,
+            &chat_id,
+        )?;
+        upsert_manager_telegram(compose, &mgr, &child_token_env, &child_chats_env)?;
+        println!("  ✓ {role}: wrote {child_token_env} + {child_chats_env}, telegram block updated");
+        minted += 1;
+    }
+
+    println!();
+    println!(
+        "Done. {minted} child bot(s) set up, {skipped} already configured, under \
+         manager bot @{mgr_username}.\n\
+         Run `teamctl up` to launch them, then DM each one in Telegram."
+    );
     Ok(())
+}
+
+/// Telegram-legal suggested username for a manager's child bot. Telegram
+/// requires `[A-Za-z0-9_]`, ending in `bot`; this is only a suggestion the
+/// operator can change in the creation flow.
+fn suggested_child_username(project_id: &str, role: &str) -> String {
+    let base: String = format!("{project_id}_{role}")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("{base}_bot")
 }
 
 /// Upsert a single `KEY=value` line into `.team/.env` (replace in place if
@@ -1465,5 +1542,48 @@ mod tests {
             got.contains("# final trailing comment"),
             "file-final trailing comment eaten on replace (#319 fired for managed-bots path):\n{got}"
         );
+    }
+
+    #[test]
+    fn managed_bot_write_validates_clean_and_round_trips() {
+        // Integration: the managed-bots project write produces a YAML that
+        // (1) validates clean through the real `team_core::validate` and
+        // (2) round-trips so `Project::telegram().manager_bot` reads back.
+        // The interactive wizard (stdin), the Telegram `getMe`/`/start`
+        // HTTP, and the managed-bot creation flow are out of unit scope —
+        // the managed-bot client is covered by #342's wiremock tests; this
+        // pins the persisted schema the rest of the flow composes against.
+        let dir = tempfile::tempdir().unwrap();
+        let team = dir.path().join(".team");
+        let ess = crate::cmd::init::TEMPLATES
+            .iter()
+            .find(|t| t.key == "essentials")
+            .expect("essentials template present");
+        for (rel, content) in ess.files {
+            let body = content
+                .replace("{{project_id}}", "main")
+                .replace("{{project_name}}", "Main");
+            let path = team.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, body).unwrap();
+        }
+        let compose = Compose::load(&team).expect("essentials compose loads");
+        let project_id = compose.projects[0].project.id.clone();
+
+        upsert_project_manager_bot(&compose, &project_id, "TEAMCTL_TG_MANAGER_TOKEN")
+            .expect("managed_bot write succeeds");
+
+        let compose = Compose::load(&team).expect("compose reloads after managed_bot write");
+        let errs = team_core::validate::validate(&compose);
+        assert!(
+            errs.is_empty(),
+            "managed-bots YAML must validate clean: {errs:?}"
+        );
+
+        let mb = compose.projects[0]
+            .telegram()
+            .and_then(|t| t.manager_bot.as_ref())
+            .expect("manager_bot round-trips through the schema");
+        assert_eq!(mb.token_env, "TEAMCTL_TG_MANAGER_TOKEN");
     }
 }
