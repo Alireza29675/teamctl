@@ -170,24 +170,28 @@ while :; do
                 fi
             fi
             [ -n "$CLAUDE_SESSION_NAME" ] && set -- "$@" -n "$CLAUDE_SESSION_NAME"
-            # T-189: `permission_mode: attended` is the opt-out for the
-            # headless-default footgun protections. When attended, a
-            # human is at the keyboard and can answer interactive
-            # prompts, so we skip:
-            #   - `--dangerously-skip-permissions` (let claude prompt),
-            #   - `--settings <hook-deny>` (let interactive tools run),
-            #   - `--permission-mode attended` (claude doesn't recognize
-            #     "attended" — it's a teamctl-level mode).
-            # Any other permission_mode (or unset) means headless: we
-            # ship the deny hook so AskUserQuestion / plan-mode pickers
-            # don't strand the pane, and pass --dangerously-skip-
-            # permissions so the runtime doesn't block on its own
-            # permission dialog.
-            if [ "$PERMISSION_MODE" = "attended" ]; then
+            # T-189 / T-361: `permission_mode: attended` is the opt-out for
+            # the headless-default footgun protections. When attended, a
+            # human is at the keyboard and can answer interactive prompts,
+            # so we skip both:
+            #   - `--permission-mode` (claude has no "attended" mode — it's
+            #     a teamctl-level concept; a human drives the normal prompts),
+            #   - `--settings <hook-deny>` (let interactive tools run).
+            # Any other permission_mode (or unset) means headless. We default
+            # to `auto`: claude's classifier lets routine work run without
+            # prompts and blocks risky actions outright, so an unattended pane
+            # keeps draining its inbox instead of freezing on a permission
+            # dialog. (Edge: if auto blocks 3x consecutively or 20x total in a
+            # session it falls back to prompting — see CHANGELOG.) An operator
+            # who genuinely needs the old bypass-everything behavior for a
+            # disposable sandbox can set `permission_mode: bypassPermissions`,
+            # which flows through here (no teamctl-specific escape hatch). We
+            # also ship the deny hook so AskUserQuestion / plan-mode pickers
+            # can't strand the pane.
+            if [ "${PERMISSION_MODE:-}" = "attended" ]; then
                 :
             else
-                [ -n "$PERMISSION_MODE" ] && set -- "$@" --permission-mode "$PERMISSION_MODE"
-                set -- "$@" --dangerously-skip-permissions
+                set -- "$@" --permission-mode "${PERMISSION_MODE:-auto}"
                 [ -n "$CLAUDE_SETTINGS" ] && set -- "$@" --settings "$CLAUDE_SETTINGS"
             fi
             [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
