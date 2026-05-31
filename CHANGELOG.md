@@ -28,6 +28,26 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   force-restart. Claude runtime only; `codex`/`gemini` agents are skipped with a
   warning (parity gap). (#352)
 
+### Changed
+
+- Headless `claude-code` agents now launch with `--permission-mode auto`
+  instead of `--dangerously-skip-permissions`. Auto mode runs a safety
+  classifier before each tool call: routine work (file edits, builds, pushing
+  to the working branch, read-only HTTP) runs with no prompts, while genuinely
+  risky actions (force-push, `rm -rf` of pre-existing files, secret
+  exfiltration, production deploys) are blocked outright — no permission dialog
+  to strand an unattended pane. This swaps the bypass-everything flag for a
+  real safety gate. `permission_mode: attended` (human at the keyboard) is
+  unchanged; `permission_mode: bypassPermissions` restores the old
+  bypass-everything behavior for disposable sandboxes. Two edges to know: (1)
+  if the classifier blocks 3 actions in a row or 20 total in a session, auto
+  falls back to prompting — which an unattended pane cannot answer; narrow (only
+  under sustained repeated risky attempts), and the existing deny hook still
+  covers plan-mode / `AskUserQuestion` prompts. (2) Auto requires Claude Opus
+  4.6+ / Sonnet 4.6 on the Anthropic API (not Bedrock/Vertex); on other
+  models/providers it is unavailable. Claude runtime only — `codex`/`gemini`
+  are unaffected. (#361)
+
 ## [0.8.6] — 2026-05-17
 
 ### Changed
