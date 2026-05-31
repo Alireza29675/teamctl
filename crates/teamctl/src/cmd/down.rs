@@ -72,5 +72,10 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
     if let (Some(id), 0) = (scoped.as_deref(), touched) {
         println!("no agents in scope for project {id}.");
     }
+
+    // T-370: release the host-level keep-awake once the last teamctl team on
+    // this host is down (host-wide refcount via the `@teamctl` tmux tagging).
+    // macOS-only, no-op elsewhere; a stale/dead pid is reaped without error.
+    super::caffeinate::stop_if_last();
     Ok(())
 }

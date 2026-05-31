@@ -141,6 +141,13 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
         None => next,
     };
     super::snapshot::write(&compose.root, &snap)?;
+
+    // T-370: keep the host awake (no idle-sleep) while agents are up so
+    // long-running tasks survive display sleep. Host-level + refcounted;
+    // macOS-only, no-op elsewhere. Only when we actually brought something up.
+    if touched > 0 {
+        super::caffeinate::ensure_running();
+    }
     Ok(())
 }
 

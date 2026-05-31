@@ -182,6 +182,27 @@ fn tmux_list_sessions() -> Result<Option<String>> {
     Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
+/// `true` if any teamctl-managed tmux session (tagged `@teamctl=1`) is live
+/// anywhere on this host. Host-wide refcount for the caffeinate keep-awake
+/// lifecycle (T-370): the assertion lives while ANY team is up and is released
+/// only when the last one goes down. Reuses the same tagging + listing the
+/// `sessions` command relies on, so it sees exactly the teamctl-managed
+/// sessions and ignores unrelated tmux.
+///
+/// Gated to macOS because its only caller (`caffeinate::stop_if_last`) is
+/// macOS-only; in a binary crate `pub` does not suppress dead-code, so leaving
+/// it ungated trips `-D warnings` on non-macOS CI.
+#[cfg(target_os = "macos")]
+pub fn any_teamctl_session_running() -> bool {
+    let raw = match tmux_list_sessions() {
+        Ok(Some(s)) => s,
+        _ => return false,
+    };
+    parse_list_sessions(&raw)
+        .iter()
+        .any(|r| tmux_session_option(&r.name, "@teamctl").as_deref() == Some("1"))
+}
+
 fn tmux_session_option(session: &str, key: &str) -> Option<String> {
     let out = Command::new("tmux")
         .args(["show-options", "-v", "-t", session, key])
