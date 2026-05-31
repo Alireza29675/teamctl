@@ -314,6 +314,7 @@ mod tests {
                 channels: vec![],
                 managers,
                 workers: Default::default(),
+                interfaces: None,
             }],
         }
     }

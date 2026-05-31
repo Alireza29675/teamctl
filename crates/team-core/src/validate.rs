@@ -373,6 +373,7 @@ mod tests {
                 }],
                 managers,
                 workers,
+                interfaces: None,
             }],
         }
     }

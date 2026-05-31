@@ -69,6 +69,7 @@ mod tests {
             channels: vec![],
             managers: Default::default(),
             workers: Default::default(),
+            interfaces: None,
         }
     }
 

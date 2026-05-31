@@ -441,6 +441,19 @@ pub struct Project {
 
     #[serde(default)]
     pub workers: BTreeMap<String, Agent>,
+
+    /// Project-scoped human-facing interfaces (#132 PR-1). Mirrors the
+    /// per-agent `Agent.interfaces` shape one level up — `telegram` is
+    /// today's only adapter, with room for future `discord:` /
+    /// `imessage:` under the same `ProjectInterfaces` container. Hosts
+    /// the shared bot-family config (manager bot for managed-bots flow,
+    /// profile-picture defaults) that's scoped to one project's bot
+    /// family but spawns N per-agent children — not per-agent because
+    /// it's shared infra, not global because each project deserves its
+    /// own bot-family identity. Absent → existing manual BotFather
+    /// per-manager flow runs verbatim (zero-touch).
+    #[serde(default)]
+    pub interfaces: Option<ProjectInterfaces>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -617,6 +630,121 @@ impl Agent {
     /// `interfaces.telegram` without forcing every callsite to handle
     /// the nested options.
     pub fn telegram(&self) -> Option<&TelegramConfig> {
+        self.interfaces.as_ref().and_then(|i| i.telegram.as_ref())
+    }
+}
+
+/// #132 PR-1: project-scoped interface container. One level up from
+/// `AgentInterfaces`, same open-shape rationale — today's only adapter
+/// is `telegram`, future `discord:` / `imessage:` slot in as
+/// strictly-additive YAML edits.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProjectInterfaces {
+    /// Project-scoped Telegram config: the manager bot that spawns
+    /// per-agent children + default profile-picture rendering. Per-
+    /// agent telegram config (under `Agent.interfaces.telegram`) is
+    /// orthogonal — agents still declare their own `bot_token_env` /
+    /// `chat_ids_env` slots; the managed-bots flow writes child tokens
+    /// into those slots untouched.
+    #[serde(default)]
+    pub telegram: Option<ProjectTelegramConfig>,
+}
+
+/// #132 PR-1: project-scoped Telegram config. Hosts the shared-infra
+/// fields (manager bot, profile-picture defaults) that drive the
+/// managed-bots flow in `teamctl bot setup`. Absent / both fields
+/// absent → existing manual BotFather walkthrough runs verbatim for
+/// each per-agent `Agent.interfaces.telegram` block (zero-touch).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProjectTelegramConfig {
+    /// Manager bot for the managed-bots flow. When set + its env var
+    /// resolves, `teamctl bot setup` uses it to spawn per-agent child
+    /// bots via Telegram's Bot API 10.0 managed-bot endpoints. Absent
+    /// → operator runs the manual BotFather flow per agent as today.
+    #[serde(default)]
+    pub manager_bot: Option<ManagerBotConfig>,
+
+    /// Default profile-picture rendering for spawned child bots.
+    /// Image-model path is opt-in; absent / failure-of-generation
+    /// falls back to deterministic initials-in-colored-circle (Q3-
+    /// ratified). When the whole block is absent, no profile-picture
+    /// is applied — child bots keep Telegram's default avatar.
+    #[serde(default)]
+    pub profile_picture: Option<ProfilePictureConfig>,
+}
+
+/// #132 PR-1: manager-bot config. Mirrors the env-var-name pattern of
+/// `TelegramConfig.bot_token_env` — the actual BotFather token lives
+/// in `.team/.env`, this field names the env var that holds it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManagerBotConfig {
+    /// Env var holding the manager bot's BotFather token. The
+    /// operator-facing setup steps (BotFather click path to enable the
+    /// Managed Bots capability) are documented in `docs/`; this schema
+    /// pins the env-var name the wizard reads at setup time.
+    pub token_env: String,
+}
+
+/// #132 PR-1: profile-picture rendering settings for spawned child
+/// bots. `image_model` is opt-in for AI-generated avatars; `fallback`
+/// names the rendering used when `image_model` is absent OR generation
+/// fails OR the API key is missing. Q3 (owner-ratified, tg 3445):
+/// initials-in-colored-circle, no embedded emoji-font binary growth.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProfilePictureConfig {
+    /// AI image-generation config. When set + API key resolves, the
+    /// wizard generates a square 512×512 image seeded from the agent's
+    /// name + role and applies it via Bot API `setProfilePhoto`. Any
+    /// failure path (missing API key, generation error, upload error)
+    /// falls through to `fallback`.
+    #[serde(default)]
+    pub image_model: Option<ImageModelConfig>,
+
+    /// Fallback rendering when `image_model` is absent or fails. v1
+    /// has one variant (`Initials`); the field is explicit so future
+    /// variants (per-agent override, `None`-to-skip) slot in
+    /// additively without breaking existing YAML.
+    #[serde(default)]
+    pub fallback: ProfilePictureFallback,
+}
+
+/// #132 PR-1: profile-picture fallback rendering. Q3-ratified to
+/// initials-in-colored-circle for v1. Enum-shaped so future variants
+/// (e.g. `Emoji`, `None`) land additively; current single variant is
+/// the default so omitting `fallback:` in YAML keeps the contract.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProfilePictureFallback {
+    /// Render a deterministic colored circle with the agent's
+    /// uppercase initials (Slack-style). Deterministic = same agent
+    /// name always renders the same circle, so rebuilds don't shuffle.
+    #[default]
+    Initials,
+}
+
+/// #132 PR-1: AI image-generation config for child-bot profile
+/// pictures. Mirrors the `SttConfig` shape (provider / api_key_env /
+/// model). v1 provider is `openai`; adding a future provider is one
+/// match arm in the call site.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageModelConfig {
+    /// Provider arm. v1: `openai`.
+    pub provider: String,
+    /// Env var holding the provider's API key (mirrors `bot_token_env`
+    /// and `SttConfig.api_key_env`). The actual secret lives in
+    /// `.team/.env` and is resolved by `teamctl bot setup` at wizard
+    /// time.
+    pub api_key_env: String,
+    /// Provider model id (e.g. `gpt-image-2` for OpenAI; snapshot id
+    /// `gpt-image-2-2026-04-21` for pinning).
+    pub model: String,
+}
+
+impl Project {
+    /// Convenience: pull the project's Telegram config out of
+    /// `interfaces.telegram` without forcing every callsite to handle
+    /// the nested options. Mirrors [`Agent::telegram`].
+    pub fn telegram(&self) -> Option<&ProjectTelegramConfig> {
         self.interfaces.as_ref().and_then(|i| i.telegram.as_ref())
     }
 }
@@ -1135,6 +1263,197 @@ broker:
         assert!(
             err.to_string().contains("only legacy `2` is auto-coerced"),
             "error must name the constraint; got: {err}"
+        );
+    }
+
+    // ── #132 PR-1: Project.interfaces.telegram schema ──────────────
+
+    /// Minimal Project YAML head for the new-schema tests. Each test
+    /// appends its own `interfaces:` block (or omits it for the
+    /// zero-touch baseline). Mirrors the per-agent test fixture
+    /// pattern but at one level up.
+    const PROJECT_YAML_HEAD: &str = "\
+version: 2
+project:
+  id: p
+  name: P
+  cwd: .
+";
+
+    #[test]
+    fn project_without_interfaces_block_parses_unchanged() {
+        // Zero-touch baseline: existing project YAMLs (which today have
+        // no `interfaces:` block) keep parsing exactly as before.
+        let p: Project = serde_yaml::from_str(PROJECT_YAML_HEAD).unwrap();
+        assert!(p.interfaces.is_none());
+        assert!(p.telegram().is_none());
+    }
+
+    #[test]
+    fn project_telegram_block_parses_under_interfaces() {
+        // Mirror precedent: `agent_telegram_block_parses_under_interfaces`
+        // at compose.rs:691. Both `manager_bot` and `profile_picture`
+        // present, exercises the full top-level accessor path.
+        let yaml = format!(
+            "{PROJECT_YAML_HEAD}\
+interfaces:
+  telegram:
+    manager_bot:
+      token_env: TEAMCTL_TG_MANAGER_TOKEN
+    profile_picture:
+      image_model:
+        provider: openai
+        api_key_env: OPENAI_API_KEY
+        model: gpt-image-2
+      fallback: initials
+"
+        );
+        let p: Project = serde_yaml::from_str(&yaml).unwrap();
+        let tg = p.telegram().expect("project telegram parsed");
+        let mb = tg.manager_bot.as_ref().expect("manager_bot parsed");
+        assert_eq!(mb.token_env, "TEAMCTL_TG_MANAGER_TOKEN");
+        let pp = tg.profile_picture.as_ref().expect("profile_picture parsed");
+        let im = pp.image_model.as_ref().expect("image_model parsed");
+        assert_eq!(im.provider, "openai");
+        assert_eq!(im.api_key_env, "OPENAI_API_KEY");
+        assert_eq!(im.model, "gpt-image-2");
+        assert_eq!(pp.fallback, ProfilePictureFallback::Initials);
+    }
+
+    #[test]
+    fn project_telegram_block_parses_manager_bot_only() {
+        // Realistic case: operator opts into managed-bots flow without
+        // configuring AI profile pictures (uses the initials fallback
+        // by absence-of-image-model). Each sub-block is independently
+        // optional.
+        let yaml = format!(
+            "{PROJECT_YAML_HEAD}\
+interfaces:
+  telegram:
+    manager_bot:
+      token_env: TEAMCTL_TG_MANAGER_TOKEN
+"
+        );
+        let p: Project = serde_yaml::from_str(&yaml).unwrap();
+        let tg = p.telegram().expect("project telegram parsed");
+        assert_eq!(
+            tg.manager_bot.as_ref().unwrap().token_env,
+            "TEAMCTL_TG_MANAGER_TOKEN"
+        );
+        assert!(tg.profile_picture.is_none());
+    }
+
+    #[test]
+    fn profile_picture_fallback_defaults_to_initials_when_omitted() {
+        // Q3 contract: omitting `fallback:` is operator-readable as
+        // "use the v1 default", which is initials. Future variants
+        // slot in without breaking this default.
+        let yaml = format!(
+            "{PROJECT_YAML_HEAD}\
+interfaces:
+  telegram:
+    profile_picture:
+      image_model:
+        provider: openai
+        api_key_env: OPENAI_API_KEY
+        model: gpt-image-2
+"
+        );
+        let p: Project = serde_yaml::from_str(&yaml).unwrap();
+        let pp = p
+            .telegram()
+            .and_then(|t| t.profile_picture.as_ref())
+            .expect("profile_picture parsed");
+        assert_eq!(pp.fallback, ProfilePictureFallback::Initials);
+    }
+
+    #[test]
+    fn profile_picture_image_model_optional_with_initials_fallback() {
+        // Initials-only path: no AI generation configured, the
+        // fallback is the entire rendering. Pins the (b) Q3-ratified
+        // shape end to end at the schema level.
+        let yaml = format!(
+            "{PROJECT_YAML_HEAD}\
+interfaces:
+  telegram:
+    profile_picture:
+      fallback: initials
+"
+        );
+        let p: Project = serde_yaml::from_str(&yaml).unwrap();
+        let pp = p
+            .telegram()
+            .and_then(|t| t.profile_picture.as_ref())
+            .expect("profile_picture parsed");
+        assert!(pp.image_model.is_none());
+        assert_eq!(pp.fallback, ProfilePictureFallback::Initials);
+    }
+
+    #[test]
+    fn manager_bot_missing_token_env_rejected() {
+        // `token_env` is required (no `#[serde(default)]`). A YAML
+        // missing it must reject at parse with a clear error so a
+        // malformed setup is caught before it reaches the wizard.
+        let yaml = format!(
+            "{PROJECT_YAML_HEAD}\
+interfaces:
+  telegram:
+    manager_bot: {{}}
+"
+        );
+        let err =
+            serde_yaml::from_str::<Project>(&yaml).expect_err("malformed manager_bot must reject");
+        assert!(
+            err.to_string().contains("token_env"),
+            "error must name the missing field: {err}"
+        );
+    }
+
+    #[test]
+    fn image_model_missing_required_fields_rejected() {
+        // All three fields (provider, api_key_env, model) are
+        // required. A YAML missing any of them must reject — mirrors
+        // SttConfig's required-fields contract.
+        for (label, yaml_fragment) in [
+            ("missing provider", "api_key_env: K\n        model: M"),
+            ("missing api_key_env", "provider: openai\n        model: M"),
+            ("missing model", "provider: openai\n        api_key_env: K"),
+        ] {
+            let yaml = format!(
+                "{PROJECT_YAML_HEAD}\
+interfaces:
+  telegram:
+    profile_picture:
+      image_model:
+        {yaml_fragment}
+"
+            );
+            let result = serde_yaml::from_str::<Project>(&yaml);
+            assert!(
+                result.is_err(),
+                "malformed image_model ({label}) must reject, got: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn profile_picture_fallback_unknown_value_rejected() {
+        // Mirror precedent: `effort_unknown_value_is_rejected` at
+        // compose.rs. An unknown enum variant must reject at parse so
+        // typos surface immediately rather than silently defaulting.
+        let yaml = format!(
+            "{PROJECT_YAML_HEAD}\
+interfaces:
+  telegram:
+    profile_picture:
+      fallback: emoji
+"
+        );
+        let err = serde_yaml::from_str::<Project>(&yaml)
+            .expect_err("unknown fallback variant must reject");
+        assert!(
+            err.to_string().contains("emoji") || err.to_string().contains("variant"),
+            "error must explain the unknown variant: {err}"
         );
     }
 }
