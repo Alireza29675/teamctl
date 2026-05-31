@@ -2,11 +2,7 @@
 title: Rate limits
 ---
 
-Every runtime hits limits eventually — Claude Max sessions reset every 5h,
-Codex usage caps reset on a rolling window, Gemini quota fires on the hour.
-teamctl detects these hits, runs whatever you tell it to do about them,
-and **waits until the limit clears** before respawning the runtime —
-instead of hammering the API in a tight retry loop.
+Every runtime hits limits eventually — Claude Max sessions reset every 5h, Codex usage caps reset on a rolling window, Gemini quota fires on the hour. teamctl detects these hits, runs whatever you tell it to do about them, and **waits until the limit clears** before respawning the runtime — instead of hammering the API in a tight retry loop.
 
 ## How it works
 
@@ -26,10 +22,7 @@ agent-wrapper.sh
        └── otherwise: pass through the runtime's exit code
 ```
 
-After `rl-watch` exits, the wrapper's `while :; do … sleep 5; done` loop
-respawns the runtime. The `wait` hook is what makes that respawn happen
-*after* the limit window — without it the wrapper would just retry into
-the same wall.
+After `rl-watch` exits, the wrapper's `while :; do … sleep 5; done` loop respawns the runtime. The `wait` hook is what makes that respawn happen *after* the limit window — without it the wrapper would just retry into the same wall.
 
 ## Patterns
 
@@ -45,18 +38,14 @@ rate_limit_patterns:
 ```
 
 - `match` — Rust regex tested against each output line.
-- `resets_at_capture` — extracts an absolute clock-time ("4pm", "16:00",
-  "16:00 UTC"). Resolved to the *next future* occurrence.
-- `resets_in_capture` — extracts a relative duration ("5h 15m", "120s").
-  Added to the hit timestamp.
+- `resets_at_capture` — extracts an absolute clock-time ("4pm", "16:00", "16:00 UTC"). Resolved to the *next future* occurrence.
+- `resets_in_capture` — extracts a relative duration ("5h 15m", "120s"). Added to the hit timestamp.
 
-Either capture is optional. If neither resolves, the wait falls back to
-`rate_limits.fallback_wait_seconds` (default 30 minutes).
+Either capture is optional. If neither resolves, the wait falls back to `rate_limits.fallback_wait_seconds` (default 30 minutes).
 
 ## Hooks
 
-`team-compose.yaml` declares named hooks plus the default chain that
-runs on every hit. Agents can override.
+`team-compose.yaml` declares named hooks plus the default chain that runs on every hit. Agents can override.
 
 ```yaml
 rate_limits:

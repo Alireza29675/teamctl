@@ -2,10 +2,7 @@
 title: The `.team/` folder
 ---
 
-A repo with a teamctl team carries a `.team/` directory at its root, the
-same way a git repo carries `.git/`. teamctl walks up from the current
-working directory looking for the nearest `.team/team-compose.yaml`, so
-every subcommand "just works" wherever you are inside the tree.
+A repo with a teamctl team carries a `.team/` directory at its root, the same way a git repo carries `.git/`. teamctl walks up from the current working directory looking for the nearest `.team/team-compose.yaml`, so every subcommand "just works" wherever you are inside the tree.
 
 ## Layout
 
@@ -40,8 +37,7 @@ Resolution order:
 2. `TEAMCTL_ROOT` env var.
 3. Active context (see `teamctl context`).
 4. Walk up from CWD looking for `.team/team-compose.yaml`.
-5. Walk up looking for a flat `team-compose.yaml` (legacy fallback;
-   prints a deprecation warning).
+5. Walk up looking for a flat `team-compose.yaml` (legacy fallback; prints a deprecation warning).
 
 ## Multiple teams on one machine
 
@@ -56,8 +52,7 @@ $ teamctl context use startup
 $ teamctl ps                  # now shows the startup team
 ```
 
-`teamctl up` auto-registers the current root as a context the first
-time it runs.
+`teamctl up` auto-registers the current root as a context the first time it runs.
 
 ## Bootstrapping a new team
 
@@ -71,9 +66,7 @@ Templates are baked into the binary — `init` works offline.
 
 ## Env / secrets
 
-`.team/.env` is the only place secrets live. `.env.example` lists every
-variable the compose tree references with placeholder values; commit it.
-`.env` itself is gitignored.
+`.team/.env` is the only place secrets live. `.env.example` lists every variable the compose tree references with placeholder values; commit it. `.env` itself is gitignored.
 
 ```
 $ teamctl env
@@ -85,8 +78,7 @@ $ teamctl env --doctor
 1 required env var(s) unset
 ```
 
-`teamctl up` invokes `--doctor` implicitly and refuses to start when
-anything required is missing.
+`teamctl up` invokes `--doctor` implicitly and refuses to start when anything required is missing.
 
 ## Inspection
 
@@ -105,8 +97,7 @@ teamctl approvals              # pending HITL requests
 teamctl bridge ls              # cross-project bridges
 ```
 
-The old `status`, `pending`, `bridge list`, etc. commands still work —
-they're aliases.
+The old `status`, `pending`, `bridge list`, etc. commands still work — they're aliases.
 
 ## Migrating from a flat layout
 
@@ -115,7 +106,4 @@ mkdir .team
 git mv team-compose.yaml projects roles runtimes .team/   # whatever exists
 ```
 
-Anything that used to live alongside `team-compose.yaml` moves into
-`.team/`. State directories (`state/`) and `.env` files should already
-be gitignored at the repo root — recreate the gitignore inside
-`.team/` (`teamctl init` provides one).
+Anything that used to live alongside `team-compose.yaml` moves into `.team/`. State directories (`state/`) and `.env` files should already be gitignored at the repo root — recreate the gitignore inside `.team/` (`teamctl init` provides one).
