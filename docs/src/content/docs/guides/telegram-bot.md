@@ -100,8 +100,13 @@ Pick **Managed bots** at the fork, then:
    `t.me` bot-creation link. Open it in Telegram and confirm — the
    manager bot mints a child bot, and the wizard pulls that child's
    token automatically (no copy-paste).
-3. The child token for each manager is written into that manager's
-   `bot_token_env` in `.env`, exactly where the per-manager bots read it.
+3. **Authorize your chat per child.** Just like the manual flow, the
+   wizard asks you to send `/start` to each freshly-minted child bot and
+   captures your chat id — so managed mode reaches the same end-state as
+   manual (token **and** authorized chat id).
+4. The token and chat id for each manager are written into that
+   manager's `bot_token_env` / `chat_ids_env` in `.env`, exactly where
+   the per-manager bots read them.
 
 ### What it writes
 
