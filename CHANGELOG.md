@@ -6,6 +6,12 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ### Added
 
+- macOS: `teamctl up` keeps the host awake (`caffeinate -i -s`) while agents are
+  running, so long-running tasks survive display/idle sleep; the keep-awake is
+  released automatically when the last team on the host goes `down`. Host-level
+  and refcounted — one assertion covers every running team. Lid-open display
+  sleep only; lid-closed/clamshell is hardware-gated and unaffected, and the
+  display is never forced on. No-op on non-macOS hosts. (#370)
 - `teamctl --version` now self-identifies dev builds: a local build off a git
   checkout reports the `git describe` form (`0.8.6-55-ge4adf50`, with `-dirty`
   when the tree has uncommitted changes), so it's distinguishable from a clean
