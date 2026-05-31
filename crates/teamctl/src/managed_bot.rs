@@ -13,15 +13,18 @@
 //!    which the wizard writes into the per-agent `bot_token_env` slot.
 //!
 //! This is a small raw-`reqwest` client: teloxide (the normal Telegram path)
-//! does not expose the 9.6/10.0 managed-bots methods. Cadence + backoff are
-//! hardcoded consts (not config-tunable for v1 — YAGNI, per PR-1). The manager
-//! token is carried in the URL path and is **never logged**.
+//! does not expose the managed-bots methods. Cadence + backoff are hardcoded
+//! consts (not config-tunable for v1 — YAGNI, per PR-1). The manager token is
+//! carried in the URL path and is **never logged**.
 //!
-//! API surface (verified vs core.telegram.org/bots/api):
+//! v1 surface (verified vs core.telegram.org/bots/api):
 //! - `getManagedBotToken` — Bot API 9.6.
-//! - `getManagedBotAccessSettings` / `setManagedBotAccessSettings` +
-//!   `BotAccessSettings` — Bot API 10.0 (live on the current API).
-//! - `replaceManagedBotToken` (rotation) — out of scope for v1.
+//! - The `managed_bot` (`ManagedBotUpdated`) update + the `t.me/newbot` creation
+//!   link — the spawn flow.
+//!
+//! Out of scope for v1: `replaceManagedBotToken` (token rotation) and the Bot
+//! API 10.0 access-settings methods (`get`/`setManagedBotAccessSettings`) — the
+//! wizard only needs token-fetch.
 
 // Landed ahead of its consumer: the #344 `teamctl bot setup` wizard wires this
 // client into the managed-bots setup flow (next PR in the #132 stack). Until
@@ -33,7 +36,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// Production Telegram Bot API base. Overridable at test time via
 /// `TEAMCTL_TG_API_BASE` so mock-HTTP tests can target a local server.
@@ -74,15 +77,6 @@ pub struct ManagedBotUpdated {
     pub user: User,
     /// The newly created managed bot (a bot user).
     pub bot: User,
-}
-
-/// Access-control settings for a managed bot — `BotAccessSettings` (Bot API
-/// 10.0). Kept minimal + additive; confirm the full field set against the live
-/// spec before relying on fields beyond `can_read_messages`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct BotAccessSettings {
-    #[serde(default)]
-    pub can_read_messages: bool,
 }
 
 /// One Telegram update, narrowed to the fields this client consumes.
@@ -167,34 +161,6 @@ impl ManagedBotClient {
             )
             .await?;
         Ok(r.token)
-    }
-
-    /// `getManagedBotAccessSettings` — read a managed bot's access settings.
-    pub async fn get_managed_bot_access_settings(
-        &self,
-        managed_bot_id: i64,
-    ) -> Result<BotAccessSettings> {
-        self.call(
-            "getManagedBotAccessSettings",
-            &serde_json::json!({ "managed_bot_id": managed_bot_id }),
-        )
-        .await
-    }
-
-    /// `setManagedBotAccessSettings` — write a managed bot's access settings.
-    pub async fn set_managed_bot_access_settings(
-        &self,
-        managed_bot_id: i64,
-        settings: BotAccessSettings,
-    ) -> Result<bool> {
-        self.call(
-            "setManagedBotAccessSettings",
-            &serde_json::json!({
-                "managed_bot_id": managed_bot_id,
-                "access_settings": settings,
-            }),
-        )
-        .await
     }
 
     /// Long-poll the manager bot's update stream until a `managed_bot` update
@@ -330,65 +296,6 @@ mod tests {
             err.to_string().contains("bot not found"),
             "error should carry the description: {err}"
         );
-    }
-
-    #[tokio::test]
-    async fn get_access_settings_success() {
-        let server = MockServer::start().await;
-        mock_ok(
-            &server,
-            "getManagedBotAccessSettings",
-            serde_json::json!({ "can_read_messages": true }),
-        )
-        .await;
-        let settings = client(server.uri())
-            .get_managed_bot_access_settings(42)
-            .await
-            .expect("settings fetched");
-        assert!(settings.can_read_messages);
-    }
-
-    #[tokio::test]
-    async fn get_access_settings_surfaces_api_error() {
-        let server = MockServer::start().await;
-        mock_err(&server, "getManagedBotAccessSettings", "Forbidden").await;
-        let err = client(server.uri())
-            .get_managed_bot_access_settings(42)
-            .await
-            .expect_err("api error surfaces");
-        assert!(err.to_string().contains("Forbidden"), "{err}");
-    }
-
-    #[tokio::test]
-    async fn set_access_settings_success() {
-        let server = MockServer::start().await;
-        mock_ok(
-            &server,
-            "setManagedBotAccessSettings",
-            serde_json::json!(true),
-        )
-        .await;
-        let ok = client(server.uri())
-            .set_managed_bot_access_settings(
-                42,
-                BotAccessSettings {
-                    can_read_messages: true,
-                },
-            )
-            .await
-            .expect("settings written");
-        assert!(ok);
-    }
-
-    #[tokio::test]
-    async fn set_access_settings_surfaces_api_error() {
-        let server = MockServer::start().await;
-        mock_err(&server, "setManagedBotAccessSettings", "Forbidden").await;
-        let err = client(server.uri())
-            .set_managed_bot_access_settings(42, BotAccessSettings::default())
-            .await
-            .expect_err("api error surfaces");
-        assert!(err.to_string().contains("Forbidden"), "{err}");
     }
 
     #[tokio::test]
