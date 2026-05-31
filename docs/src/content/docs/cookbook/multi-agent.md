@@ -3,17 +3,9 @@ title: Multi-agent ACLs in one project
 description: Four agents in one project, three channels, plan-mode critic.
 ---
 
-A pattern for fitting more than one worker (and a read-only critic) under
-a single manager — with channel membership doing the ACL work, not
-runtime gating. `#product` is the open team room; `#internal` is a
-back-channel for the two devs only; `#all` is the wildcard. The critic
-sits in `permission_mode: plan` and so cannot mutate anything it
-reviews.
+A pattern for fitting more than one worker (and a read-only critic) under a single manager — with channel membership doing the ACL work, not runtime gating. `#product` is the open team room; `#internal` is a back-channel for the two devs only; `#all` is the wildcard. The critic sits in `permission_mode: plan` and so cannot mutate anything it reviews.
 
-The patterns here also show up organically in `examples/startup-team/`
-(layered managers + workers) and `examples/oss-maintainer/`
-(channel-isolated pipeline). The compose file below stays preserved as
-a reference recipe.
+The patterns here also show up organically in `examples/startup-team/` (layered managers + workers) and `examples/oss-maintainer/` (channel-isolated pipeline). The compose file below stays preserved as a reference recipe.
 
 ```yaml
 # .team/projects/swarm.yaml
@@ -61,6 +53,4 @@ workers:
     can_broadcast: [product]
 ```
 
-The critic in `permission_mode: plan` is the same archetype as
-`market-analysts/quant_risk` and `indie-game-studio/playtest_critic` —
-a read-only dissenter that proposes but never mutates.
+The critic in `permission_mode: plan` is the same archetype as `market-analysts/quant_risk` and `indie-game-studio/playtest_critic` — a read-only dissenter that proposes but never mutates.

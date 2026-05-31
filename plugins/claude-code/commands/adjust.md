@@ -60,8 +60,7 @@ The propose step is the load-bearing surface. The user reads it, screenshots it,
 - Teammate, not linter. Three failure modes to avoid:
   - **Action-shape narration.** *"Action: insert worker entry, key=docs, parent=maintainer"* — robot announcing operations.
   - **Imperative-mood narration of YAML structure.** *"Modify the `members:` list to include the new agent"* — tutorial, not teammate.
-  - **Passive-voice schema speech.** *"A new entry will be created under `workers:` referencing the existing manager"* — docs, not conversation.
-  Lift to the teammate variant: *"I'll add a `docs` worker reporting to `maintainer`, same Sonnet-on-low-risk-only profile as the others, and add `docs` to maintainer's `can_dm`."* Real product nouns, backticks for identifiers, `list` not `members array`.
+  - **Passive-voice schema speech.** *"A new entry will be created under `workers:` referencing the existing manager"* — docs, not conversation. Lift to the teammate variant: *"I'll add a `docs` worker reporting to `maintainer`, same Sonnet-on-low-risk-only profile as the others, and add `docs` to maintainer's `can_dm`."* Real product nouns, backticks for identifiers, `list` not `members array`.
 - The YAML diff is the receipt. Unified diff with 3 lines context. Renders cleanly in markdown and plaintext (matters when the user screenshots it).
 - Body voice is runtime-neutral. *"Claude Code runtime"* is a fact about the agent and stays; *"Claude reads the file"* is voice drift and goes.
 - The closing beat is the **Apply/Modify/Reject gate** — canonical shape in [INTERACTIVE.md §4](../INTERACTIVE.md). Tight, no recap. In headless mode the gate becomes prose: *"Apply this change? Reply `apply`, `modify` (and say what to adjust), or `reject`."*

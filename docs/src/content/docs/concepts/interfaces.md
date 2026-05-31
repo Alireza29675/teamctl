@@ -2,13 +2,9 @@
 title: Interfaces
 ---
 
-An **interface** is a pluggable human-facing channel. Telegram is the
-shipping adapter; Discord, iMessage, CLI, and webhook are planned.
+An **interface** is a pluggable human-facing channel. Telegram is the shipping adapter; Discord, iMessage, CLI, and webhook are planned.
 
-Telegram lives directly on the manager and is set up by `teamctl bot
-setup` (one bot per user-facing manager — DM the bot, the message
-goes to the matching manager). Other adapters use the top-level
-`interfaces:` array shape.
+Telegram lives directly on the manager and is set up by `teamctl bot setup` (one bot per user-facing manager — DM the bot, the message goes to the matching manager). Other adapters use the top-level `interfaces:` array shape.
 
 ```yaml
 # projects/news.yaml — Telegram on the manager itself
@@ -41,8 +37,7 @@ interfaces:
     # No config. Reachable via `teamctl chat <project>:<manager>`.
 ```
 
-Approvals are routed to every attached interface until one of them
-decides.
+Approvals are routed to every attached interface until one of them decides.
 
 ## What interfaces do
 
