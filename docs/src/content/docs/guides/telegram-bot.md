@@ -22,7 +22,19 @@ authorization, env vars, and the per-manager YAML block.
 teamctl bot setup
 ```
 
-For each user-facing manager, the wizard walks you through:
+The wizard opens with a fork:
+
+1. **Managed bots** — you set up **one** manager bot, and it spawns a
+   child bot per manager for you (no per-manager BotFather trips). Needs
+   a manager bot with Telegram's [Managed Bots](#managed-bots) capability
+   enabled. See [Managed bots](#managed-bots) below.
+2. **Manual token** — the original flow: you paste a BotFather token for
+   each manager yourself. Documented just below.
+
+Targeting a single manager (`teamctl bot setup news:head_editor`) always
+uses the manual path. The rest of this section covers the manual flow.
+
+For each user-facing manager, the manual wizard walks you through:
 
 1. **Create a bot.** Open BotFather, send `/newbot`, follow prompts.
    BotFather returns a token like `123456:AAH-…`. Paste it.
@@ -57,6 +69,87 @@ Scope to one manager by passing it as a positional argument:
 ```bash
 teamctl bot setup news:head_editor
 ```
+
+## Managed bots
+
+Instead of creating a bot per manager by hand, you set up **one** manager
+bot with Telegram's Managed Bots capability (Bot API 9.6) and let it spawn
+the per-manager child bots for you. Each child still ends up as its own
+1:1 bot — same end state as the manual flow, fewer BotFather trips.
+
+### Prerequisites
+
+- A manager bot created in [@BotFather](https://t.me/BotFather) with
+  **Managed Bots enabled**: `/mybots` → your bot → *Bot Settings* →
+  *Managed Bots*.
+- `curl` on PATH (token verification), and a Telegram account ready to
+  tap the bot-creation links the wizard prints.
+- At least one manager declared in `projects/<id>.yaml`.
+
+### Run it
+
+```bash
+teamctl bot setup
+```
+
+Pick **Managed bots** at the fork, then:
+
+1. **Paste the manager bot token.** The wizard verifies it with `getMe`
+   and shows the resolved `@username`.
+2. **Confirm each child bot.** For every manager, the wizard prints a
+   `t.me` bot-creation link. Open it in Telegram and confirm — the
+   manager bot mints a child bot, and the wizard pulls that child's
+   token automatically (no copy-paste).
+3. **Authorize your chat per child.** Just like the manual flow, the
+   wizard asks you to send `/start` to each freshly-minted child bot and
+   captures your chat id — so managed mode reaches the same end-state as
+   manual (token **and** authorized chat id).
+4. The token and chat id for each manager are written into that
+   manager's `bot_token_env` / `chat_ids_env` in `.env`, exactly where
+   the per-manager bots read them.
+
+### What it writes
+
+A project-level `interfaces.telegram.manager_bot` block records which env
+var holds the manager bot token:
+
+```yaml
+# projects/news.yaml
+interfaces:
+  telegram:
+    manager_bot:
+      token_env: TEAMCTL_TG_MANAGER_TOKEN
+managers:
+  head_editor:
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_HEAD_EDITOR_TOKEN   # child token, minted for you
+        chat_ids_env: TEAMCTL_TG_HEAD_EDITOR_CHATS
+```
+
+```bash
+# .team/.env  (gitignored)
+TEAMCTL_TG_MANAGER_TOKEN=123456:AAH-...        # the manager bot
+TEAMCTL_TG_HEAD_EDITOR_TOKEN=789012:AAH-...    # minted child bot
+```
+
+### Verify
+
+```bash
+teamctl bot list       # every manager + token/chat env-var status
+teamctl validate       # the written YAML parses + validates clean
+```
+
+### Troubleshooting
+
+- **"Managed Bots not enabled"** — the manager bot token works but can't
+  mint children. Enable it in BotFather (*Bot Settings → Managed Bots*)
+  and re-run.
+- **Link never confirmed** — the wizard waits for you to tap the
+  `t.me` link and approve. If it times out, re-run `teamctl bot setup`;
+  already-minted children are reused, so you only finish what's missing.
+- **Re-running** — `--force` re-collects the manager token and re-mints.
+  Without it, configured managers are left as-is.
 
 ## Launch
 
