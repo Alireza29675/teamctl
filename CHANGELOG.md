@@ -6,6 +6,13 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ### Added
 
+- `teamctl bot setup` gains a **managed-bots** path: set up one manager bot
+  (Telegram Managed Bots, Bot API 9.6) and it spawns a child bot per manager for
+  you — confirm one `t.me` link each instead of a separate BotFather trip. The
+  wizard mints each child's token, runs the same `/start` chat authorization, and
+  writes the per-manager `interfaces.telegram` block plus the project-level
+  `interfaces.telegram.manager_bot` config. The original manual-token flow is
+  preserved verbatim as the other fork at the top of the wizard. (#344, #132)
 - `teamctl reload --fresh` and `teamctl up --fresh` restart agents into a
   brand-new Claude conversation (re-running the bootstrap prompt) instead of
   resuming the prior session, while keeping durable on-disk files (`task.md`,
