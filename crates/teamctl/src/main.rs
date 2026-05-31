@@ -38,7 +38,7 @@ struct AgentScope {
 #[derive(Parser)]
 #[command(
     name = "teamctl",
-    version,
+    version = env!("TEAMCTL_BUILD_VERSION"),
     about = "Declarative CLI for persistent AI agent teams",
     long_about = None,
     help_template = "\
