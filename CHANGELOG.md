@@ -6,6 +6,12 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ### Added
 
+- `teamctl --version` now self-identifies dev builds: a local build off a git
+  checkout reports the `git describe` form (`0.8.6-55-ge4adf50`, with `-dirty`
+  when the tree has uncommitted changes), so it's distinguishable from a clean
+  tagged release. Tagged releases still report the plain version (`0.8.7`), and
+  builds without git (extracted tarball, crates.io) fall back to the Cargo
+  version — the build never fails when git is absent. (#359)
 - `teamctl bot setup` gains a **managed-bots** path: set up one manager bot
   (Telegram Managed Bots, Bot API 9.6) and it spawns a child bot per manager for
   you — confirm one `t.me` link each instead of a separate BotFather trip. The
