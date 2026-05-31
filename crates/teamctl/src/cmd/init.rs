@@ -135,9 +135,7 @@ pub fn run(
         Some(k) if k == GUIDED_KEY => {
             // Explicit `--template guided` — confirm intent, then exec.
             // No scaffold, no project-id substitution.
-            if !confirm_with_default_no(
-                "This will open Claude Code and run `/teamctl:init`. Continue?",
-            )? {
+            if !confirm("This will open Claude Code and run `/teamctl:init`. Continue?")? {
                 bail!("aborted");
             }
             exec_guided()?;
@@ -166,9 +164,7 @@ pub fn run(
         Choice::Guided => {
             // Picker-selected guided: confirm + exec, same as the
             // explicit-flag branch above.
-            if !confirm_with_default_no(
-                "This will open Claude Code and run `/teamctl:init`. Continue?",
-            )? {
+            if !confirm("This will open Claude Code and run `/teamctl:init`. Continue?")? {
                 bail!("aborted");
             }
             exec_guided()?;
@@ -329,20 +325,15 @@ fn confirm(prompt: &str) -> Result<bool> {
     io::stderr().flush().ok();
     let mut line = String::new();
     io::stdin().lock().read_line(&mut line)?;
-    let s = line.trim().to_lowercase();
-    Ok(s.is_empty() || s == "y" || s == "yes")
+    Ok(answer_is_yes(&line))
 }
 
-/// `[y/N]`-shaped confirm: default is **No** on empty input. Used for
-/// the Guided exec-claude intent prompt where silent fall-through to
-/// "yes, open Claude Code" would be surprising.
-fn confirm_with_default_no(prompt: &str) -> Result<bool> {
-    eprint!("{prompt} [y/N] ");
-    io::stderr().flush().ok();
-    let mut line = String::new();
-    io::stdin().lock().read_line(&mut line)?;
+/// Parse a y/N answer with **Yes** as the empty-input default: a bare
+/// Enter proceeds. Pulled out of `confirm` so the default can be unit
+/// tested without driving real stdin.
+fn answer_is_yes(line: &str) -> bool {
     let s = line.trim().to_lowercase();
-    Ok(s == "y" || s == "yes")
+    s.is_empty() || s == "y" || s == "yes"
 }
 
 fn template_keys() -> String {

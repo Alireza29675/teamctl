@@ -7,9 +7,10 @@
 //! behavioural parity between `teamctl init --template guided` and
 //! `teamctl adjust`.
 //!
-//! Defaults to **No** on Enter. `--yes` is rejected because the skill
-//! itself is interactive — accepting `--yes` would just defer the
-//! surprise to the picker inside Claude Code (#206 Q3 stance).
+//! Defaults to **Yes** on Enter: the operator has already opted into the
+//! Claude Code path, so a bare Enter proceeds. `--yes` is still rejected
+//! because the skill itself is interactive — accepting it would just
+//! defer the surprise to the picker inside Claude Code (#206 Q3 stance).
 
 use std::process::Command;
 
@@ -27,7 +28,8 @@ const SKILL_ARG: &str = "/teamctl:adjust";
 /// (no install path, no `--no-prompt` flag — there's nothing this
 /// command can `cargo install`).
 pub trait AdjustHost {
-    /// Read a y/N answer. Caller wraps in the prompt text.
+    /// Read a Y/n answer (Yes is the empty-input default). Caller wraps
+    /// in the prompt text.
     fn prompt_yes_no(&self, question: &str) -> Result<bool>;
     /// Hand control to `claude` with the forwarded argv.
     fn exec_claude(&self, args: &[&str]) -> Result<()>;
@@ -52,7 +54,7 @@ pub fn run(yes: bool) -> Result<()> {
 pub fn run_with(host: &dyn AdjustHost) -> Result<()> {
     let go = host.prompt_yes_no(
         "This will open Claude Code and run `/teamctl:adjust` to help you evolve your team. \
-         Continue? [y/N] ",
+         Continue? [Y/n] ",
     )?;
     if !go {
         // Declining the prompt is not an error — ticket DoD: "If N,
@@ -64,6 +66,14 @@ pub fn run_with(host: &dyn AdjustHost) -> Result<()> {
         return Ok(());
     }
     host.exec_claude(&[SKILL_ARG])
+}
+
+/// Parse a Y/n answer with **Yes** as the empty-input default: a bare
+/// Enter proceeds. Pulled out of the host so the default is unit
+/// testable without driving real stdin.
+fn answer_is_yes(line: &str) -> bool {
+    let s = line.trim().to_lowercase();
+    s.is_empty() || s == "y" || s == "yes"
 }
 
 struct RealHost;
@@ -78,8 +88,7 @@ impl AdjustHost for RealHost {
         stdin()
             .read_line(&mut line)
             .context("read prompt response")?;
-        let s = line.trim();
-        Ok(matches!(s, "y" | "Y" | "yes" | "Yes" | "YES"))
+        Ok(answer_is_yes(&line))
     }
 
     fn exec_claude(&self, args: &[&str]) -> Result<()> {
@@ -170,6 +179,37 @@ mod tests {
         run_with(&host).expect("decline must exit cleanly, not error");
         assert!(host.exec_calls.borrow().is_empty());
         assert_eq!(*host.prompt_calls.borrow(), 1);
+    }
+
+    #[test]
+    fn empty_input_execs_claude() {
+        // #356: the confirm now defaults to Yes — a bare Enter proceeds.
+        // `answer_is_yes("")` is what the host returns for empty input;
+        // feeding it through run_with must take the exec branch, mirroring
+        // `y_execs_claude_with_skill_arg_only`.
+        let host = MockHost::new().with_answer(answer_is_yes(""));
+        run_with(&host).unwrap();
+        assert_eq!(
+            *host.exec_calls.borrow(),
+            vec![vec![SKILL_ARG.to_string()]],
+            "empty Enter must open Claude Code"
+        );
+        assert_eq!(*host.prompt_calls.borrow(), 1);
+    }
+
+    #[test]
+    fn answer_is_yes_defaults_to_yes_on_empty() {
+        // Empty / whitespace / y / yes (any case) → proceed; only an
+        // explicit n / no declines.
+        assert!(answer_is_yes(""));
+        assert!(answer_is_yes("\n"));
+        assert!(answer_is_yes("  "));
+        assert!(answer_is_yes("y"));
+        assert!(answer_is_yes("Y\n"));
+        assert!(answer_is_yes("yes"));
+        assert!(!answer_is_yes("n"));
+        assert!(!answer_is_yes("no"));
+        assert!(!answer_is_yes("N"));
     }
 
     #[test]
