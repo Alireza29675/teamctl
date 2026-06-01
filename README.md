@@ -1,11 +1,15 @@
 <h1 align="center">teamctl</h1>
 
+<br/>
+
 <p align="center">
   <strong>You build the perfect Claude Code setup, then it dies with the session.</strong><br/>
   <strong>You can't run it again, can't hand it to a teammate, can't pass it on.</strong><br/>
   <strong>teamctl lets you bottle it: your whole agent setup as something you</strong><br/>
   <strong>can run, share, and remix like a recipe.</strong>
 </p>
+
+<br/>
 
 You describe your team in YAML: who the agents are, what each one owns, and how they talk to each other. Each agent is a real Claude Code, Codex, or Gemini session with its own memory. `teamctl up` brings them up. Hand it to a teammate and they get the same team, not a screenshot of yours.
 
