@@ -529,6 +529,32 @@ impl RolePrompt {
     }
 }
 
+/// One per-agent Claude Code hook declared in compose (#383 Phase 2).
+///
+/// Maps onto Claude Code's `settings.json` hook shape: an `event` bucket
+/// (`PreToolUse`, `PostToolUse`, `Stop`, …) holding entries of
+/// `{ matcher, hooks: [{ type: "command", command }] }`. teamctl does not
+/// enumerate the runtime's event names — `event` is passed through
+/// verbatim so a new Claude Code event works without a teamctl release.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookSpec {
+    /// Claude Code hook event the command fires on, e.g. `PreToolUse`.
+    pub event: String,
+
+    /// Optional tool-name regex (`Bash`, `Edit|Write`). Omitted → the
+    /// hook matches every tool for the event, matching Claude Code's own
+    /// behavior when `matcher` is absent.
+    #[serde(default)]
+    pub matcher: Option<String>,
+
+    /// Compose-root-relative path to the hook command, resolved the same
+    /// way as `role_prompt: roles/x.md` and rendered into the settings
+    /// file as an absolute path. v1 is a single executable path (no
+    /// inline args) — matching the issue's `command: hooks/guard.sh`
+    /// shape.
+    pub command: PathBuf,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
     #[serde(default = "default_runtime")]
@@ -574,6 +600,17 @@ pub struct Agent {
     /// `reports_to`) — display_name is render-time only.
     #[serde(default)]
     pub display_name: Option<String>,
+
+    /// #383 Phase 2: per-agent Claude Code hooks, merged additively into
+    /// the per-agent `settings.json` that render already builds, on top
+    /// of the built-in interactive-prompt deny hook (which keeps
+    /// precedence — see `render::render_claude_settings`). Commands are
+    /// compose-root-relative paths, resolved like `role_prompt`.
+    /// claude-only v1: declared on a non-`claude-code` agent they render
+    /// nothing and render logs an "unsupported runtime" warning. Empty
+    /// (the default) → settings unchanged.
+    #[serde(default)]
+    pub hooks: Vec<HookSpec>,
 }
 
 /// Container for per-manager interface adapters. Open shape so adding

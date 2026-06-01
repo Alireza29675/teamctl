@@ -663,6 +663,7 @@ mod tests {
                 effort: None,
                 interfaces: None,
                 display_name: None,
+                hooks: vec![],
             },
         );
         Compose {

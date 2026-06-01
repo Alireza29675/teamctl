@@ -71,7 +71,7 @@ pub fn render_agent(
 /// — the wrapper decides whether to apply it. Returns `None` for runtimes
 /// that don't read Claude settings (codex, gemini, …).
 ///
-/// The current payload is a single `PreToolUse` deny hook covering the
+/// The base payload is a single `PreToolUse` deny hook covering the
 /// synchronous-prompt tools that today strand a headless pane:
 /// `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`. The `systemMessage`
 /// tells the model *why* the deny fired and points it at the `team` MCP
@@ -79,15 +79,34 @@ pub fn render_agent(
 /// sees the call vanish and may retry. Matcher is a regex; extend it
 /// (rather than the hook count) when claude-code gains new synchronous-
 /// prompt tools.
+///
+/// #383 Phase 2: per-agent hooks declared in compose (`Agent.hooks`) are
+/// merged on top of that base. Each declaration is appended as its own
+/// entry under its event, so the built-in deny hook keeps its slot and a
+/// user hook can extend behavior but not clobber the interactive-prompt
+/// deny. Hook commands are compose-root-relative and rendered absolute.
 pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<String> {
-    let _ = compose;
     if h.spec.runtime != "claude-code" {
+        // Hooks are a Claude-Code concept. On other runtimes the whole
+        // settings file is skipped; surface a warning so a declared-but-
+        // ignored hook isn't silently dropped (claude-only v1).
+        if !h.spec.hooks.is_empty() {
+            tracing::warn!(
+                target: "team-core::render",
+                "agent `{}:{}` declares {} hook(s) but runtime `{}` does not support hooks (claude-code only); ignoring",
+                h.project,
+                h.agent,
+                h.spec.hooks.len(),
+                h.spec.runtime
+            );
+        }
         return None;
     }
     // PreToolUse deny hook. Picked over `--disallowed-tools` so the
     // model sees the deny + systemMessage (tighter learning loop) rather
-    // than the tool silently vanishing from its catalog.
-    let v = serde_json::json!({
+    // than the tool silently vanishing from its catalog. Emitted first
+    // and never removed; declared hooks (below) are appended after it.
+    let mut v = serde_json::json!({
         "hooks": {
             "PreToolUse": [
                 {
@@ -102,6 +121,34 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
             ]
         }
     });
+
+    // #383 Phase 2: merge per-agent declared hooks on top. Each
+    // declaration becomes its own entry appended to its event's array, so
+    // the built-in deny hook above always keeps its slot. Commands are
+    // compose-root-relative (like `role_prompt`), rendered as absolute
+    // paths.
+    let hooks_obj = v["hooks"].as_object_mut().expect("hooks is a json object");
+    for hook in &h.spec.hooks {
+        let command = compose.root.join(&hook.command);
+        let mut entry = serde_json::json!({
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": command.display().to_string()
+                }
+            ]
+        });
+        if let Some(matcher) = &hook.matcher {
+            entry["matcher"] = serde_json::Value::String(matcher.clone());
+        }
+        hooks_obj
+            .entry(hook.event.clone())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+            .as_array_mut()
+            .expect("hook event maps to a json array")
+            .push(entry);
+    }
+
     Some(serde_json::to_string_pretty(&v).expect("json"))
 }
 
@@ -282,6 +329,7 @@ mod tests {
                 effort: None,
                 interfaces: None,
                 display_name: None,
+                hooks: vec![],
             },
         );
         Compose {
@@ -566,6 +614,108 @@ mod tests {
         c.projects[0].managers.get_mut("mgr").unwrap().runtime = "codex".into();
         let h = c.agents().next().unwrap();
         assert!(render_claude_settings(&c, h).is_none());
+    }
+
+    #[test]
+    fn declared_hook_merges_alongside_deny_hook() {
+        // #383 Phase 2: a per-agent hook is appended AFTER the built-in
+        // deny hook in the same PreToolUse bucket — the deny keeps slot 0
+        // and the command resolves compose-root-relative to absolute.
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().hooks = vec![HookSpec {
+            event: "PreToolUse".into(),
+            matcher: Some("Bash".into()),
+            command: PathBuf::from("hooks/guard.sh"),
+        }];
+        let h = c.agents().next().unwrap();
+        let s = render_claude_settings(&c, h).expect("claude-code agent must get settings");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        let pre = v["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 2, "deny hook + declared hook expected");
+        // Built-in deny hook survives in slot 0.
+        assert_eq!(
+            pre[0]["matcher"].as_str().unwrap(),
+            "AskUserQuestion|EnterPlanMode|ExitPlanMode"
+        );
+        assert!(pre[0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains(r#""permissionDecision":"deny""#));
+        // Declared hook appended after it.
+        assert_eq!(pre[1]["matcher"].as_str().unwrap(), "Bash");
+        assert_eq!(pre[1]["hooks"][0]["type"].as_str().unwrap(), "command");
+        assert_eq!(
+            pre[1]["hooks"][0]["command"].as_str().unwrap(),
+            "/teamctl/hooks/guard.sh"
+        );
+    }
+
+    #[test]
+    fn no_declared_hooks_leaves_settings_unchanged() {
+        // #383 Phase 2: empty `hooks` (the default) must render exactly
+        // the built-in deny hook and nothing else.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
+        let hooks = v["hooks"].as_object().unwrap();
+        assert_eq!(
+            hooks.len(),
+            1,
+            "only the built-in PreToolUse bucket expected"
+        );
+        assert_eq!(
+            hooks["PreToolUse"].as_array().unwrap().len(),
+            1,
+            "only the deny hook expected"
+        );
+    }
+
+    #[test]
+    fn declared_hook_without_matcher_opens_new_event_bucket() {
+        // #383 Phase 2: a hook on a fresh event (no matcher) creates its
+        // own bucket and omits `matcher` so Claude Code matches all tools;
+        // the deny hook's PreToolUse bucket is left untouched.
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().hooks = vec![HookSpec {
+            event: "PostToolUse".into(),
+            matcher: None,
+            command: PathBuf::from("hooks/log.sh"),
+        }];
+        let h = c.agents().next().unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
+        assert_eq!(v["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        let post = &v["hooks"]["PostToolUse"].as_array().unwrap()[0];
+        assert!(
+            post.get("matcher").is_none(),
+            "matcher must be omitted when unset: {post}"
+        );
+        assert_eq!(
+            post["hooks"][0]["command"].as_str().unwrap(),
+            "/teamctl/hooks/log.sh"
+        );
+    }
+
+    #[test]
+    fn declared_hooks_noop_on_non_claude_runtime() {
+        // #383 Phase 2: hooks are claude-only v1 — declared on codex the
+        // whole settings file is still skipped (render warns, returns None).
+        let mut c = fixture();
+        {
+            let m = c.projects[0].managers.get_mut("mgr").unwrap();
+            m.runtime = "codex".into();
+            m.hooks = vec![HookSpec {
+                event: "PreToolUse".into(),
+                matcher: Some("Bash".into()),
+                command: PathBuf::from("hooks/guard.sh"),
+            }];
+        }
+        let h = c.agents().next().unwrap();
+        assert!(
+            render_claude_settings(&c, h).is_none(),
+            "hooks must not render on non-claude runtimes"
+        );
     }
 
     #[test]
