@@ -80,12 +80,12 @@ fn choose_setup_mode(forced_manual: bool) -> Result<SetupMode> {
         return Ok(SetupMode::Manual);
     }
     println!("\nHow do you want to set up Telegram bots?");
-    println!("  1) Managed bots — one manager bot spawns a child bot per agent (needs a manager bot with Managed Bots enabled)");
-    println!("  2) Manual token — paste a BotFather token for each manager (the original flow)");
+    println!("  1) Manual token — paste a BotFather token for each manager (the original flow)");
+    println!("  2) Managed bots — one manager bot spawns a child bot per agent (needs a manager bot with Managed Bots enabled; the Telegram-side bot creation is rougher)");
     loop {
         match prompt("Choose [1/2]: ")?.trim() {
-            "1" => return Ok(SetupMode::Managed),
-            "2" | "" => return Ok(SetupMode::Manual),
+            "1" | "" => return Ok(SetupMode::Manual),
+            "2" => return Ok(SetupMode::Managed),
             other => println!("  `{other}` — please enter 1 or 2."),
         }
     }

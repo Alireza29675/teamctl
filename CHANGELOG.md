@@ -4,6 +4,12 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Changed
+
+- `teamctl bot setup` now leads with **manual token** as option 1 (the default
+  on a bare Enter) and **managed bots** as option 2 — the managed Telegram-side
+  bot creation is rougher, so new users aren't led down it first. (#366)
+
 ## [0.8.7] - 2026-06-01
 
 ### Added
