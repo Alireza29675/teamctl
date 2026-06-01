@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="docs/assets/hero.png" alt="teamctl" width="880">
-</p>
-
-<p align="center">
   <strong>You build the perfect Claude Code setup, then it dies with the session.</strong><br/>
   <strong>You can't run it again, can't hand it to a teammate, can't pass it on.</strong><br/>
   <strong>teamctl lets you bottle it: your whole agent setup as something you</strong><br/>
