@@ -1,10 +1,10 @@
-<p align="center"><img src="docs/assets/logo.png" alt="teamctl" width="760"/></p>
+<p align="center"><img src="docs/assets/logo.png" alt="teamctl" width="960"/></p>
 
 <br/>
 
 <p align="center">
   <strong>You build the perfect Claude Code setup, then it dies with the session.</strong><br/>
-  <strong>You can't run it again, can't hand it to a teammate, can't pass it on.</strong><br/>
+  <strong>You can't run it again, can't hand it to a teammate, can't pass it on.</strong><br/><br/>
   <strong>teamctl lets you bottle it: your whole agent setup as something you</strong><br/>
   <strong>can run, share, and remix like a recipe.</strong>
 </p>
