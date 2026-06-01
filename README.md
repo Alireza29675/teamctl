@@ -4,11 +4,11 @@
 
 # teamctl
 
-**A team of AI agents, collaborating over a messaging system, all declared in YAML. Persistent and scalable.**
+**You build the perfect Claude Code setup, then it dies with the session. You can't run it again, can't hand it to a teammate, can't pass it on. teamctl lets you bottle it: your whole agent setup as something you can run, share, and remix like a recipe.**
 
-Each agent is a real Claude Code, Codex, or Gemini session with its own identity, its own memory, and a domain it owns end-to-end. They talk to each other through a durable mailbox. They collaborate the way real teammates do: handing off, pushing back, picking up where the other left off, asking for help when they need it, keeping the work moving while you sleep. You stay in the loop on what matters through Telegram, the TUI, or the CLI.
+You describe your team in YAML: who the agents are, what each one owns, and how they talk to each other. Each agent is a real Claude Code, Codex, or Gemini session with its own memory. `teamctl up` brings them up. Hand it to a teammate and they get the same team, not a screenshot of yours.
 
-teamctl is built to scale agent-to-agent collaboration and solve bigger problems with better orchestration. Read [How to think about agent teams](https://teamctl.run/concepts/teams/) for the methodology. Or skip to the examples below.
+I built this for myself and I'm sharing it early. It's rough in places. Try it, and tell me where it breaks.
 
 ## Install
 
