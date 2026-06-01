@@ -42,7 +42,17 @@ fn splash_layout_at_120x30() {
     let app = fresh_app();
     assert_eq!(app.stage, Stage::Splash);
     let buf = render_to_buffer(&app, 120, 30);
-    insta::assert_snapshot!("splash_120x30", buffer_to_string(&buf));
+    // The splash line embeds the crate version (`v0.8.7`), so a version bump
+    // would otherwise re-break this snapshot and turn `cargo test --workspace`
+    // red on every release. Redact the version token to a placeholder before
+    // the assert so bumps never touch this snapshot again. Scoped to this test;
+    // layout/structure is still pinned (only the version token is normalized).
+    // (#377)
+    let mut settings = insta::Settings::clone_current();
+    settings.add_filter(r"v\d+\.\d+\.\d+", "v[VERSION]");
+    settings.bind(|| {
+        insta::assert_snapshot!("splash_120x30", buffer_to_string(&buf));
+    });
 }
 
 #[test]

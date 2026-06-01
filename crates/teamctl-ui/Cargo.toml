@@ -30,5 +30,5 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
-insta = "1"
+insta = { version = "1", features = ["filters"] }
 tempfile = "3"
