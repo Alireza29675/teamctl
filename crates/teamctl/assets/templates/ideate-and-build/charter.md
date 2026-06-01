@@ -1,8 +1,6 @@
 # Charter — Ideate & Build Team
 
-> The shared source of truth for the team. Every agent re-reads this at the
-> top of every loop. If your memory and this file disagree, this file wins.
-> Only the Executor edits it (on the operator's say-so).
+> The shared source of truth for the team. Every agent re-reads this at the top of every loop. If your memory and this file disagree, this file wins. Only the Executor edits it (on the operator's say-so).
 
 ## Active priorities
 
