@@ -355,6 +355,122 @@ fn init_essentials_template_scaffolds_two_project_tree() {
 }
 
 #[test]
+fn init_ideate_and_build_template_scaffolds_with_subagents() {
+    // T-382: the `ideate-and-build` template is the flagship showcase —
+    // its role prompts reference a stable of sub-agents that must
+    // actually ship. Pin the file shape so a template refactor can't
+    // silently drop a sub-agent markdown (which would leave the roles
+    // pointing at nothing), and assert the tree validates.
+    let tmp = tempdir().unwrap();
+    let out = Command::new(bin())
+        .current_dir(tmp.path())
+        .args(["init", "studio", "--template", "ideate-and-build", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "init ideate-and-build stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let team_dir = tmp.path().join("studio/.team");
+    for relpath in [
+        "team-compose.yaml",
+        "projects/main.yaml",
+        "charter.md",
+        "agents/code-investigator.md",
+        "agents/implementer.md",
+        "agents/test-author.md",
+        "agents/qa-tester.md",
+        "agents/pr-narrator.md",
+        "agents/code-roaster.md",
+        "agents/memory-writer.md",
+        "agents/product-researcher.md",
+        "agents/feasibility-analyst.md",
+        "agents/deep-research.md",
+        "agents/learn.md",
+    ] {
+        assert!(
+            team_dir.join(relpath).is_file(),
+            "ideate-and-build template must include {relpath}"
+        );
+    }
+
+    let validate = Command::new(bin())
+        .args(["--root", team_dir.to_str().unwrap(), "validate"])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "ideate-and-build template validate stderr: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+}
+
+#[test]
+fn ideate_and_build_template_renders_per_agent_subagents() {
+    // T-382: the `subagents:` declared in the template compose must
+    // resolve through the real render path into Claude Code's `--agents`
+    // JSON — not just exist as files. Load the shipped template compose
+    // straight from the crate assets and assert each agent gets exactly
+    // its declared stable (and the executor, which declares none, gets
+    // nothing). This is the authoritative check that the template's
+    // role-prompt sub-agent references are backed by real config.
+    let template =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/templates/ideate-and-build");
+    let compose = team_core::compose::Compose::load(&template).unwrap();
+
+    let expect_names = |agent: &str, expected: &[&str]| {
+        let h = compose
+            .agents()
+            .find(|h| h.agent == agent)
+            .unwrap_or_else(|| panic!("agent `{agent}` not found in template compose"));
+        let json = team_core::render::render_subagents(&compose, h)
+            .unwrap()
+            .unwrap_or_else(|| panic!("agent `{agent}` rendered no sub-agents"));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let obj = v.as_object().expect("agents json is an object");
+        let mut got: Vec<&str> = obj.keys().map(String::as_str).collect();
+        got.sort_unstable();
+        let mut want = expected.to_vec();
+        want.sort_unstable();
+        assert_eq!(got, want, "sub-agent set for `{agent}`");
+    };
+
+    let engineer_stable = [
+        "code-investigator",
+        "implementer",
+        "test-author",
+        "qa-tester",
+        "pr-narrator",
+        "code-roaster",
+    ];
+    expect_names("engineer_1", &engineer_stable);
+    expect_names("engineer_2", &engineer_stable);
+    expect_names(
+        "compass",
+        &[
+            "memory-writer",
+            "code-investigator",
+            "product-researcher",
+            "feasibility-analyst",
+            "deep-research",
+            "learn",
+        ],
+    );
+
+    // The Executor declares no sub-agents — render must yield None, not
+    // an empty object, so the wrapper omits `--agents` entirely.
+    let executor = compose.agents().find(|h| h.agent == "executor").unwrap();
+    assert!(
+        team_core::render::render_subagents(&compose, executor)
+            .unwrap()
+            .is_none(),
+        "executor declares no sub-agents; render must be None"
+    );
+}
+
+#[test]
 fn init_yes_without_template_defaults_to_essentials() {
     // T-206: the non-interactive default changed from `solo` to
     // `essentials`. Pin the contract — `--yes` with no `--template`
