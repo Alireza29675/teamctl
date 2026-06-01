@@ -66,7 +66,7 @@ version: 2
 project:
   id: service-desk
 
-# 📡 Slack-like channels: post once and everyone in the channel gets a realtime ping
+# 📡 Slack-like channels: agents in a channel can post messages and receive notifications
 channels:
   - name: all
     members: "*"
