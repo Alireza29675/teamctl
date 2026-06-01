@@ -66,6 +66,7 @@ version: 2
 project:
   id: service-desk
 
+# 📡 Slack-like channels: post once and everyone in the channel gets a realtime ping
 channels:
   - name: all
     members: "*"
