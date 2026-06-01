@@ -9,6 +9,8 @@
   <strong>can run, share, and remix like a recipe.</strong>
 </p>
 
+<br/>
+
 <p align="center">
   <a href="https://github.com/Alireza29675/teamctl/actions/workflows/ci.yml"><img src="https://github.com/Alireza29675/teamctl/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <a href="https://github.com/Alireza29675/teamctl/releases"><img src="https://img.shields.io/github/v/release/Alireza29675/teamctl" alt="Latest release"/></a>
