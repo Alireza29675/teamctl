@@ -28,6 +28,7 @@ fi
 : "${PERMISSION_MODE:=}"
 : "${CLAUDE_SETTINGS:=}"
 : "${MCP_CONFIG:=}"
+: "${CLAUDE_AGENTS_JSON:=}"
 : "${SYSTEM_PROMPT_PATH:=}"
 : "${CLAUDE_PROJECT_DIR:=.}"
 : "${TEAMCTL_ROOT:=$CLAUDE_PROJECT_DIR}"
@@ -201,6 +202,13 @@ while :; do
             # default). Empty string is treated as unset.
             [ -n "$EFFORT" ] && set -- "$@" --effort "$EFFORT"
             [ -n "$MCP_CONFIG" ] && set -- "$@" --mcp-config "$MCP_CONFIG"
+            # #383 Phase 3a: per-agent sub-agents. render writes the
+            # `--agents` JSON only when the agent declares `subagents:`, so
+            # the `[ -f ]` guard means no flag is passed when the file is
+            # absent. Command substitution passes the JSON as a single arg
+            # (embedded newlines preserved, `$`/backticks not re-expanded).
+            [ -n "$CLAUDE_AGENTS_JSON" ] && [ -f "$CLAUDE_AGENTS_JSON" ] && \
+                set -- "$@" --agents "$(cat "$CLAUDE_AGENTS_JSON")"
             # Subscribe to the team mailbox via Claude Code Channels
             # (v2.1.80+). team-mcp emits `notifications/claude/channel`
             # for every new inbox row, which lands in this session as

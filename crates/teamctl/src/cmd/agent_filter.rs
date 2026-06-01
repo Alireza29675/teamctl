@@ -138,6 +138,7 @@ mod tests {
             display_name: None,
             hooks: vec![],
             mcps: Default::default(),
+            subagents: vec![],
         }
     }
 
