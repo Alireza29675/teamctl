@@ -311,10 +311,10 @@ fn init_blank_template_scaffolds_minimal_tree() {
 #[test]
 fn init_essentials_template_scaffolds_two_project_tree() {
     // T-206: `essentials` ships a two-project layout — blank `main`
-    // for the operator + `ops` with the `builder` agent. Pins the
+    // for the operator + `ops` with the `ops` agent. Pins the
     // file shape so a future template refactor can't silently drop
     // any of the seven files, and asserts the tree validates so a
-    // typo in the builder's compose surfaces here.
+    // typo in the ops agent's compose surfaces here.
     let tmp = tempdir().unwrap();
     let out = Command::new(bin())
         .current_dir(tmp.path())
@@ -332,7 +332,7 @@ fn init_essentials_template_scaffolds_two_project_tree() {
         "team-compose.yaml",
         "projects/main.yaml",
         "projects/ops.yaml",
-        "roles/builder.md",
+        "roles/ops.md",
         ".env.example",
         ".gitignore",
         "README.md",
@@ -355,6 +355,122 @@ fn init_essentials_template_scaffolds_two_project_tree() {
 }
 
 #[test]
+fn init_ideate_and_build_template_scaffolds_with_subagents() {
+    // T-382: the `ideate-and-build` template is the flagship showcase —
+    // its role prompts reference a stable of sub-agents that must
+    // actually ship. Pin the file shape so a template refactor can't
+    // silently drop a sub-agent markdown (which would leave the roles
+    // pointing at nothing), and assert the tree validates.
+    let tmp = tempdir().unwrap();
+    let out = Command::new(bin())
+        .current_dir(tmp.path())
+        .args(["init", "studio", "--template", "ideate-and-build", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "init ideate-and-build stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let team_dir = tmp.path().join("studio/.team");
+    for relpath in [
+        "team-compose.yaml",
+        "projects/main.yaml",
+        "charter.md",
+        "agents/code-investigator.md",
+        "agents/implementer.md",
+        "agents/test-author.md",
+        "agents/qa-tester.md",
+        "agents/pr-narrator.md",
+        "agents/code-roaster.md",
+        "agents/memory-writer.md",
+        "agents/product-researcher.md",
+        "agents/feasibility-analyst.md",
+        "agents/deep-research.md",
+        "agents/learn.md",
+        "agents/pr-summarizer.md",
+        "agents/ideator.md",
+        "agents/code-review.md",
+        "agents/security-review.md",
+    ] {
+        assert!(
+            team_dir.join(relpath).is_file(),
+            "ideate-and-build template must include {relpath}"
+        );
+    }
+
+    let validate = Command::new(bin())
+        .args(["--root", team_dir.to_str().unwrap(), "validate"])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "ideate-and-build template validate stderr: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+}
+
+#[test]
+fn ideate_and_build_template_renders_per_agent_subagents() {
+    // T-382: the `subagents:` declared in the template compose must
+    // resolve through the real render path into Claude Code's `--agents`
+    // JSON — not just exist as files. Load the shipped template compose
+    // straight from the crate assets and assert each agent gets exactly
+    // its declared stable (and the executor, which declares none, gets
+    // nothing). This is the authoritative check that the template's
+    // role-prompt sub-agent references are backed by real config.
+    let template =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/templates/ideate-and-build");
+    let compose = team_core::compose::Compose::load(&template).unwrap();
+
+    let expect_names = |agent: &str, expected: &[&str]| {
+        let h = compose
+            .agents()
+            .find(|h| h.agent == agent)
+            .unwrap_or_else(|| panic!("agent `{agent}` not found in template compose"));
+        let json = team_core::render::render_subagents(&compose, h)
+            .unwrap()
+            .unwrap_or_else(|| panic!("agent `{agent}` rendered no sub-agents"));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let obj = v.as_object().expect("agents json is an object");
+        let mut got: Vec<&str> = obj.keys().map(String::as_str).collect();
+        got.sort_unstable();
+        let mut want = expected.to_vec();
+        want.sort_unstable();
+        assert_eq!(got, want, "sub-agent set for `{agent}`");
+    };
+
+    let engineer_stable = [
+        "code-investigator",
+        "implementer",
+        "test-author",
+        "qa-tester",
+        "pr-narrator",
+        "code-roaster",
+        "code-review",
+        "security-review",
+    ];
+    expect_names("engineer_1", &engineer_stable);
+    expect_names("engineer_2", &engineer_stable);
+    expect_names(
+        "compass",
+        &[
+            "memory-writer",
+            "code-investigator",
+            "product-researcher",
+            "feasibility-analyst",
+            "deep-research",
+            "learn",
+            "ideator",
+        ],
+    );
+    // The Executor gets a single sub-agent: pr-summarizer, so it can turn
+    // an engineer's ready PR into a plain-language summary for the operator.
+    expect_names("executor", &["pr-summarizer"]);
+}
+
+#[test]
 fn init_yes_without_template_defaults_to_essentials() {
     // T-206: the non-interactive default changed from `solo` to
     // `essentials`. Pin the contract — `--yes` with no `--template`
@@ -373,7 +489,7 @@ fn init_yes_without_template_defaults_to_essentials() {
     );
 
     let team_dir = tmp.path().join("starter/.team");
-    // The `ops` project file + `builder` role are essentials-only
+    // The `ops` project file + `ops` role are essentials-only
     // markers; their presence proves the default landed on
     // essentials, not blank.
     assert!(
@@ -381,8 +497,8 @@ fn init_yes_without_template_defaults_to_essentials() {
         "--yes default must land essentials (projects/ops.yaml missing)"
     );
     assert!(
-        team_dir.join("roles/builder.md").is_file(),
-        "--yes default must land essentials (roles/builder.md missing)"
+        team_dir.join("roles/ops.md").is_file(),
+        "--yes default must land essentials (roles/ops.md missing)"
     );
 }
 
@@ -426,7 +542,7 @@ fn init_force_overwrites_existing_dot_team_cleanly() {
     let tmp = tempdir().unwrap();
 
     // First init — seed with `essentials` so we have a richer tree
-    // (the `roles/builder.md` marker doubles as the wipe-check).
+    // (the `roles/ops.md` marker doubles as the wipe-check).
     let out = Command::new(bin())
         .current_dir(tmp.path())
         .args(["init", "myteam", "--template", "essentials", "--yes"])
@@ -461,12 +577,12 @@ fn init_force_overwrites_existing_dot_team_cleanly() {
     // The new template's structure is in place.
     assert!(team_dir.join("team-compose.yaml").is_file());
     assert!(team_dir.join("projects/main.yaml").is_file());
-    // The prior `essentials` template's roles/builder.md must be
+    // The prior `essentials` template's roles/ops.md must be
     // gone — `blank` has no roles/ so a stale file there would prove
     // --force merged rather than replaced.
     assert!(
-        !team_dir.join("roles/builder.md").exists(),
-        "prior essentials template's roles/builder.md should be wiped"
+        !team_dir.join("roles/ops.md").exists(),
+        "prior essentials template's roles/ops.md should be wiped"
     );
 }
 
@@ -990,7 +1106,7 @@ fn init_with_name_creates_team_folder_that_validates() {
     // T-045 / T-206: `teamctl init my-team --yes` should produce a
     // tree that `teamctl --root my-team/.team validate` accepts.
     // Default template under `--yes` is `essentials` post-T-206 —
-    // two projects (`main` + `ops`) with a single `builder` agent.
+    // two projects (`main` + `ops`) with a single `ops` agent.
     let tmp = tempdir().unwrap();
     let home = tempdir().unwrap();
 
@@ -1013,7 +1129,7 @@ fn init_with_name_creates_team_folder_that_validates() {
         "team-compose.yaml",
         "projects/main.yaml",
         "projects/ops.yaml",
-        "roles/builder.md",
+        "roles/ops.md",
         ".env.example",
         ".gitignore",
         "README.md",
@@ -1035,7 +1151,7 @@ fn init_with_name_creates_team_folder_that_validates() {
     );
     let stdout = String::from_utf8_lossy(&validate.stdout);
     // Essentials ships 2 projects (`main` + `ops`) and 1 agent
-    // (`builder`). The validate summary surfaces both counts.
+    // (`ops`). The validate summary surfaces both counts.
     assert!(
         stdout.contains("ok") && stdout.contains("2 projects") && stdout.contains("1 agent"),
         "unexpected validate output: {stdout}"

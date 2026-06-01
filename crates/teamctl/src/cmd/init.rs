@@ -4,20 +4,25 @@
 //! so a fresh `cd <name> && teamctl up` Just Works. Without `name`,
 //! scaffolds `.team/` directly in cwd (the legacy in-place flow).
 //!
-//! Three templates:
+//! Four templates:
 //!
+//! - `ideate-and-build` — a four-agent team (an Executor, a Compass
+//!   ideation partner, and two engineers) that thinks an idea through,
+//!   then builds it. The flagship; the interactive picker defaults to it.
 //! - `guided`     — ships no files; execs `claude /teamctl:init` so the
 //!   LLM-led conversational setup takes over.
 //! - `essentials` — two projects: a blank `main` for the operator + an
-//!   `ops` project with a `builder` agent that helps evolve `main` over
+//!   `ops` project with an `ops` agent that helps evolve `main` over
 //!   time.
 //! - `blank`      — empty compose tree for operators who know exactly
 //!   what they want.
 //!
 //! Templates are baked into the binary via `include_str!` so `init` works
 //! offline. When run interactively (no `--yes`), the user picks a
-//! template and confirms; the picker defaults to Guided. With `--yes`,
-//! the default is `essentials` — `guided` requires the interactive
+//! template and confirms; the picker shows Ideate & Build / Guided /
+//! Blank and defaults to Ideate & Build. `essentials` is intentionally
+//! hidden from the picker but stays reachable via `--template essentials`
+//! and remains the `--yes` default — `guided` requires the interactive
 //! confirmation step and `--template guided --yes` errors clearly.
 //! `--force` overwrites an existing `.team/` at the target path.
 
@@ -41,14 +46,133 @@ pub struct Template {
 /// keep it out of `TEMPLATES` and special-case the dispatch.
 pub const GUIDED_KEY: &str = "guided";
 
-/// File-shipping templates. Order matches picker display order
-/// (Essentials first, then Blank). `guided` is shown above these in
-/// the picker but handled out-of-band — see `choose_template_interactive`.
+/// File-shipping templates. `guided` is interleaved into the picker
+/// display but handled out-of-band — see `picker_menu` /
+/// `choose_template_interactive`. This array holds every template
+/// reachable via `--template` (including `essentials`, which is hidden
+/// from the interactive picker); its order is independent of display
+/// order, which `picker_menu` spells out explicitly.
 pub const TEMPLATES: &[Template] = &[
+    Template {
+        key: "ideate-and-build",
+        label: "Ideate & Build",
+        blurb: "An Executor, a Compass ideation partner, and two engineers — think it through, then build it.",
+        files: &[
+            (
+                "team-compose.yaml",
+                include_str!("../../assets/templates/ideate-and-build/team-compose.yaml"),
+            ),
+            (
+                "projects/main.yaml",
+                include_str!("../../assets/templates/ideate-and-build/projects/main.yaml"),
+            ),
+            (
+                "roles/_base.md",
+                include_str!("../../assets/templates/ideate-and-build/roles/_base.md"),
+            ),
+            (
+                "roles/_telegram.md",
+                include_str!("../../assets/templates/ideate-and-build/roles/_telegram.md"),
+            ),
+            (
+                "roles/_engineer.md",
+                include_str!("../../assets/templates/ideate-and-build/roles/_engineer.md"),
+            ),
+            (
+                "roles/executor.md",
+                include_str!("../../assets/templates/ideate-and-build/roles/executor.md"),
+            ),
+            (
+                "roles/compass.md",
+                include_str!("../../assets/templates/ideate-and-build/roles/compass.md"),
+            ),
+            // The sub-agents the engineer + Compass roles reference,
+            // rendered into Claude Code's `--agents` per agent via the
+            // `subagents:` field in projects/main.yaml.
+            (
+                "agents/code-investigator.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/code-investigator.md"),
+            ),
+            (
+                "agents/implementer.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/implementer.md"),
+            ),
+            (
+                "agents/test-author.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/test-author.md"),
+            ),
+            (
+                "agents/qa-tester.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/qa-tester.md"),
+            ),
+            (
+                "agents/pr-narrator.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/pr-narrator.md"),
+            ),
+            (
+                "agents/code-roaster.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/code-roaster.md"),
+            ),
+            (
+                "agents/memory-writer.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/memory-writer.md"),
+            ),
+            (
+                "agents/product-researcher.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/product-researcher.md"),
+            ),
+            (
+                "agents/feasibility-analyst.md",
+                include_str!(
+                    "../../assets/templates/ideate-and-build/agents/feasibility-analyst.md"
+                ),
+            ),
+            (
+                "agents/deep-research.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/deep-research.md"),
+            ),
+            (
+                "agents/learn.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/learn.md"),
+            ),
+            (
+                "agents/pr-summarizer.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/pr-summarizer.md"),
+            ),
+            (
+                "agents/ideator.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/ideator.md"),
+            ),
+            (
+                "agents/code-review.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/code-review.md"),
+            ),
+            (
+                "agents/security-review.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/security-review.md"),
+            ),
+            (
+                "charter.md",
+                include_str!("../../assets/templates/ideate-and-build/charter.md"),
+            ),
+            (
+                ".env.example",
+                include_str!("../../assets/templates/ideate-and-build/.env.example"),
+            ),
+            (
+                ".gitignore",
+                include_str!("../../assets/templates/_common/.gitignore"),
+            ),
+            (
+                "README.md",
+                include_str!("../../assets/templates/ideate-and-build/README.md"),
+            ),
+        ],
+    },
     Template {
         key: "essentials",
         label: "Essentials",
-        blurb: "A blank project + a builder bot that helps you evolve it.",
+        blurb: "A blank project + an ops bot that helps you evolve it.",
         files: &[
             (
                 "team-compose.yaml",
@@ -63,8 +187,8 @@ pub const TEMPLATES: &[Template] = &[
                 include_str!("../../assets/templates/essentials/projects/ops.yaml"),
             ),
             (
-                "roles/builder.md",
-                include_str!("../../assets/templates/essentials/roles/builder.md"),
+                "roles/ops.md",
+                include_str!("../../assets/templates/essentials/roles/ops.md"),
             ),
             (
                 ".env.example",
@@ -107,9 +231,34 @@ pub const TEMPLATES: &[Template] = &[
 
 /// The result of picker dispatch. `Guided` is the exec-claude path;
 /// `Template` is the scaffold-files path.
+#[derive(Clone, Copy)]
 enum Choice {
     Guided,
     Template(&'static Template),
+}
+
+/// The picker menu in display order: Ideate & Build, Guided, Blank.
+/// Guided is interleaved among the file-shipping templates, so the order
+/// is spelled out here rather than derived from `TEMPLATES` iteration.
+/// This is the single source of truth for both what the picker prints
+/// and how a typed number maps to a choice.
+///
+/// Note: `essentials` is intentionally NOT shown in the interactive
+/// picker (operator's call) — it stays in `TEMPLATES` so the
+/// `--template essentials` flag and `--yes` default keep working, and
+/// re-adding it to the menu is a one-line change here.
+fn picker_menu() -> Vec<Choice> {
+    let by_key = |k: &str| {
+        TEMPLATES
+            .iter()
+            .find(|t| t.key == k)
+            .unwrap_or_else(|| panic!("missing template `{k}` in TEMPLATES"))
+    };
+    vec![
+        Choice::Template(by_key("ideate-and-build")),
+        Choice::Guided,
+        Choice::Template(by_key("blank")),
+    ]
 }
 
 pub fn run(
@@ -273,22 +422,27 @@ fn exec_guided() -> Result<()> {
     Ok(())
 }
 
-/// Picker UX. Shows Guided / Essentials / Blank in that order with
-/// Guided as the default (Enter selects it). Returns a `Choice` so
-/// the caller can branch to exec-claude vs. file-scaffold paths.
+/// One-line label + blurb for a menu slot, for the picker display.
+fn choice_line(c: &Choice) -> (&'static str, &'static str) {
+    match c {
+        Choice::Guided => ("Guided", "LLM walks you through setup (opens Claude Code)"),
+        Choice::Template(t) => (t.label, t.blurb),
+    }
+}
+
+/// Picker UX. Shows Ideate & Build / Essentials / Guided / Blank in that
+/// order with Ideate & Build as the default (Enter selects it). Returns a
+/// `Choice` so the caller can branch to exec-claude vs. file-scaffold
+/// paths.
 ///
 /// On Guided selection, the confirm-intent prompt is handled by the
 /// caller (so the picker is pure-input → pure-output). That keeps
 /// this function testable without piping a `claude` mock.
 fn choose_template_interactive() -> Result<Choice> {
     eprintln!("Pick a template:");
-    eprintln!(
-        "  1) {:<14} — LLM walks you through setup (opens Claude Code)",
-        "Guided"
-    );
-    for (i, t) in TEMPLATES.iter().enumerate() {
-        // 1) is Guided, 2..) are the file-shipping templates.
-        eprintln!("  {}) {:<14} — {}", i + 2, t.label, t.blurb);
+    for (i, c) in picker_menu().iter().enumerate() {
+        let (label, blurb) = choice_line(c);
+        eprintln!("  {}) {:<16} — {}", i + 1, label, blurb);
     }
     eprint!("Choice [1]: ");
     io::stderr().flush().ok();
@@ -297,26 +451,19 @@ fn choose_template_interactive() -> Result<Choice> {
     Ok(parse_picker_input(line.trim()))
 }
 
-/// Pure-function picker dispatch. Empty input → Guided (default-on-Enter).
-/// "1" → Guided. "2" → first TEMPLATES entry (Essentials). "3" → second
-/// TEMPLATES entry (Blank). Anything unparseable or out-of-range falls
-/// back to Guided so accidental keystrokes land on the most-supported
-/// path rather than the bare-tree one.
+/// Pure-function picker dispatch over `picker_menu()` display order
+/// (1 = Ideate & Build, 2 = Essentials, 3 = Guided, 4 = Blank). Empty
+/// input → slot 1 (default-on-Enter = the flagship). Anything unparseable
+/// or out-of-range also falls back to slot 1 so accidental keystrokes
+/// land on the most-supported path rather than the bare-tree one.
 fn parse_picker_input(trimmed: &str) -> Choice {
+    let menu = picker_menu();
     if trimmed.is_empty() {
-        return Choice::Guided;
+        return menu[0];
     }
     match trimmed.parse::<usize>() {
-        Ok(1) => Choice::Guided,
-        Ok(n) => {
-            // n=2 → TEMPLATES[0], n=3 → TEMPLATES[1], ...
-            let idx = n.saturating_sub(2);
-            TEMPLATES
-                .get(idx)
-                .map(Choice::Template)
-                .unwrap_or(Choice::Guided)
-        }
-        Err(_) => Choice::Guided,
+        Ok(n) if n >= 1 => menu.get(n - 1).copied().unwrap_or(menu[0]),
+        _ => menu[0],
     }
 }
 
@@ -420,26 +567,29 @@ mod tests {
     }
 
     #[test]
-    fn picker_empty_input_defaults_to_guided() {
-        // T-206: Enter-with-no-input lands the operator on the
-        // most-supported path. Picking the bare-tree variant on a
-        // stray keystroke would be unfriendly.
-        assert!(matches!(parse_picker_input(""), Choice::Guided));
-    }
-
-    #[test]
-    fn picker_one_selects_guided() {
-        assert!(matches!(parse_picker_input("1"), Choice::Guided));
-    }
-
-    #[test]
-    fn picker_two_selects_essentials() {
-        // Essentials is the first entry in `TEMPLATES` (Guided lives
-        // out-of-band, displayed as `1` in the picker UI).
-        match parse_picker_input("2") {
-            Choice::Template(t) => assert_eq!(t.key, "essentials"),
-            _ => panic!("expected Choice::Template(essentials) for input `2`"),
+    fn picker_empty_input_defaults_to_ideate_and_build() {
+        // Menu order is Ideate & Build, Essentials, Guided, Blank. A bare
+        // Enter lands the operator on slot 1 — the flagship — which is the
+        // path we most want to be the default.
+        match parse_picker_input("") {
+            Choice::Template(t) => assert_eq!(t.key, "ideate-and-build"),
+            _ => panic!("expected Choice::Template(ideate-and-build) for empty input"),
         }
+    }
+
+    #[test]
+    fn picker_one_selects_ideate_and_build() {
+        match parse_picker_input("1") {
+            Choice::Template(t) => assert_eq!(t.key, "ideate-and-build"),
+            _ => panic!("expected Choice::Template(ideate-and-build) for input `1`"),
+        }
+    }
+
+    #[test]
+    fn picker_two_selects_guided() {
+        // Essentials is hidden from the picker, so Guided sits at slot 2
+        // (handled out-of-band by the caller).
+        assert!(matches!(parse_picker_input("2"), Choice::Guided));
     }
 
     #[test]
@@ -451,22 +601,59 @@ mod tests {
     }
 
     #[test]
-    fn picker_out_of_range_falls_back_to_guided() {
-        assert!(matches!(parse_picker_input("99"), Choice::Guided));
-        assert!(matches!(parse_picker_input("hello"), Choice::Guided));
+    fn picker_essentials_hidden_but_flag_still_resolves() {
+        // Essentials is not on the interactive menu, but `--template
+        // essentials` must still resolve to a real template.
+        assert!(
+            TEMPLATES.iter().any(|t| t.key == "essentials"),
+            "essentials must remain in TEMPLATES for the --template flag"
+        );
+        assert!(
+            !picker_menu()
+                .iter()
+                .any(|c| matches!(c, Choice::Template(t) if t.key == "essentials")),
+            "essentials must NOT appear in the interactive picker menu"
+        );
+    }
+
+    #[test]
+    fn picker_out_of_range_falls_back_to_ideate_and_build() {
+        // Out-of-range / unparseable lands on slot 1 (the default), same
+        // as a bare Enter.
+        for input in ["99", "0", "hello"] {
+            match parse_picker_input(input) {
+                Choice::Template(t) => assert_eq!(
+                    t.key, "ideate-and-build",
+                    "input `{input}` should fall back to the flagship"
+                ),
+                _ => panic!("expected Choice::Template(ideate-and-build) for input `{input}`"),
+            }
+        }
     }
 
     #[test]
     fn template_keys_lists_guided_first() {
-        // Error-message ordering matters: Guided is the picker-default
-        // and should be the first option the operator reads when they
-        // mistype `--template`.
+        // Error-message ordering matters: Guided leads the known-keys list
+        // the operator reads when they mistype `--template`.
         let keys = template_keys();
         assert!(
             keys.starts_with("guided"),
             "expected `guided` to lead; got `{keys}`"
         );
+        assert!(keys.contains("ideate-and-build"));
         assert!(keys.contains("essentials"));
         assert!(keys.contains("blank"));
+    }
+
+    #[test]
+    fn picker_menu_is_in_display_order() {
+        // The displayed menu order is load-bearing (it maps typed numbers
+        // to choices). Lock it: Ideate & Build, Guided, Blank. (Essentials
+        // is intentionally hidden — see `picker_menu`.)
+        let menu = picker_menu();
+        assert_eq!(menu.len(), 3);
+        assert!(matches!(menu[0], Choice::Template(t) if t.key == "ideate-and-build"));
+        assert!(matches!(menu[1], Choice::Guided));
+        assert!(matches!(menu[2], Choice::Template(t) if t.key == "blank"));
     }
 }
