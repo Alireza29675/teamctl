@@ -555,6 +555,29 @@ pub struct HookSpec {
     pub command: PathBuf,
 }
 
+/// One per-agent MCP server declared in compose (#383 Phase 4).
+///
+/// Serializes straight into the runtime's MCP config entry — `command` /
+/// `args` / `env` map onto the same shape the built-in `team` server
+/// emits. The HTTP (`url` / `headers`) transport variant is deferred
+/// (spike E2) until a concrete need lands.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServer {
+    /// Executable that launches the MCP server, resolved on `$PATH` by
+    /// the runtime (e.g. `npx`, `docker`).
+    pub command: String,
+
+    /// Arguments passed to `command`. Empty (the default) → `[]`.
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    /// Environment variables for the server process. Values pass through
+    /// verbatim — the runtime performs any `${VAR}` expansion, matching
+    /// how teamctl treats env elsewhere (render does no interpolation).
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
     #[serde(default = "default_runtime")]
@@ -611,6 +634,16 @@ pub struct Agent {
     /// (the default) → settings unchanged.
     #[serde(default)]
     pub hooks: Vec<HookSpec>,
+
+    /// #383 Phase 4: per-agent MCP servers, merged into the rendered
+    /// per-agent MCP config alongside the built-in `team` mailbox server
+    /// (which stays unconditional and non-clobberable — a declared server
+    /// named `team` is rejected at validate and skipped at render). Unlike
+    /// hooks, MCP is runtime-agnostic: declared servers render for every
+    /// runtime whose descriptor sets `supports_mcp`, and are skipped with
+    /// a warning otherwise. Empty (the default) → MCP config unchanged.
+    #[serde(default)]
+    pub mcps: BTreeMap<String, McpServer>,
 }
 
 /// Container for per-manager interface adapters. Open shape so adding

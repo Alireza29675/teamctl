@@ -276,7 +276,7 @@ pub fn write_role_prompt_concat(compose: &Compose, h: AgentHandle<'_>) -> io::Re
 
 fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> String {
     let mailbox = compose.root.join(&compose.global.broker.path);
-    let v = serde_json::json!({
+    let mut v = serde_json::json!({
         "mcpServers": {
             "team": {
                 "command": team_mcp_bin,
@@ -302,6 +302,49 @@ fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> Stri
             }
         }
     });
+
+    // #383 Phase 4: merge per-agent declared MCP servers alongside the
+    // built-in `team` server. Unlike hooks (claude-only), MCP is the
+    // runtime-agnostic bus, so declared servers render for every runtime
+    // whose descriptor sets `supports_mcp`. The `team` server is the
+    // mailbox transport: it stays unconditional and non-clobberable — a
+    // declared server named `team` is skipped here (and rejected at
+    // validate) so it can never shadow the bus. env values pass through
+    // verbatim; the runtime performs any `${VAR}` expansion.
+    if !h.spec.mcps.is_empty() {
+        let runtimes = crate::runtimes::load_all(&compose.root).unwrap_or_default();
+        // Fail open when the descriptor is missing: an unknown runtime is
+        // flagged at validate, and a load failure shouldn't silently drop
+        // declared servers.
+        let supports_mcp = runtimes
+            .get(h.spec.runtime.as_str())
+            .map(|r| r.supports_mcp)
+            .unwrap_or(true);
+        if supports_mcp {
+            let servers = v["mcpServers"]
+                .as_object_mut()
+                .expect("mcpServers is a json object");
+            for (name, server) in &h.spec.mcps {
+                if name == "team" {
+                    continue; // non-clobberable bus; validate rejects this too
+                }
+                servers.insert(
+                    name.clone(),
+                    serde_json::to_value(server).expect("serialize McpServer"),
+                );
+            }
+        } else {
+            tracing::warn!(
+                target: "team-core::render",
+                "agent `{}:{}` declares {} MCP server(s) but runtime `{}` does not set `supports_mcp`; ignoring",
+                h.project,
+                h.agent,
+                h.spec.mcps.len(),
+                h.spec.runtime
+            );
+        }
+    }
+
     serde_json::to_string_pretty(&v).expect("json")
 }
 
@@ -330,6 +373,7 @@ mod tests {
                 interfaces: None,
                 display_name: None,
                 hooks: vec![],
+                mcps: Default::default(),
             },
         );
         Compose {
@@ -487,6 +531,122 @@ mod tests {
             "a-",
             "prefix must come from compose, not the default"
         );
+    }
+
+    /// Build a `McpServer` test value tersely.
+    fn server(command: &str, args: &[&str]) -> McpServer {
+        McpServer {
+            command: command.into(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            env: Default::default(),
+        }
+    }
+
+    #[test]
+    fn mcp_json_includes_declared_servers_alongside_team() {
+        // #383 Phase 4: a declared server lands in `mcpServers` next to
+        // the built-in `team` server, with command/args/env passed
+        // through verbatim (no `${VAR}` expansion in render).
+        let mut c = fixture();
+        let mut mcps = BTreeMap::new();
+        let mut gh = server("npx", &["-y", "@modelcontextprotocol/server-github"]);
+        gh.env
+            .insert("GITHUB_TOKEN".into(), "${GITHUB_TOKEN}".into());
+        mcps.insert("github".into(), gh);
+        c.projects[0].managers.get_mut("mgr").unwrap().mcps = mcps;
+
+        let h = c.agents().next().unwrap();
+        let (_, mcp) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        let v: serde_json::Value = serde_json::from_str(&mcp).unwrap();
+
+        // Built-in team server survives untouched.
+        assert_eq!(
+            v["mcpServers"]["team"]["command"],
+            "/usr/local/bin/team-mcp"
+        );
+        // Declared server present with verbatim fields.
+        assert_eq!(v["mcpServers"]["github"]["command"], "npx");
+        assert_eq!(v["mcpServers"]["github"]["args"][0], "-y");
+        assert_eq!(
+            v["mcpServers"]["github"]["env"]["GITHUB_TOKEN"], "${GITHUB_TOKEN}",
+            "env values must pass through verbatim — the runtime expands ${{VAR}}"
+        );
+        assert_eq!(v["mcpServers"].as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn mcp_json_team_server_is_non_clobberable() {
+        // #383 Phase 4: a declared server literally named `team` must not
+        // shadow the built-in mailbox bus — render skips it (validate also
+        // rejects it). The `team` entry keeps the built-in command.
+        let mut c = fixture();
+        let mut mcps = BTreeMap::new();
+        mcps.insert("team".into(), server("evil-team", &[]));
+        mcps.insert("github".into(), server("npx", &[]));
+        c.projects[0].managers.get_mut("mgr").unwrap().mcps = mcps;
+
+        let h = c.agents().next().unwrap();
+        let (_, mcp) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        let v: serde_json::Value = serde_json::from_str(&mcp).unwrap();
+
+        assert_eq!(
+            v["mcpServers"]["team"]["command"], "/usr/local/bin/team-mcp",
+            "built-in team server must not be clobbered by a declared `team`"
+        );
+        assert!(v["mcpServers"]["github"].is_object());
+        assert_eq!(
+            v["mcpServers"].as_object().unwrap().len(),
+            2,
+            "the declared `team` is dropped, not added as a third entry"
+        );
+    }
+
+    #[test]
+    fn mcp_json_unchanged_when_no_servers_declared() {
+        // #383 Phase 4: empty `mcps` (the default) → only the built-in
+        // team server, exactly as before this feature.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let (_, mcp) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        let v: serde_json::Value = serde_json::from_str(&mcp).unwrap();
+        let servers = v["mcpServers"].as_object().unwrap();
+        assert_eq!(servers.len(), 1);
+        assert!(servers.contains_key("team"));
+    }
+
+    #[test]
+    fn mcp_json_skips_declared_servers_on_runtime_without_mcp_support() {
+        // #383 Phase 4: declared servers render only for runtimes whose
+        // descriptor sets `supports_mcp`. A custom runtime that opts out
+        // gets the team bus (unconditional) but not the declared servers.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("runtimes")).unwrap();
+        std::fs::write(
+            tmp.path().join("runtimes/codex.yaml"),
+            "binary: codex\nsupports_mcp: false\n",
+        )
+        .unwrap();
+
+        let mut c = fixture();
+        c.root = tmp.path().to_path_buf();
+        {
+            let m = c.projects[0].managers.get_mut("mgr").unwrap();
+            m.runtime = "codex".into();
+            let mut mcps = BTreeMap::new();
+            mcps.insert("github".into(), server("npx", &[]));
+            m.mcps = mcps;
+        }
+
+        let h = c.agents().next().unwrap();
+        let (_, mcp) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        let v: serde_json::Value = serde_json::from_str(&mcp).unwrap();
+        let servers = v["mcpServers"].as_object().unwrap();
+        assert!(servers.contains_key("team"), "team bus stays unconditional");
+        assert!(
+            !servers.contains_key("github"),
+            "declared server skipped when runtime lacks supports_mcp"
+        );
+        assert_eq!(servers.len(), 1);
     }
 
     #[test]
