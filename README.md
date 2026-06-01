@@ -35,8 +35,11 @@ Because teamctl runs your sessions, it can hand them tools they would not have o
 
 1. 🔀 **[Orchestration and a shared mailbox](https://teamctl.run/concepts/channels/):** agents coordinate and message each other through durable channels you can audit.
 2. ⚙️ **[Per-agent settings](https://teamctl.run/reference/team-compose-yaml/):** give each agent its own runtime, model, role, and tools.
-3. 🖥️ **[One UI for the whole team](https://teamctl.run/reference/teamctl/):** watch every agent in one place with `teamctl ui`.
+3. 🖥️ **[One terminal UI for the whole team](https://teamctl.run/reference/teamctl/):** watch every agent in one place with `teamctl ui`.
 4. 📱 **[Easy Telegram hookup](https://teamctl.run/guides/telegram-bot/):** steer your team from your phone (more interfaces on the way).
+5. ⏳ **(soon) Auto-recovery from rate limits:** teamctl can let your session know when its rate limit has cleared so it picks the work back up.
+
+> *These extras are optional. They are here to help fill the gaps as you design different agent setups.*
 
 ## 🧩 Examples
 
@@ -55,37 +58,57 @@ More under [`examples/`](examples/).
 
 ## 🧱 What a team looks like
 
-A project YAML with one manager and two workers (illustrative, not a full config):
+A project YAML with one manager and three workers (illustrative, not a full config):
 
 ```yaml
 version: 2
 
 project:
-  id: my-project
+  id: service-desk
 
 channels:
   - name: all
     members: "*"
+  - name: dev                 # 🔀 the two executors review each other's PRs here
+    members: [claude_exec, codex_exec]
 
 managers:
-  manager:
+  # 🛎️ your one manager: you chat with it on Telegram, it runs the show
+  service_desk:
     runtime: claude-code
     model: claude-opus-4-8
-    role_prompt: roles/manager.md
+    role_prompt: roles/service_desk.md
+    interfaces:
+      telegram:               # 📱 tap to talk to your team from your phone
+        bot_token_env: TEAMCTL_TG_TOKEN
+        chat_ids_env: TEAMCTL_TG_CHATS
 
 workers:
-  dev:
+  # 🤖 a Claude executor: ships work and reviews the Codex executor's PRs
+  claude_exec:
+    runtime: claude-code
+    model: claude-opus-4-8
+    role_prompt: roles/executor.md
+    reports_to: service_desk
+    subagents:                # 🧩 give an agent its own sub-agents (claude-code)
+      - agents/researcher.md
+  # 🤖 a Codex executor: the other half of the review loop
+  codex_exec:
     runtime: codex
     model: gpt-5-codex
-    role_prompt: roles/dev.md
-    reports_to: manager
-
-  researcher:
+    role_prompt: roles/executor.md
+    reports_to: service_desk
+  # 🔭 autonomous discovery: keeps finding and prototyping ideas
+  research:
     runtime: claude-code
     model: claude-sonnet-4-6
-    role_prompt: roles/researcher.md
-    reports_to: manager
+    role_prompt: roles/research.md
+    reports_to: service_desk
+    subagents:
+      - agents/researcher.md
 ```
+
+> *All of this lives in a .team/ folder in your project, so you can read it, version it, and share it.*
 
 Then:
 
