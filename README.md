@@ -139,6 +139,17 @@ teamctl ui          # watch them work
 teamctl status      # is everyone alive?
 ```
 
+## 🩺 Diagnosing your setup
+
+`teamctl ui` opens a live control room for the whole team: who is up, what each agent is working on right now, and every message moving between them. `teamctl status` gives you the same health check from the command line.
+
+|  |  |
+|:---:|:---:|
+| <img src="docs/assets/ui/control-room.png" width="420"/> | <img src="docs/assets/ui/agent-detail.png" width="420"/> |
+| **Control room:** roster, the agent you picked, and the live mailbox in one view | **One agent up close:** read a single agent's full stream of work |
+| <img src="docs/assets/ui/type-into-pane.png" width="420"/> | <img src="docs/assets/ui/splash.png" width="420"/> |
+| **Jump in:** drop into any agent's pane and type to it directly | **At a glance:** the dashboard when you open `teamctl ui` |
+
 ## 📚 Learn more
 
 - 📖 [How to think about agent teams](https://teamctl.run/concepts/teams/) for the methodology behind team design.
