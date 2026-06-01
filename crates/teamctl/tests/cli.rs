@@ -311,10 +311,10 @@ fn init_blank_template_scaffolds_minimal_tree() {
 #[test]
 fn init_essentials_template_scaffolds_two_project_tree() {
     // T-206: `essentials` ships a two-project layout — blank `main`
-    // for the operator + `ops` with the `builder` agent. Pins the
+    // for the operator + `ops` with the `ops` agent. Pins the
     // file shape so a future template refactor can't silently drop
     // any of the seven files, and asserts the tree validates so a
-    // typo in the builder's compose surfaces here.
+    // typo in the ops agent's compose surfaces here.
     let tmp = tempdir().unwrap();
     let out = Command::new(bin())
         .current_dir(tmp.path())
@@ -332,7 +332,7 @@ fn init_essentials_template_scaffolds_two_project_tree() {
         "team-compose.yaml",
         "projects/main.yaml",
         "projects/ops.yaml",
-        "roles/builder.md",
+        "roles/ops.md",
         ".env.example",
         ".gitignore",
         "README.md",
@@ -373,7 +373,7 @@ fn init_yes_without_template_defaults_to_essentials() {
     );
 
     let team_dir = tmp.path().join("starter/.team");
-    // The `ops` project file + `builder` role are essentials-only
+    // The `ops` project file + `ops` role are essentials-only
     // markers; their presence proves the default landed on
     // essentials, not blank.
     assert!(
@@ -381,8 +381,8 @@ fn init_yes_without_template_defaults_to_essentials() {
         "--yes default must land essentials (projects/ops.yaml missing)"
     );
     assert!(
-        team_dir.join("roles/builder.md").is_file(),
-        "--yes default must land essentials (roles/builder.md missing)"
+        team_dir.join("roles/ops.md").is_file(),
+        "--yes default must land essentials (roles/ops.md missing)"
     );
 }
 
@@ -426,7 +426,7 @@ fn init_force_overwrites_existing_dot_team_cleanly() {
     let tmp = tempdir().unwrap();
 
     // First init — seed with `essentials` so we have a richer tree
-    // (the `roles/builder.md` marker doubles as the wipe-check).
+    // (the `roles/ops.md` marker doubles as the wipe-check).
     let out = Command::new(bin())
         .current_dir(tmp.path())
         .args(["init", "myteam", "--template", "essentials", "--yes"])
@@ -461,12 +461,12 @@ fn init_force_overwrites_existing_dot_team_cleanly() {
     // The new template's structure is in place.
     assert!(team_dir.join("team-compose.yaml").is_file());
     assert!(team_dir.join("projects/main.yaml").is_file());
-    // The prior `essentials` template's roles/builder.md must be
+    // The prior `essentials` template's roles/ops.md must be
     // gone — `blank` has no roles/ so a stale file there would prove
     // --force merged rather than replaced.
     assert!(
-        !team_dir.join("roles/builder.md").exists(),
-        "prior essentials template's roles/builder.md should be wiped"
+        !team_dir.join("roles/ops.md").exists(),
+        "prior essentials template's roles/ops.md should be wiped"
     );
 }
 
@@ -990,7 +990,7 @@ fn init_with_name_creates_team_folder_that_validates() {
     // T-045 / T-206: `teamctl init my-team --yes` should produce a
     // tree that `teamctl --root my-team/.team validate` accepts.
     // Default template under `--yes` is `essentials` post-T-206 —
-    // two projects (`main` + `ops`) with a single `builder` agent.
+    // two projects (`main` + `ops`) with a single `ops` agent.
     let tmp = tempdir().unwrap();
     let home = tempdir().unwrap();
 
@@ -1013,7 +1013,7 @@ fn init_with_name_creates_team_folder_that_validates() {
         "team-compose.yaml",
         "projects/main.yaml",
         "projects/ops.yaml",
-        "roles/builder.md",
+        "roles/ops.md",
         ".env.example",
         ".gitignore",
         "README.md",
@@ -1035,7 +1035,7 @@ fn init_with_name_creates_team_folder_that_validates() {
     );
     let stdout = String::from_utf8_lossy(&validate.stdout);
     // Essentials ships 2 projects (`main` + `ops`) and 1 agent
-    // (`builder`). The validate summary surfaces both counts.
+    // (`ops`). The validate summary surfaces both counts.
     assert!(
         stdout.contains("ok") && stdout.contains("2 projects") && stdout.contains("1 agent"),
         "unexpected validate output: {stdout}"

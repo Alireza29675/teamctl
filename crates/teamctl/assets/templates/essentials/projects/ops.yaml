@@ -1,6 +1,6 @@
 # projects/ops.yaml — the helper team.
 #
-# One agent, `builder`, whose job is to scaffold and evolve `main`
+# One agent, `ops`, whose job is to scaffold and evolve `main`
 # for you. Talk to it on Telegram once you've wired the bot token
 # (see `.env.example`).
 #
@@ -19,21 +19,21 @@ channels:
     members: "*"
 
 managers:
-  builder:
+  ops:
     runtime: claude-code
     model: claude-opus-4-8
-    role_prompt: roles/builder.md
-    # `auto` lets the builder run tools without per-action HITL;
+    role_prompt: roles/ops.md
+    # `auto` lets the ops agent run tools without per-action HITL;
     # `low_risk_only` keeps destructive operations (rm, force, push)
     # behind a `request_approval` gate, which lands in your Telegram
-    # chat with the builder.
+    # chat with the ops agent.
     permission_mode: auto
     autonomy: low_risk_only
     can_dm: []
     can_broadcast: [all]
     interfaces:
       telegram:
-        bot_token_env: TEAMCTL_TG_BUILDER_TOKEN
-        chat_ids_env: TEAMCTL_TG_BUILDER_CHATS
+        bot_token_env: TEAMCTL_TG_OPS_TOKEN
+        chat_ids_env: TEAMCTL_TG_OPS_CHATS
 
 workers: {}

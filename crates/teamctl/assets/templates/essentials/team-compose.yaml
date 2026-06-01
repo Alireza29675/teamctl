@@ -1,9 +1,9 @@
 # team-compose.yaml — top-level team declaration.
 #
 # Essentials ships two projects:
-#   - `main` is your team. It starts blank — the `builder` helps you
+#   - `main` is your team. It starts blank — the `ops` agent helps you
 #     populate it over time.
-#   - `ops` is the helper team. It has one agent, `builder`, whose
+#   - `ops` is the helper team. It has one agent, `ops`, whose
 #     job is to evolve `main` for you.
 #
 # Move/rename this file and `teamctl up` stops finding the team.

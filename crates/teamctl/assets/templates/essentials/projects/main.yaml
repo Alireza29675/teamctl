@@ -1,12 +1,12 @@
 # projects/main.yaml — your project.
 #
-# Starts blank on purpose. Message the `builder` agent in the `ops`
+# Starts blank on purpose. Message the `ops` agent in the `ops`
 # project (Telegram, once you've wired the bot) and tell it what kind
-# of team you want. The builder will add managers, workers, channels,
+# of team you want. The ops agent will add managers, workers, channels,
 # and role files for you, then run `teamctl reload` so the change is
 # live.
 #
-# You can edit this file by hand any time — both you and the builder
+# You can edit this file by hand any time — both you and the ops agent
 # share write access.
 
 version: 2

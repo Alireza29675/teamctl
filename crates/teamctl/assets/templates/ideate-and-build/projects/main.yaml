@@ -1,0 +1,114 @@
+# projects/main.yaml — the Ideate & Build team.
+#
+# Four agents: the Executor (manager you talk to on Telegram), Compass
+# (manager, a private one-way ideation partner), and two engineers
+# (workers who do the building). Product-agnostic on purpose — nothing
+# here names a codebase. The Executor onboards you and writes what
+# you're building into `charter.md`.
+
+version: 2
+
+project:
+  id: main
+  name: Ideate & Build
+  # The repo this team operates on is the one `.team/` lives inside.
+  # `..` resolves to the parent of this `.team/` directory.
+  cwd: ..
+
+channels:
+  # The build team — announcements, status, coordination. Explicit list
+  # (not '*') so Compass stays out: it's a private, one-way line to the
+  # Executor, not a team member.
+  - name: all
+    members:
+      - executor
+      - engineer_1
+      - engineer_2
+  # Engineers-only room. Where the two engineers coordinate, trade
+  # heads-ups before touching the same area, and sharpen each other's
+  # work. The Executor is not a member — this is theirs.
+  - name: eng
+    members:
+      - engineer_1
+      - engineer_2
+
+managers:
+  executor:
+    display_name: Executor
+    runtime: claude-code
+    role_prompt:
+      - roles/_base.md
+      - roles/_telegram.md
+      - roles/executor.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    can_dm:
+      - engineer_1
+      - engineer_2
+    can_broadcast:
+      - all
+    # The 1:1 Telegram bot you talk to. `teamctl bot setup` fills these
+    # env vars in.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_EXECUTOR_TOKEN
+        chat_ids_env: TEAMCTL_TG_EXECUTOR_CHATS
+
+  # Ideation partner. You talk to it directly (text or voice); it helps
+  # you figure out what to build next and shapes each idea before it
+  # reaches the build team. One-way to the Executor: it can DM a shaped
+  # idea over, but the Executor can't DM back (not in executor.can_dm)
+  # and can't reach it on a channel (not in `all`). It never instructs
+  # the Executor on its own. Use a SEPARATE Telegram bot from the
+  # Executor.
+  compass:
+    display_name: Compass
+    runtime: claude-code
+    role_prompt:
+      - roles/_base.md
+      - roles/_telegram.md
+      - roles/compass.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    can_dm:
+      - executor
+    can_broadcast: []
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_COMPASS_TOKEN
+        chat_ids_env: TEAMCTL_TG_COMPASS_CHATS
+
+workers:
+  # Both engineers run the identical role — only their number differs.
+  # They figure out which one they are from their own id.
+  engineer_1:
+    display_name: Engineer 1
+    runtime: claude-code
+    role_prompt:
+      - roles/_base.md
+      - roles/_engineer.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    reports_to: executor
+    can_dm:
+      - executor
+      - engineer_2
+    can_broadcast:
+      - all
+      - eng
+
+  engineer_2:
+    display_name: Engineer 2
+    runtime: claude-code
+    role_prompt:
+      - roles/_base.md
+      - roles/_engineer.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    reports_to: executor
+    can_dm:
+      - executor
+      - engineer_1
+    can_broadcast:
+      - all
+      - eng

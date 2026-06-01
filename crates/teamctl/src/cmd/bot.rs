@@ -1343,10 +1343,10 @@ mod tests {
     #[test]
     fn fresh_essentials_team_bot_setup_yields_resolvable_bridge_spec() {
         // #311 repro. Materialize the REAL shipped `essentials` scaffold
-        // (main + ops; `ops:builder` pre-wired with the
-        // TEAMCTL_TG_BUILDER_{TOKEN,CHATS} env-var names), reproduce the
+        // (main + ops; `ops:ops` pre-wired with the
+        // TEAMCTL_TG_OPS_{TOKEN,CHATS} env-var names), reproduce the
         // two persistence side-effects of `bot setup`'s `wizard_one`
-        // for ops:builder (write_env_file + upsert_manager_telegram),
+        // for ops:ops (write_env_file + upsert_manager_telegram),
         // reload the compose exactly as `teamctl up` does, and assert
         // the Telegram bridge would receive a usable, resolvable spec.
         //
@@ -1379,43 +1379,39 @@ mod tests {
 
         assert_eq!(
             all_managers(&compose),
-            vec!["ops:builder".to_string()],
-            "essentials must expose exactly ops:builder to `bot setup`"
+            vec!["ops:ops".to_string()],
+            "essentials must expose exactly ops:ops to `bot setup`"
         );
 
         // The scaffold pre-wires the env-var names; `bot setup` reuses
         // them verbatim (env_names_chosen_by_user == false path).
-        let (tok_env, chats_env) = manager_telegram(&compose, "ops:builder")
-            .expect("essentials pre-wires ops:builder's telegram env-var names");
-        assert_eq!(tok_env, "TEAMCTL_TG_BUILDER_TOKEN");
-        assert_eq!(chats_env, "TEAMCTL_TG_BUILDER_CHATS");
+        let (tok_env, chats_env) = manager_telegram(&compose, "ops:ops")
+            .expect("essentials pre-wires ops:ops's telegram env-var names");
+        assert_eq!(tok_env, "TEAMCTL_TG_OPS_TOKEN");
+        assert_eq!(chats_env, "TEAMCTL_TG_OPS_CHATS");
 
         write_env_file(&team, &tok_env, "123456:FAKE-TOKEN", &chats_env, "99001122").unwrap();
-        upsert_manager_telegram(&compose, "ops:builder", &tok_env, &chats_env).unwrap();
+        upsert_manager_telegram(&compose, "ops:ops", &tok_env, &chats_env).unwrap();
 
         // Reload exactly as `teamctl up` does, then build bridge specs.
         let compose = Compose::load(&team).expect("compose reloads after bot setup");
         let specs = bot_specs(&compose);
-        assert_eq!(
-            specs.len(),
-            1,
-            "exactly one bot spec (ops:builder) expected"
-        );
+        assert_eq!(specs.len(), 1, "exactly one bot spec (ops:ops) expected");
         let spec = &specs[0];
-        assert_eq!(spec.manager, "ops:builder");
-        assert_eq!(spec.token_env, "TEAMCTL_TG_BUILDER_TOKEN");
-        assert_eq!(spec.chats_env, "TEAMCTL_TG_BUILDER_CHATS");
+        assert_eq!(spec.manager, "ops:ops");
+        assert_eq!(spec.token_env, "TEAMCTL_TG_OPS_TOKEN");
+        assert_eq!(spec.chats_env, "TEAMCTL_TG_OPS_CHATS");
 
         // up_one() resolves spec.token_env from the sourced .team/.env.
         // File-based assertion (parallel-safe, matching
         // write_env_file_replaces_in_place).
         let env_body = std::fs::read_to_string(team.join(".env")).unwrap();
         assert!(
-            env_body.contains("TEAMCTL_TG_BUILDER_TOKEN=123456:FAKE-TOKEN"),
+            env_body.contains("TEAMCTL_TG_OPS_TOKEN=123456:FAKE-TOKEN"),
             "the bot token the bridge resolves must be persisted to .team/.env:\n{env_body}"
         );
         assert!(
-            env_body.contains("TEAMCTL_TG_BUILDER_CHATS=99001122"),
+            env_body.contains("TEAMCTL_TG_OPS_CHATS=99001122"),
             "the authorized chat id must be persisted to .team/.env:\n{env_body}"
         );
 
@@ -1425,11 +1421,11 @@ mod tests {
         let parsed: team_core::compose::Project = serde_yaml::from_str(&ops_yaml).unwrap();
         let tg = parsed
             .managers
-            .get("builder")
+            .get("ops")
             .and_then(|a| a.telegram())
-            .expect("ops:builder telegram must survive the upsert and re-parse");
-        assert_eq!(tg.bot_token_env, "TEAMCTL_TG_BUILDER_TOKEN");
-        assert_eq!(tg.chat_ids_env, "TEAMCTL_TG_BUILDER_CHATS");
+            .expect("ops:ops telegram must survive the upsert and re-parse");
+        assert_eq!(tg.bot_token_env, "TEAMCTL_TG_OPS_TOKEN");
+        assert_eq!(tg.chat_ids_env, "TEAMCTL_TG_OPS_CHATS");
     }
 
     #[test]

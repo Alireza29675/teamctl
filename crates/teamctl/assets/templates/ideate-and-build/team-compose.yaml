@@ -1,0 +1,42 @@
+# Ideate & Build — think it through, then build it.
+#
+# A four-agent team scaffolded by `teamctl init` (ideate-and-build
+# template): an Executor you talk to on Telegram, a Compass ideation
+# partner on a separate private bot, and two engineers who do the
+# building. On first contact the Executor onboards you — what are we
+# building, and how much autonomy do you want — and writes the answers
+# into `charter.md`, which every agent re-reads on its loop.
+#
+# Move/rename this file and `teamctl up` stops finding the team.
+
+version: "2.0.0"
+
+# SQLite mailbox at `state/mailbox.db` (relative to this file).
+# `state/` is gitignored — runtime state never leaves the host.
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+# Tmux supervisor — one detached session per agent. `ib-` (ideate &
+# build) scopes session names so they read cleanly in `tmux ls`. Change
+# it if you want to run two teams on the same host.
+supervisor:
+  type: tmux
+  tmux_prefix: ib-
+
+# Actions that always pause for your explicit approval, no matter what.
+# The engineers and Executor honour these as hard gates: nothing ships,
+# merges, or reaches the outside world without your tap.
+hitl:
+  globally_sensitive_actions:
+    - merge_to_main
+    - release
+    - deploy
+    - publish
+    - payment
+    - external_email
+    - external_api_post
+    - dns_change
+
+projects:
+  - file: projects/main.yaml
