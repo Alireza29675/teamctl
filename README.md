@@ -1,4 +1,4 @@
-<h1 align="center">teamctl</h1>
+<h1 align="center">🫙 teamctl</h1>
 
 <br/>
 
