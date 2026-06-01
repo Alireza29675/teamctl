@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: Writes the diff for a precise, well-scoped spec. Use once you know exactly what to change and want the code typed — "implement this: <spec>". You provide the spec and the judgment; it produces the change.
+description: 'Writes the diff for a precise, well-scoped spec. Use once you know exactly what to change and want the code typed — "implement this: <spec>". You provide the spec and the judgment; it produces the change.'
 tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 
