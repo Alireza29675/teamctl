@@ -345,6 +345,7 @@ mod tests {
                 hooks: vec![],
                 mcps: Default::default(),
                 subagents: vec![],
+                skills: vec![],
             },
         );
         let mut workers = BTreeMap::new();
@@ -366,6 +367,7 @@ mod tests {
                 hooks: vec![],
                 mcps: Default::default(),
                 subagents: vec![],
+                skills: vec![],
             },
         );
         Compose {

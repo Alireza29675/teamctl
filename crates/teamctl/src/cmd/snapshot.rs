@@ -666,6 +666,7 @@ mod tests {
                 hooks: vec![],
                 mcps: Default::default(),
                 subagents: vec![],
+                skills: vec![],
             },
         );
         Compose {

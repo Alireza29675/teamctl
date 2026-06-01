@@ -56,6 +56,18 @@ pub fn subagents_json_path(root: &Path, project: &str, agent: &str) -> PathBuf {
         .join(format!("{project}-{agent}.agents.json"))
 }
 
+/// Absolute path to the per-agent scope directory passed to Claude Code
+/// via `--add-dir` (#383 Phase 3b). render materializes
+/// `<this>/.claude/skills/<name>` symlinks to each declared skill; the
+/// wrapper adds `--add-dir <this>` so the agent discovers them on top of
+/// the project `.claude/skills/`. The directory is materialized only when
+/// the agent declares `skills:`; the wrapper's `[ -d ]` guard decides
+/// whether the flag is passed.
+pub fn agent_scope_dir(root: &Path, project: &str, agent: &str) -> PathBuf {
+    root.join("state/agent-scope")
+        .join(format!("{project}-{agent}"))
+}
+
 /// Absolute path to the materialized concatenation of a multi-file
 /// `role_prompt` list. Only ever written for the list form — single-file
 /// `role_prompt` keeps pointing at its source path directly.
@@ -255,6 +267,106 @@ pub fn write_subagents_json(compose: &Compose, h: AgentHandle<'_>) -> io::Result
     }
 }
 
+/// Materialize (or clear) the per-agent skills scope for one agent (#383
+/// Phase 3b). For a claude-code agent declaring `skills:`, this creates
+/// `state/agent-scope/<project>-<agent>/.claude/skills/` and symlinks each
+/// declared skill directory into it (link name = the skill dir's basename),
+/// so `claude --add-dir <scope>` surfaces them additively atop the project
+/// `.claude/skills/`. Mirrors [`write_subagents_json`]: the scoped + full
+/// render paths both call it, and the skills dir is rebuilt from scratch
+/// every render so a renamed or dropped skill never lingers. When the agent
+/// declares no skills (or isn't claude-code) the scope dir is removed if
+/// present.
+///
+/// Symlink targets are absolute (compose-root-relative input resolved
+/// against `compose.root`); a missing source becomes a dangling link rather
+/// than an error, matching how `role_prompt`/`hooks` treat not-yet-created
+/// paths (existence checks across all path-typed fields are a tracked
+/// follow-up). Clearing always unlinks entries individually — render never
+/// hands a symlink to `remove_dir_all`, so a skill's real files are never
+/// followed or deleted.
+pub fn write_agent_skills(compose: &Compose, h: AgentHandle<'_>) -> io::Result<()> {
+    let scope = agent_scope_dir(&compose.root, h.project, h.agent);
+    let skills_dir = scope.join(".claude/skills");
+
+    if h.spec.runtime != "claude-code" || h.spec.skills.is_empty() {
+        if h.spec.runtime != "claude-code" && !h.spec.skills.is_empty() {
+            // Skills are a Claude-Code concept; surface a warning so a
+            // declared-but-ignored skill isn't silently dropped (claude-
+            // only v1, same shape as hooks/sub-agents).
+            tracing::warn!(
+                target: "team-core::render",
+                "agent `{}:{}` declares {} skill(s) but runtime `{}` does not support skills (claude-code only); ignoring",
+                h.project,
+                h.agent,
+                h.spec.skills.len(),
+                h.spec.runtime
+            );
+        }
+        // Clear a stale scope dir so dropped skills don't linger across a
+        // reload that removed them.
+        return remove_scope_dir(&scope);
+    }
+
+    // Rebuild from scratch each render: clear the existing links (each is a
+    // symlink we created — unlink it, never recurse into its target) then
+    // re-create the current set.
+    clear_skills_dir(&skills_dir)?;
+    std::fs::create_dir_all(&skills_dir)?;
+    for rel in &h.spec.skills {
+        // Link name is the skill directory's basename — Claude Code
+        // discovers `.claude/skills/<name>/SKILL.md`.
+        let Some(name) = rel.file_name() else {
+            continue; // path ending in `..` / root has no skill name
+        };
+        let link = skills_dir.join(name);
+        // Last-wins on a duplicate basename (consistent with sub-agents'
+        // name-keyed map): drop any link already placed for this name.
+        if std::fs::symlink_metadata(&link).is_ok() {
+            std::fs::remove_file(&link)?;
+        }
+        std::os::unix::fs::symlink(compose.root.join(rel), &link)?;
+    }
+    Ok(())
+}
+
+/// Remove the per-agent scope dir if present. Clears the managed symlinks
+/// individually first, so `remove_dir_all` only ever sees plain
+/// directories — it never gets a symlink entry that could be followed into
+/// a skill's real files. No-op when the dir doesn't exist.
+fn remove_scope_dir(scope: &Path) -> io::Result<()> {
+    clear_skills_dir(&scope.join(".claude/skills"))?;
+    match std::fs::remove_dir_all(scope) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Remove every entry in the per-agent skills dir. Each entry is a symlink
+/// render created, so we `remove_file` (unlink) it — never recursing into
+/// the skill's real contents. No-op when the dir doesn't exist yet.
+fn clear_skills_dir(skills_dir: &Path) -> io::Result<()> {
+    let entries = match std::fs::read_dir(skills_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.file_type().is_symlink() || meta.is_file() {
+            std::fs::remove_file(&path)?;
+        } else {
+            // Defensive: we only create symlinks here, but if a real
+            // subdir somehow appears, clear it without following links.
+            std::fs::remove_dir_all(&path)?;
+        }
+    }
+    Ok(())
+}
+
 /// Parsed frontmatter of a sub-agent markdown file. Mirrors the fields
 /// Claude Code's own `.claude/agents/*.md` use; unknown keys are ignored.
 #[derive(serde::Deserialize)]
@@ -376,6 +488,12 @@ fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
         // the wrapper's `[ -f ]` guard decides whether `--agents` is passed.
         let subagents = subagents_json_path(&compose.root, h.project, h.agent);
         s.push_str(&format!("CLAUDE_AGENTS_JSON={}\n", subagents.display()));
+        // #383 Phase 3b: path to the per-agent skills scope dir passed to
+        // `claude --add-dir`. Always emitted for claude-code; the dir is
+        // materialized only when `skills:` is non-empty, so the wrapper's
+        // `[ -d ]` guard decides whether `--add-dir` is passed.
+        let scope = agent_scope_dir(&compose.root, h.project, h.agent);
+        s.push_str(&format!("CLAUDE_AGENT_SCOPE={}\n", scope.display()));
     }
     s
 }
@@ -536,6 +654,7 @@ mod tests {
                 hooks: vec![],
                 mcps: Default::default(),
                 subagents: vec![],
+                skills: vec![],
             },
         );
         Compose {
@@ -1283,5 +1402,113 @@ mod tests {
         let h = c.agents().next().unwrap();
         write_subagents_json(&c, h).unwrap();
         assert!(!dest.exists(), "stale agents json should be removed");
+    }
+
+    #[test]
+    fn write_agent_skills_materializes_symlinks() {
+        let (_d, mut c) = rooted(|root| {
+            write_file(root, "skills/pr-review/SKILL.md", "# PR review skill\n");
+        });
+        c.projects[0].managers.get_mut("mgr").unwrap().skills =
+            vec![PathBuf::from("skills/pr-review")];
+        let h = c.agents().next().unwrap();
+        write_agent_skills(&c, h).unwrap();
+
+        let link = agent_scope_dir(&c.root, "hello", "mgr").join(".claude/skills/pr-review");
+        let meta = std::fs::symlink_metadata(&link).expect("link should exist");
+        assert!(meta.file_type().is_symlink(), "entry must be a symlink");
+        // Resolves to the source skill dir (so CC finds its SKILL.md).
+        assert_eq!(
+            std::fs::canonicalize(&link).unwrap(),
+            std::fs::canonicalize(c.root.join("skills/pr-review")).unwrap()
+        );
+    }
+
+    #[test]
+    fn write_agent_skills_clear_stale_preserves_source() {
+        // SAFETY: dropping a skill must unlink only the symlink — never
+        // recurse into and delete the real skill directory it pointed at.
+        let (_d, mut c) = rooted(|root| {
+            write_file(root, "skills/foo/SKILL.md", "# foo\n");
+        });
+        let source = c.root.join("skills/foo");
+        let source_md = source.join("SKILL.md");
+
+        // Declare → materialize the link.
+        c.projects[0].managers.get_mut("mgr").unwrap().skills = vec![PathBuf::from("skills/foo")];
+        let h = c.agents().next().unwrap();
+        write_agent_skills(&c, h).unwrap();
+        let scope = agent_scope_dir(&c.root, "hello", "mgr");
+        assert!(scope.join(".claude/skills/foo").exists());
+
+        // Drop → scope cleared, but the real skill dir + SKILL.md survive.
+        c.projects[0].managers.get_mut("mgr").unwrap().skills = vec![];
+        let h = c.agents().next().unwrap();
+        write_agent_skills(&c, h).unwrap();
+        assert!(!scope.exists(), "stale scope dir should be removed");
+        assert!(source.is_dir(), "source skill dir must survive the clear");
+        assert!(
+            source_md.is_file(),
+            "source SKILL.md must survive the clear"
+        );
+    }
+
+    #[test]
+    fn write_agent_skills_isolates_per_agent() {
+        // Two agents declaring different skills must each get only their
+        // own — the core per-agent-scope guarantee.
+        let (_d, mut c) = rooted(|root| {
+            write_file(root, "skills/a/SKILL.md", "# a\n");
+            write_file(root, "skills/b/SKILL.md", "# b\n");
+        });
+        let worker = c.projects[0].managers["mgr"].clone();
+        c.projects[0].workers.insert("dev".into(), worker);
+        c.projects[0].managers.get_mut("mgr").unwrap().skills = vec![PathBuf::from("skills/a")];
+        c.projects[0].workers.get_mut("dev").unwrap().skills = vec![PathBuf::from("skills/b")];
+
+        for h in c.agents() {
+            write_agent_skills(&c, h).unwrap();
+        }
+        let mgr_skills = agent_scope_dir(&c.root, "hello", "mgr").join(".claude/skills");
+        let dev_skills = agent_scope_dir(&c.root, "hello", "dev").join(".claude/skills");
+        assert!(mgr_skills.join("a").exists() && !mgr_skills.join("b").exists());
+        assert!(dev_skills.join("b").exists() && !dev_skills.join("a").exists());
+    }
+
+    #[test]
+    fn write_agent_skills_ignored_on_non_claude_runtime() {
+        let (_d, mut c) = rooted(|root| {
+            write_file(root, "skills/x/SKILL.md", "# x\n");
+        });
+        {
+            let a = c.projects[0].managers.get_mut("mgr").unwrap();
+            a.runtime = "codex".into();
+            a.skills = vec![PathBuf::from("skills/x")];
+        }
+        let h = c.agents().next().unwrap();
+        // claude-only v1: codex ignores declared skills (warns) and no
+        // scope dir is created.
+        write_agent_skills(&c, h).unwrap();
+        assert!(!agent_scope_dir(&c.root, "hello", "mgr").exists());
+    }
+
+    #[test]
+    fn env_emits_claude_agent_scope_for_claude_code() {
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(env.contains("CLAUDE_AGENT_SCOPE=/teamctl/state/agent-scope/hello-mgr"));
+    }
+
+    #[test]
+    fn env_omits_claude_agent_scope_for_non_claude_runtimes() {
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "codex".into();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(
+            !env.contains("CLAUDE_AGENT_SCOPE="),
+            "non-claude runtime must not get the agent scope: {env}"
+        );
     }
 }

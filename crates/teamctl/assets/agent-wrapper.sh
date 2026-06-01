@@ -29,6 +29,7 @@ fi
 : "${CLAUDE_SETTINGS:=}"
 : "${MCP_CONFIG:=}"
 : "${CLAUDE_AGENTS_JSON:=}"
+: "${CLAUDE_AGENT_SCOPE:=}"
 : "${SYSTEM_PROMPT_PATH:=}"
 : "${CLAUDE_PROJECT_DIR:=.}"
 : "${TEAMCTL_ROOT:=$CLAUDE_PROJECT_DIR}"
@@ -209,6 +210,14 @@ while :; do
             # (embedded newlines preserved, `$`/backticks not re-expanded).
             [ -n "$CLAUDE_AGENTS_JSON" ] && [ -f "$CLAUDE_AGENTS_JSON" ] && \
                 set -- "$@" --agents "$(cat "$CLAUDE_AGENTS_JSON")"
+            # #383 Phase 3b: per-agent skills. render materializes a scope
+            # dir with symlinks to declared skills under
+            # <scope>/.claude/skills/ only when the agent declares `skills:`,
+            # so the `[ -d ]` guard means no flag is passed when the dir is
+            # absent. `--add-dir` is variadic; it sits before the `--`
+            # terminator below so the bootstrap prompt isn't slurped.
+            [ -n "$CLAUDE_AGENT_SCOPE" ] && [ -d "$CLAUDE_AGENT_SCOPE" ] && \
+                set -- "$@" --add-dir "$CLAUDE_AGENT_SCOPE"
             # Subscribe to the team mailbox via Claude Code Channels
             # (v2.1.80+). team-mcp emits `notifications/claude/channel`
             # for every new inbox row, which lands in this session as
