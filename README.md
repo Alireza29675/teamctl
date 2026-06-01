@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/assets/logo.png" alt="teamctl" width="440"/></p>
+<p align="center"><img src="docs/assets/logo.png" alt="teamctl" width="760"/></p>
 
 <br/>
 
