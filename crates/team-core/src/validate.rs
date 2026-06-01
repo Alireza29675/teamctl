@@ -327,6 +327,7 @@ mod tests {
                 effort: None,
                 interfaces: None,
                 display_name: None,
+                hooks: vec![],
             },
         );
         let mut workers = BTreeMap::new();
@@ -345,6 +346,7 @@ mod tests {
                 effort: None,
                 interfaces: None,
                 display_name: None,
+                hooks: vec![],
             },
         );
         Compose {
