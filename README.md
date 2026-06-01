@@ -3,7 +3,7 @@
 <br/>
 
 <p align="center">
-  <strong>You build the perfect AI agent setup, then it dies with the session.</strong><br/>
+  <strong>You build the perfect Claude Code, Codex, or Gemini setup, then it dies with the session.</strong><br/>
   <strong>You can't run it again, can't hand it to a teammate, can't pass it on.</strong><br/><br/>
   <strong>teamctl lets you bottle it: your whole agent setup as something you</strong><br/>
   <strong>can run, share, and remix like a recipe.</strong>
