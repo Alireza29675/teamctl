@@ -1,4 +1,4 @@
-<h1 align="center">teamctl</h1>
+<p align="center"><img src="docs/assets/logo.png" alt="teamctl" width="440"/></p>
 
 <br/>
 
