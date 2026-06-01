@@ -47,6 +47,15 @@ pub fn claude_settings_path(root: &Path, project: &str, agent: &str) -> PathBuf 
         .join(format!("{project}-{agent}.json"))
 }
 
+/// Absolute path to the rendered Claude Code `--agents` JSON for one agent
+/// (#383 Phase 3a). Lives beside the settings file under `state/claude/`
+/// and is written only when the agent declares `subagents:`; the wrapper
+/// passes it via `--agents "$(cat <path>)"` when the file exists.
+pub fn subagents_json_path(root: &Path, project: &str, agent: &str) -> PathBuf {
+    root.join("state/claude")
+        .join(format!("{project}-{agent}.agents.json"))
+}
+
 /// Absolute path to the materialized concatenation of a multi-file
 /// `role_prompt` list. Only ever written for the list form — single-file
 /// `role_prompt` keeps pointing at its source path directly.
@@ -152,6 +161,152 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
     Some(serde_json::to_string_pretty(&v).expect("json"))
 }
 
+/// #383 Phase 3a: build Claude Code's `--agents` inline JSON for one agent
+/// from its declared `subagents:` list. Each list entry is a
+/// compose-root-relative markdown file with standard sub-agent frontmatter
+/// (`name`, `description`, optional `tools`, `model`) and a body that
+/// becomes the sub-agent's system `prompt`. The result is the
+/// `{ "<name>": { description, prompt, [tools], [model] } }` object the
+/// `--agents` flag consumes — the only cwd-stationary way to scope
+/// sub-agents per agent (no arbitrary-path flag exists; see the Phase-1
+/// spike). Returns `Ok(None)` when none are declared (→ no `--agents`
+/// flag) or the runtime isn't claude-code (logs an "unsupported" warning,
+/// claude-only v1); `Err` if a source is unreadable or its frontmatter is
+/// invalid, so a typo fails the apply loudly rather than dropping a
+/// sub-agent silently.
+pub fn render_subagents(compose: &Compose, h: AgentHandle<'_>) -> io::Result<Option<String>> {
+    if h.spec.subagents.is_empty() {
+        return Ok(None);
+    }
+    if h.spec.runtime != "claude-code" {
+        tracing::warn!(
+            target: "team-core::render",
+            "agent `{}:{}` declares {} sub-agent(s) but runtime `{}` does not support sub-agents (claude-code only); ignoring",
+            h.project,
+            h.agent,
+            h.spec.subagents.len(),
+            h.spec.runtime
+        );
+        return Ok(None);
+    }
+
+    let mut map = serde_json::Map::new();
+    for rel in &h.spec.subagents {
+        let abs = compose.root.join(rel);
+        let raw = std::fs::read_to_string(&abs).map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("read sub-agent source {}: {e}", abs.display()),
+            )
+        })?;
+        let (fm, body) = parse_subagent(&raw).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("parse sub-agent {}: {e}", abs.display()),
+            )
+        })?;
+        // Name from frontmatter, else the file stem (so `agents/foo.md`
+        // without an explicit `name:` registers as sub-agent `foo`).
+        let name = fm.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| {
+            rel.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+        let mut entry = serde_json::json!({
+            "description": fm.description,
+            "prompt": body,
+        });
+        if let Some(tools) = fm.tools {
+            let list = tools.into_list();
+            if !list.is_empty() {
+                entry["tools"] = serde_json::json!(list);
+            }
+        }
+        if let Some(model) = fm.model.filter(|m| !m.trim().is_empty()) {
+            entry["model"] = serde_json::Value::String(model);
+        }
+        map.insert(name, entry);
+    }
+    Ok(Some(
+        serde_json::to_string_pretty(&serde_json::Value::Object(map)).expect("json"),
+    ))
+}
+
+/// Write (or clear) the per-agent `--agents` JSON file. Mirrors
+/// [`write_role_prompt_concat`]: the scoped + full render paths both call
+/// it so a `subagents:` edit flows into the agent at the next render. When
+/// the agent declares no sub-agents (or isn't claude-code) the file is
+/// removed if present, so a stale `--agents` set never lingers across a
+/// reload that dropped them.
+pub fn write_subagents_json(compose: &Compose, h: AgentHandle<'_>) -> io::Result<()> {
+    let dest = subagents_json_path(&compose.root, h.project, h.agent);
+    match render_subagents(compose, h)? {
+        Some(json) => {
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&dest, json)
+        }
+        None => match std::fs::remove_file(&dest) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        },
+    }
+}
+
+/// Parsed frontmatter of a sub-agent markdown file. Mirrors the fields
+/// Claude Code's own `.claude/agents/*.md` use; unknown keys are ignored.
+#[derive(serde::Deserialize)]
+struct SubagentFrontmatter {
+    #[serde(default)]
+    name: Option<String>,
+    description: String,
+    #[serde(default)]
+    tools: Option<Tools>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// `tools:` accepts either Claude Code's comma-separated string form
+/// (`Read, Grep`) or a YAML list (`[Read, Grep]`); both normalize to the
+/// JSON array `--agents` expects.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum Tools {
+    List(Vec<String>),
+    Csv(String),
+}
+
+impl Tools {
+    fn into_list(self) -> Vec<String> {
+        let raw = match self {
+            Tools::List(v) => v,
+            Tools::Csv(s) => s.split(',').map(str::to_string).collect(),
+        };
+        raw.into_iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+}
+
+/// Split a sub-agent markdown file into (frontmatter, body). Expects the
+/// standard `---\n<yaml>\n---\n<body>` layout; the body is everything after
+/// the closing delimiter, trimmed of surrounding blank lines.
+fn parse_subagent(raw: &str) -> Result<(SubagentFrontmatter, String), String> {
+    let after_open = raw
+        .strip_prefix("---")
+        .ok_or("missing opening `---` frontmatter delimiter")?;
+    let (yaml, body) = after_open
+        .split_once("\n---")
+        .ok_or("missing closing `---` frontmatter delimiter")?;
+    let fm: SubagentFrontmatter =
+        serde_yaml::from_str(yaml.trim()).map_err(|e| format!("invalid frontmatter YAML: {e}"))?;
+    let body = body.trim_start_matches(['\r', '\n']).trim_end().to_string();
+    Ok((fm, body))
+}
+
 fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
     let project = compose
         .projects
@@ -215,6 +370,12 @@ fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
         // (human at the keyboard wants the interactive tools back).
         let settings = claude_settings_path(&compose.root, h.project, h.agent);
         s.push_str(&format!("CLAUDE_SETTINGS={}\n", settings.display()));
+        // #383 Phase 3a: path to the rendered `--agents` JSON carrying this
+        // agent's declared sub-agents. Always emitted for claude-code; the
+        // file itself is written only when `subagents:` is non-empty, so
+        // the wrapper's `[ -f ]` guard decides whether `--agents` is passed.
+        let subagents = subagents_json_path(&compose.root, h.project, h.agent);
+        s.push_str(&format!("CLAUDE_AGENTS_JSON={}\n", subagents.display()));
     }
     s
 }
@@ -374,6 +535,7 @@ mod tests {
                 display_name: None,
                 hooks: vec![],
                 mcps: Default::default(),
+                subagents: vec![],
             },
         );
         Compose {
@@ -917,5 +1079,209 @@ mod tests {
         let h = c.agents().next().unwrap();
         let err = write_role_prompt_concat(&c, h).unwrap_err();
         assert!(err.to_string().contains("missing.md"), "err was: {err}");
+    }
+
+    // ---- #383 Phase 3a: per-agent sub-agents (`--agents` JSON) ----
+
+    fn write_file(root: &std::path::Path, rel: &str, contents: &str) {
+        let abs = root.join(rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        std::fs::write(abs, contents).unwrap();
+    }
+
+    fn rooted(write: impl FnOnce(&std::path::Path)) -> (tempfile::TempDir, Compose) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = fixture();
+        c.root = dir.path().to_path_buf();
+        write(dir.path());
+        (dir, c)
+    }
+
+    #[test]
+    fn render_subagents_builds_agents_json_from_frontmatter() {
+        let (_d, mut c) = rooted(|root| {
+            write_file(
+                root,
+                "agents/security-auditor.md",
+                "---\nname: security-auditor\ndescription: Audits diffs for vulns.\n\
+                 tools: Read, Grep\nmodel: claude-sonnet-4-6\n---\n\
+                 You are a security auditor.\nFlag risky patterns.\n",
+            );
+        });
+        c.projects[0].managers.get_mut("mgr").unwrap().subagents =
+            vec![PathBuf::from("agents/security-auditor.md")];
+        let h = c.agents().next().unwrap();
+        let json = render_subagents(&c, h).unwrap().expect("some json");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let entry = &v["security-auditor"];
+        assert_eq!(entry["description"], "Audits diffs for vulns.");
+        assert_eq!(
+            entry["prompt"],
+            "You are a security auditor.\nFlag risky patterns."
+        );
+        assert_eq!(entry["tools"], serde_json::json!(["Read", "Grep"]));
+        assert_eq!(entry["model"], "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn render_subagents_name_falls_back_to_file_stem() {
+        let (_d, mut c) = rooted(|root| {
+            write_file(
+                root,
+                "agents/repo-cartographer.md",
+                "---\ndescription: Maps the repo.\n---\nMap it.\n",
+            );
+        });
+        c.projects[0].managers.get_mut("mgr").unwrap().subagents =
+            vec![PathBuf::from("agents/repo-cartographer.md")];
+        let h = c.agents().next().unwrap();
+        let json = render_subagents(&c, h).unwrap().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            v.get("repo-cartographer").is_some(),
+            "stem-derived name missing: {json}"
+        );
+        // Nothing declared beyond description → optional keys omitted.
+        assert!(v["repo-cartographer"].get("tools").is_none());
+        assert!(v["repo-cartographer"].get("model").is_none());
+    }
+
+    #[test]
+    fn render_subagents_supports_yaml_list_tools() {
+        let (_d, mut c) = rooted(|root| {
+            write_file(
+                root,
+                "agents/x.md",
+                "---\nname: x\ndescription: d\ntools: [Read, Bash]\n---\nbody\n",
+            );
+        });
+        c.projects[0].managers.get_mut("mgr").unwrap().subagents =
+            vec![PathBuf::from("agents/x.md")];
+        let h = c.agents().next().unwrap();
+        let json = render_subagents(&c, h).unwrap().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["x"]["tools"], serde_json::json!(["Read", "Bash"]));
+    }
+
+    #[test]
+    fn render_subagents_isolates_per_agent() {
+        // Two agents declaring different sub-agents must each get only
+        // their own — the core per-agent-scope guarantee.
+        let (_d, mut c) = rooted(|root| {
+            write_file(
+                root,
+                "agents/a.md",
+                "---\nname: a\ndescription: da\n---\nba\n",
+            );
+            write_file(
+                root,
+                "agents/b.md",
+                "---\nname: b\ndescription: db\n---\nbb\n",
+            );
+        });
+        let worker = c.projects[0].managers["mgr"].clone();
+        c.projects[0].workers.insert("dev".into(), worker);
+        c.projects[0].managers.get_mut("mgr").unwrap().subagents =
+            vec![PathBuf::from("agents/a.md")];
+        c.projects[0].workers.get_mut("dev").unwrap().subagents =
+            vec![PathBuf::from("agents/b.md")];
+
+        for h in c.agents() {
+            let v: serde_json::Value =
+                serde_json::from_str(&render_subagents(&c, h).unwrap().unwrap()).unwrap();
+            match h.agent {
+                "mgr" => {
+                    assert!(v.get("a").is_some() && v.get("b").is_none());
+                }
+                "dev" => {
+                    assert!(v.get("b").is_some() && v.get("a").is_none());
+                }
+                other => panic!("unexpected agent {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn render_subagents_none_when_empty() {
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        assert!(render_subagents(&c, h).unwrap().is_none());
+    }
+
+    #[test]
+    fn render_subagents_ignored_on_non_claude_runtime() {
+        let (_d, mut c) = rooted(|root| {
+            write_file(
+                root,
+                "agents/x.md",
+                "---\nname: x\ndescription: d\n---\nb\n",
+            );
+        });
+        {
+            let a = c.projects[0].managers.get_mut("mgr").unwrap();
+            a.runtime = "codex".into();
+            a.subagents = vec![PathBuf::from("agents/x.md")];
+        }
+        let h = c.agents().next().unwrap();
+        // claude-only v1: codex ignores declared sub-agents (warns).
+        assert!(render_subagents(&c, h).unwrap().is_none());
+    }
+
+    #[test]
+    fn render_subagents_errors_on_missing_source() {
+        let (_d, mut c) = rooted(|_| {});
+        c.projects[0].managers.get_mut("mgr").unwrap().subagents =
+            vec![PathBuf::from("agents/nope.md")];
+        let h = c.agents().next().unwrap();
+        let err = render_subagents(&c, h).unwrap_err();
+        assert!(err.to_string().contains("nope.md"), "err was: {err}");
+    }
+
+    #[test]
+    fn render_subagents_errors_on_unterminated_frontmatter() {
+        let (_d, mut c) = rooted(|root| {
+            write_file(
+                root,
+                "agents/bad.md",
+                "---\nname: x\ndescription: d\nno close\n",
+            );
+        });
+        c.projects[0].managers.get_mut("mgr").unwrap().subagents =
+            vec![PathBuf::from("agents/bad.md")];
+        let h = c.agents().next().unwrap();
+        assert!(render_subagents(&c, h).is_err());
+    }
+
+    #[test]
+    fn env_emits_claude_agents_json_for_claude_code() {
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(env.contains("CLAUDE_AGENTS_JSON=/teamctl/state/claude/hello-mgr.agents.json"));
+    }
+
+    #[test]
+    fn write_subagents_json_writes_then_clears_stale() {
+        let (_d, mut c) = rooted(|root| {
+            write_file(
+                root,
+                "agents/x.md",
+                "---\nname: x\ndescription: d\n---\nbody\n",
+            );
+        });
+        let dest = subagents_json_path(&c.root, "hello", "mgr");
+
+        // Declared → file materialized.
+        c.projects[0].managers.get_mut("mgr").unwrap().subagents =
+            vec![PathBuf::from("agents/x.md")];
+        let h = c.agents().next().unwrap();
+        write_subagents_json(&c, h).unwrap();
+        assert!(dest.exists(), "agents json should be written");
+
+        // Dropped → stale file removed so old sub-agents don't linger.
+        c.projects[0].managers.get_mut("mgr").unwrap().subagents = vec![];
+        let h = c.agents().next().unwrap();
+        write_subagents_json(&c, h).unwrap();
+        assert!(!dest.exists(), "stale agents json should be removed");
     }
 }

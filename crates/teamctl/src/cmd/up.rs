@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
 use team_core::render::{
     claude_settings_path, env_path, mcp_path, render_agent, render_claude_settings,
-    write_role_prompt_concat,
+    write_role_prompt_concat, write_subagents_json,
 };
 use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
@@ -249,6 +249,10 @@ pub fn render_project_public(compose: &Compose, project_id: &str) -> Result<()> 
         // stale concat file (zombie-prompt regression).
         write_role_prompt_concat(compose, h)
             .with_context(|| format!("write role_prompt concat for {}:{}", h.project, h.agent))?;
+        // #383 Phase 3a: render the per-agent `--agents` JSON (or clear a
+        // stale one) alongside the env/mcp/settings files.
+        write_subagents_json(compose, h)
+            .with_context(|| format!("write sub-agents json for {}:{}", h.project, h.agent))?;
     }
     Ok(())
 }
@@ -373,6 +377,10 @@ pub fn render_all_public(compose: &Compose) -> Result<()> {
         // the next render — single-form is a no-op (back-compat).
         write_role_prompt_concat(compose, h)
             .with_context(|| format!("write role_prompt concat for {}:{}", h.project, h.agent))?;
+        // #383 Phase 3a: render the per-agent `--agents` JSON (or clear a
+        // stale one) alongside the env/mcp/settings files.
+        write_subagents_json(compose, h)
+            .with_context(|| format!("write sub-agents json for {}:{}", h.project, h.agent))?;
     }
     Ok(())
 }
@@ -578,6 +586,18 @@ mod tests {
         }
     }
 
+    /// #383 Phase 3a: the wrapper threads per-agent sub-agents via
+    /// `--agents` when render wrote the JSON file (guarded by `[ -f ]`, so
+    /// agents with no `subagents:` pass no flag). Pin the marker so a silent
+    /// wrapper edit can't drop it and strand declared sub-agents.
+    #[test]
+    fn wrapper_threads_subagents_via_agents_flag() {
+        assert!(
+            DEFAULT_WRAPPER.contains("--agents \"$(cat \"$CLAUDE_AGENTS_JSON\")\""),
+            "wrapper must pass --agents from CLAUDE_AGENTS_JSON",
+        );
+    }
+
     /// T-361: headless claude-code agents default to `--permission-mode
     /// auto` and no longer pass `--dangerously-skip-permissions`. The
     /// attended opt-out keys off PERMISSION_MODE, which `render()` omits for
@@ -697,6 +717,7 @@ mod tests {
                 display_name: None,
                 hooks: vec![],
                 mcps: Default::default(),
+                subagents: vec![],
             },
         );
         Compose {

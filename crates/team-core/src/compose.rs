@@ -644,6 +644,21 @@ pub struct Agent {
     /// a warning otherwise. Empty (the default) → MCP config unchanged.
     #[serde(default)]
     pub mcps: BTreeMap<String, McpServer>,
+
+    /// #383 Phase 3a: per-agent Claude Code sub-agents declared in compose.
+    /// Each entry is a compose-root-relative path to a standard sub-agent
+    /// markdown file (frontmatter `name` / `description` / optional `tools`
+    /// / `model`, body → the sub-agent's system prompt), resolved like
+    /// `role_prompt`. render transforms the list into Claude Code's
+    /// `--agents` inline JSON so each agent gets its own sub-agents
+    /// additively, on top of the project `.claude/agents/` and the built-in
+    /// sub-agents (verified: `--agents` adds, never replaces), without an
+    /// arbitrary-path flag (the only cwd-stationary mechanism — see the
+    /// Phase-1 spike). claude-only v1: declared on a non-`claude-code`
+    /// agent they render nothing and render logs an "unsupported runtime"
+    /// warning. Empty (the default) → no `--agents` flag.
+    #[serde(default)]
+    pub subagents: Vec<PathBuf>,
 }
 
 /// Container for per-manager interface adapters. Open shape so adding
