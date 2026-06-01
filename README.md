@@ -92,7 +92,7 @@ managers:
 workers:
   # 🤖 a Claude executor: ships work and reviews the Codex executor's PRs
   claude_exec:
-    display_name: "Claude Executor"
+    display_name: "Executor (Claude)"
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt:
@@ -105,7 +105,7 @@ workers:
 
   # 🤖 a Codex executor: the other half of the review loop
   codex_exec:
-    display_name: "Codex Executor"
+    display_name: "Executor (Codex)"
     runtime: codex
     model: gpt-5-codex
     role_prompt:
