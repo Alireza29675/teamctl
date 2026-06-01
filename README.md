@@ -11,7 +11,7 @@
 
 You describe your team in YAML: who the agents are, what each one owns, and how they talk to each other. Each agent is a real Claude Code, Codex, or Gemini session with its own memory. `teamctl up` brings them up. Hand it to a teammate and they get the same team, not a screenshot of yours.
 
-I built this for myself and I'm sharing it early. It's rough in places. Try it, and tell me where it breaks.
+I built this for myself. Some experiments are worth sharing, so here we are :)
 
 ## Install
 
