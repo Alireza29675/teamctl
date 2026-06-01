@@ -11,19 +11,15 @@
 
 You describe your team in YAML: who the agents are, what each one owns, and how they talk to each other. Each agent is a real Claude Code, Codex, or Gemini session with its own memory. `teamctl up` brings them up. Hand it to a teammate and they get the same team, not a screenshot of yours.
 
-I built this for myself. Some experiments are worth sharing, so here we are :)
+I built this for myself. Experiments worth sharing, so here we are :)
 
-## Install
+## Get started
 
 ```bash
 curl -fsSL https://teamctl.run/install | sh
 ```
 
-Puts `teamctl`, `team-mcp`, `team-bot`, and `teamctl-ui` on your `$PATH`, plus the Claude Code plugin if `claude` is detected.
-
-## Start a team
-
-Inside your project directory:
+Installs `teamctl` in your command line. Then, inside your project directory:
 
 ```bash
 teamctl init
