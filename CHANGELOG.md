@@ -4,8 +4,15 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-06-01
+
 ### Added
 
+- The `teamctl ui` mailbox is now interactive: scroll the pane (a per-tab row
+  cursor), filter (`f`) and search (`/`) messages by sender or text, and open
+  any message in a detail view (Enter) showing its full body and a relative
+  timestamp. Help, onboarding, and statusline copy updated to match. (#331,
+  #335, #336, #340)
 - macOS: `teamctl up` keeps the host awake (`caffeinate -i -s`) while agents are
   running, so long-running tasks survive display/idle sleep; the keep-awake is
   released automatically when the last team on the host goes `down`. Host-level
@@ -53,6 +60,18 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   4.6+ / Sonnet 4.6 on the Anthropic API (not Bedrock/Vertex); on other
   models/providers it is unavailable. Claude runtime only — `codex`/`gemini`
   are unaffected. (#361)
+- `teamctl init` (Guided) and `teamctl adjust` now default their "open Claude
+  Code… Continue?" confirm to **Yes** (`[Y/n]`): once you've chosen the
+  LLM-led path, a bare Enter proceeds instead of cancelling. (#356)
+
+### Fixed
+
+- Telegram attachment downloads are now capped against the bot's reported
+  `file.size` before writing to disk, closing a disk-fill vector (the
+  download_to disk-write counterpart to the existing RAM-OOM defense). (#332)
+- `tools/install.sh` only offers the Claude Code plugin install when Claude
+  Code is **≥ 2.1.141** — older versions have `--session-id` resume bugs that
+  turn the first `teamctl up` into a confusing failure. (#262)
 
 ## [0.8.6] — 2026-05-17
 
