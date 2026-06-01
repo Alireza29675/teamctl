@@ -31,19 +31,14 @@ teamctl init
 
 Real teams running on teamctl. Copy any of them as a starting point.
 
-| Example | Agents | What they do |
-|---|---|---|
-| 🌱 **[hello-team](examples/hello-team/)** | 2 | The smallest useful team: one manager and one dev talking through a shared SQLite mailbox. |
-| 🛰️ **[oss-maintainer](examples/oss-maintainer/)** | 5 | Runs a one-person open-source project: triage, bug-fix PRs, docs, and release proposals you approve. |
-| 🧰 **[solo-triage](examples/solo-triage/)** | 3 | Fields what's on your plate, chases context across the web and your docs, and drafts your replies. |
-| 🛠️ **[solo-founder-ops](examples/solo-founder-ops/)** | 4 | Handles a founder's everything-else: research, inbox drafts, and product metrics. |
-| 📬 **[customer-support](examples/customer-support/)** | 2 | Runs a support inbox: routes tickets and drafts voice-matched replies you approve before sending. |
-| 📈 **[market-analysts](examples/market-analysts/)** | 5 | A read-only research desk that backs financial decisions, with one analyst whose only job is to dissent. |
-| 🎮 **[indie-game-studio](examples/indie-game-studio/)** | 4 | A solo game dev's brain trust: vision, mechanics, narrative, and an honest playtest critic. |
-| 🗞️ **[newsletter-office](examples/newsletter-office/)** | 7 | A newsroom that publishes a daily digest plus a web team that owns the blog, across three runtimes. |
-| 🚀 **[startup-team](examples/startup-team/)** | 5 | A small startup shape where you talk to both a founder and a PM, who coordinate the engineers. |
+| Example | What it does |
+|---|---|
+| 🛰️ **[oss-maintainer](examples/oss-maintainer/)** | Runs a one-person open-source project: triage, bug-fix PRs, docs, and release proposals you approve. |
+| 🌱 **[personal-research](examples/personal-research/)** | A reading buddy that holds your interests, plus a curator that follows the news and surfaces what matters. |
+| 📈 **[market-analysts](examples/market-analysts/)** | A read-only research desk that backs financial decisions, with one analyst whose only job is to dissent. |
+| 💼 **[job-finder](examples/job-finder/)** | Runs your job search: watches boards, aligns your CV to postings, and drafts cover letters you approve. |
 
-More live under [`examples/`](examples/): `job-finder` (3), `market-analysis` (4), `personal-finance` (3), `personal-research` (2), and `gastown-in-teamctl` (7), a style example rather than a runnable port.
+More under [`examples/`](examples/).
 
 ## What a team looks like
 
