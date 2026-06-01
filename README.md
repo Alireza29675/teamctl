@@ -3,8 +3,8 @@
 <br/>
 
 <p align="center">
-  <strong>You configure the perfect Claude Code or Codex session setup, then it dies with the session.</strong><br/>
-  <strong>You can't run it again, can't hand it to a teammate, can't pass it on.</strong><br/><br/>
+  You configure the perfect Claude Code or Codex session setup, then it dies with the session.<br/>
+  You can't run it again, can't hand it to a teammate, can't pass it on...<br/><br/>
   <strong>teamctl lets you bottle it: your whole agent setup as something you</strong><br/>
   <strong>can run, share, and remix like a recipe.</strong>
 </p>
