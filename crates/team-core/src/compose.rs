@@ -659,6 +659,21 @@ pub struct Agent {
     /// warning. Empty (the default) → no `--agents` flag.
     #[serde(default)]
     pub subagents: Vec<PathBuf>,
+
+    /// #383 Phase 3b: per-agent Claude Code skills declared in compose.
+    /// Each entry is a compose-root-relative path to a skill directory
+    /// (the folder holding `SKILL.md`), resolved like `role_prompt`. render
+    /// materializes a per-agent scope dir under
+    /// `state/agent-scope/<project>-<agent>/.claude/skills/` holding a
+    /// symlink to each declared skill, and the wrapper passes that scope
+    /// dir via `claude --add-dir` so the agent discovers its skills
+    /// additively, on top of the project `.claude/skills/` (verified:
+    /// `--add-dir` adds, never replaces — see the Phase-1 spike §9-E1).
+    /// claude-only v1: declared on a non-`claude-code` agent they
+    /// materialize nothing and render logs an "unsupported runtime"
+    /// warning. Empty (the default) → no `--add-dir` flag.
+    #[serde(default)]
+    pub skills: Vec<PathBuf>,
 }
 
 /// Container for per-manager interface adapters. Open shape so adding

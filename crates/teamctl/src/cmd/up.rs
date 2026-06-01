@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
 use team_core::render::{
     claude_settings_path, env_path, mcp_path, render_agent, render_claude_settings,
-    write_role_prompt_concat, write_subagents_json,
+    write_agent_skills, write_role_prompt_concat, write_subagents_json,
 };
 use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
@@ -253,6 +253,10 @@ pub fn render_project_public(compose: &Compose, project_id: &str) -> Result<()> 
         // stale one) alongside the env/mcp/settings files.
         write_subagents_json(compose, h)
             .with_context(|| format!("write sub-agents json for {}:{}", h.project, h.agent))?;
+        // #383 Phase 3b: materialize (or clear) the per-agent skills scope
+        // dir so `claude --add-dir` surfaces declared skills.
+        write_agent_skills(compose, h)
+            .with_context(|| format!("write agent skills for {}:{}", h.project, h.agent))?;
     }
     Ok(())
 }
@@ -381,6 +385,10 @@ pub fn render_all_public(compose: &Compose) -> Result<()> {
         // stale one) alongside the env/mcp/settings files.
         write_subagents_json(compose, h)
             .with_context(|| format!("write sub-agents json for {}:{}", h.project, h.agent))?;
+        // #383 Phase 3b: materialize (or clear) the per-agent skills scope
+        // dir so `claude --add-dir` surfaces declared skills.
+        write_agent_skills(compose, h)
+            .with_context(|| format!("write agent skills for {}:{}", h.project, h.agent))?;
     }
     Ok(())
 }
@@ -598,6 +606,18 @@ mod tests {
         );
     }
 
+    /// #383 Phase 3b: the wrapper threads per-agent skills via `--add-dir`
+    /// when render materialized the scope dir (guarded by `[ -d ]`, so
+    /// agents with no `skills:` pass no flag). Pin the marker so a silent
+    /// wrapper edit can't drop it and strand declared skills.
+    #[test]
+    fn wrapper_threads_skills_via_add_dir_flag() {
+        assert!(
+            DEFAULT_WRAPPER.contains("--add-dir \"$CLAUDE_AGENT_SCOPE\""),
+            "wrapper must pass --add-dir from CLAUDE_AGENT_SCOPE",
+        );
+    }
+
     /// T-361: headless claude-code agents default to `--permission-mode
     /// auto` and no longer pass `--dangerously-skip-permissions`. The
     /// attended opt-out keys off PERMISSION_MODE, which `render()` omits for
@@ -718,6 +738,7 @@ mod tests {
                 hooks: vec![],
                 mcps: Default::default(),
                 subagents: vec![],
+                skills: vec![],
             },
         );
         Compose {
