@@ -76,6 +76,7 @@ channels:
 managers:
   # 🛎️ your one manager: you chat with it on Telegram, it runs the show
   service_desk:
+    display_name: "Service Desk"
     runtime: claude-code
     model: claude-sonnet-4-6
     role_prompt: roles/service_desk.md
@@ -87,6 +88,7 @@ managers:
 workers:
   # 🤖 a Claude executor: ships work and reviews the Codex executor's PRs
   claude_exec:
+    display_name: "Claude Executor"
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt: roles/executor.md
@@ -95,12 +97,14 @@ workers:
       - agents/researcher.md
   # 🤖 a Codex executor: the other half of the review loop
   codex_exec:
+    display_name: "Codex Executor"
     runtime: codex
     model: gpt-5-codex
     role_prompt: roles/executor.md
     reports_to: service_desk
   # 🔭 autonomous discovery: keeps finding and prototyping ideas
   research:
+    display_name: "Research and Discovery"
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt: roles/research.md
