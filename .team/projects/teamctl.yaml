@@ -61,56 +61,6 @@ managers:
           provider: groq
           api_key_env: GROQ_API_KEY
           model: whisper-large-v3
-  ada:
-    display_name: Ada (Engineer)
-    runtime: claude-code
-    model: claude-opus-4-8
-    role_prompt:
-    - roles/_base.md
-    - roles/_telegram.md
-    - roles/_engineer.md
-    - roles/ada.md
-    permission_mode: auto
-    autonomy: low_risk_only
-    can_dm:
-    - hugo
-    - kian
-    can_broadcast:
-    - all
-    - dev
-    interfaces:
-      telegram:
-        bot_token_env: TEAMCTL_TG_ADA_TOKEN
-        chat_ids_env: TEAMCTL_TG_ADA_CHATS
-        speech_to_text:
-          provider: groq
-          api_key_env: GROQ_API_KEY
-          model: whisper-large-v3
-  kian:
-    display_name: Kian (Engineer)
-    runtime: claude-code
-    model: claude-opus-4-8
-    role_prompt:
-    - roles/_base.md
-    - roles/_telegram.md
-    - roles/_engineer.md
-    - roles/kian.md
-    permission_mode: auto
-    autonomy: low_risk_only
-    can_dm:
-    - hugo
-    - ada
-    can_broadcast:
-    - all
-    - dev
-    interfaces:
-      telegram:
-        bot_token_env: TEAMCTL_TG_KIAN_TOKEN
-        chat_ids_env: TEAMCTL_TG_KIAN_CHATS
-        speech_to_text:
-          provider: groq
-          api_key_env: GROQ_API_KEY
-          model: whisper-large-v3
   neda:
     display_name: Neda (Comms)
     runtime: claude-code
@@ -134,4 +84,42 @@ managers:
           provider: groq
           api_key_env: GROQ_API_KEY
           model: whisper-large-v3
-workers: {}
+# Engineers are workers: they report to hugo, take work from the
+# project board's Ready column, and never contact the operator
+# directly. No telegram interface (no operator-facing bot); their
+# role_prompt drops the _telegram layer.
+workers:
+  ada:
+    display_name: Ada (Engineer)
+    runtime: claude-code
+    model: claude-opus-4-8
+    role_prompt:
+    - roles/_base.md
+    - roles/_engineer.md
+    - roles/ada.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    reports_to: hugo
+    can_dm:
+    - hugo
+    - kian
+    can_broadcast:
+    - all
+    - dev
+  kian:
+    display_name: Kian (Engineer)
+    runtime: claude-code
+    model: claude-opus-4-8
+    role_prompt:
+    - roles/_base.md
+    - roles/_engineer.md
+    - roles/kian.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    reports_to: hugo
+    can_dm:
+    - hugo
+    - ada
+    can_broadcast:
+    - all
+    - dev
