@@ -72,7 +72,7 @@ channels:
   - name: all
     members: "*"
 
-  - name: dev                 # 🔀 the two executors review each other's PRs here
+  - name: code_review         # 🔀 so the executors can ask each other to review each other's PRs
     members: [claude_exec, codex_exec]
 
 managers:
