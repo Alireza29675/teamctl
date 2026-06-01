@@ -976,6 +976,13 @@ fn curl_get(url: &str) -> Result<String> {
 
 pub struct BotSpec {
     pub manager: String,
+    /// T-367: the manager's `display_name` (T-160) when set. Passed to
+    /// `team-bot` as `--manager-display-name` so the first-connect greeting
+    /// reads "Connected to <name> via teamctl" with the human label instead
+    /// of the bare `<project>:<manager>` id. `None` → the bot falls back to
+    /// the id. Resolved here because `display_name` is render-time-only and
+    /// never lands in the mailbox DB the bot reads.
+    pub display_name: Option<String>,
     pub session: String,
     pub mailbox: PathBuf,
     pub token_env: String,
@@ -1021,6 +1028,7 @@ pub fn bot_specs(compose: &Compose) -> Vec<BotSpec> {
                     token_env: tg.bot_token_env.clone(),
                     chats_env: tg.chat_ids_env.clone(),
                     manager: mgr,
+                    display_name: agent.display_name.clone(),
                     tmux_prefix: prefix.clone(),
                     stt,
                 });
@@ -1084,15 +1092,24 @@ pub fn up_one(spec: &BotSpec, team_bot_bin: &Path, root: &Path) -> Result<bool> 
         None => String::new(),
     };
 
+    // T-367: forward the manager's display_name so the bot's first-connect
+    // greeting can read "Connected to <name> via teamctl". Omitted entirely
+    // when unset, so the bot falls back to the `<project>:<manager>` id.
+    let display_name_flag = match &spec.display_name {
+        Some(dn) => format!(" --manager-display-name {}", shlex_quote(dn)),
+        None => String::new(),
+    };
+
     let cmd = format!(
         "{bin} --mailbox {mb} --token {tok} --authorized-chat-ids {chats} \
-         --manager {mgr} --tmux-prefix {prefix}{stt}",
+         --manager {mgr} --tmux-prefix {prefix}{dn}{stt}",
         bin = shlex_quote(&team_bot_bin.display().to_string()),
         mb = shlex_quote(&spec.mailbox.display().to_string()),
         tok = shlex_quote(&token),
         chats = shlex_quote(&chats),
         mgr = shlex_quote(&spec.manager),
         prefix = shlex_quote(&spec.tmux_prefix),
+        dn = display_name_flag,
         stt = stt_flags,
     );
     // -x/-y match the agent supervisor: keep the detached pane large enough

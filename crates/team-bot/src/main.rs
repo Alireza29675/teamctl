@@ -52,6 +52,14 @@ struct Cli {
     #[arg(long, env = "TEAMCTL_MANAGER")]
     manager: Option<String>,
 
+    /// T-367: friendly label for the scoped manager, resolved from the
+    /// agent's `display_name` (T-160) by `teamctl bot up`. Used only to make
+    /// the first-connect greeting read "Connected to <name> via teamctl" with
+    /// the human label instead of the bare `<project>:<manager>` id. Falls
+    /// back to `--manager` when unset.
+    #[arg(long, env = "TEAMCTL_MANAGER_DISPLAY_NAME")]
+    manager_display_name: Option<String>,
+
     /// Tmux session prefix (matches `compose.global.supervisor.tmux_prefix`).
     /// Used by slash-passthrough (T-086-G) to compute `<prefix><project>-<role>`
     /// for the manager's tmux session. `teamctl bot up` populates this from
@@ -86,6 +94,10 @@ struct State {
     allow: Vec<i64>,
     /// `<project>:<manager>` if this instance is scoped; otherwise all managers.
     manager: Option<String>,
+    /// T-367: friendly label for the scoped manager (from `display_name`,
+    /// T-160). Preferred over `manager` in the first-connect greeting; falls
+    /// back to the `<project>:<manager>` id when unset.
+    manager_display_name: Option<String>,
     /// Tmux session prefix used by slash-passthrough to compute the manager's
     /// session name. Stored on `State` so handle_message can reach it without
     /// re-reading the CLI args.
@@ -194,6 +206,7 @@ async fn main() -> Result<()> {
         conn: Mutex::new(conn),
         allow,
         manager: cli.manager,
+        manager_display_name: cli.manager_display_name,
         tmux_prefix: cli.tmux_prefix,
         media_root,
         stt,
@@ -440,19 +453,17 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
                 .await?;
         }
     } else if trimmed == "/start" || trimmed == "/help" {
-        let body = match state.manager.as_deref() {
-            Some(mgr) => format!(
-                "teamctl bot — connected to {mgr}\n\
-                 Just type a message and it goes straight to {mgr}.\n\
-                 /pending — show pending approvals\n\
-                 /dm <project>:<agent> <text> — send to a different agent (rare)\n\
-                 /<cmd> — slash-passthrough to {mgr}'s tmux session (Claude Code only)"
-            ),
-            None => "teamctl — Telegram interface\n\
-                     /dm <project>:<agent> <message> — send a DM\n\
-                     /pending — show pending approvals"
-                .into(),
-        };
+        // T-367: keep the first-contact greeting a short one-liner — just
+        // confirm who you're talking to. The power-user commands (/pending,
+        // /dm, slash-passthrough) still work; they live on `/help` now
+        // instead of crowding the greeting. Both commands are matched here,
+        // ahead of the slash-passthrough arm below, so `/help` never gets
+        // typed into the manager's tmux session.
+        let name = state
+            .manager
+            .as_deref()
+            .map(|mgr| state.manager_display_name.as_deref().unwrap_or(mgr));
+        let body = start_help_body(trimmed == "/help", name);
         bot.send_message(msg.chat.id, body).await?;
     } else if trimmed.starts_with('/') && state.manager.is_some() {
         // T-086-G slash-passthrough: any unrecognised slash command on a
@@ -1275,6 +1286,33 @@ fn manager_of(conn: &Connection, agent_id: &str) -> Option<String> {
     }
     let role = reports_to?;
     Some(format!("{project}:{role}"))
+}
+
+/// T-367: build the body for `/start` (greeting) or `/help` (command list).
+///
+/// `is_help` selects the command list; otherwise a short one-line greeting.
+/// `name` is the label for a manager-scoped bot — the manager's
+/// `display_name` (T-160) when set, else the `<project>:<manager>` id — and
+/// `None` for an unscoped bot, which has no single manager to name. Pulled
+/// out as a free function so the copy is unit-testable without a teloxide
+/// `Bot` or an async runtime.
+fn start_help_body(is_help: bool, name: Option<&str>) -> String {
+    match (is_help, name) {
+        (true, Some(name)) => format!(
+            "teamctl commands:\n\
+             /pending — show pending approvals\n\
+             /dm <project>:<agent> <text> — send to a different agent (rare)\n\
+             /<cmd> — slash-passthrough to {name}'s tmux session (Claude Code only)\n\
+             \n\
+             Just type a message to chat with {name}."
+        ),
+        (true, None) => "teamctl commands:\n\
+             /dm <project>:<agent> <message> — send a DM\n\
+             /pending — show pending approvals"
+            .into(),
+        (false, Some(name)) => format!("Connected to {name} via teamctl. Just type to chat."),
+        (false, None) => "Connected via teamctl. Send /help for commands.".into(),
+    }
 }
 
 /// Route an approval row to *this* bot iff:
@@ -3169,6 +3207,78 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         seed(&conn);
         assert_eq!(agent_runtime(&conn, "p:ghost"), None);
+    }
+
+    // ── T-367: first-connect greeting + /help split ──────────────────
+
+    #[test]
+    fn start_greeting_is_one_liner_using_manager_id_fallback() {
+        // /start on a scoped bot without a display_name: short one-liner
+        // naming the manager id, and crucially NO command dump.
+        let body = start_help_body(false, Some("software-team:director"));
+        assert_eq!(
+            body,
+            "Connected to software-team:director via teamctl. Just type to chat."
+        );
+        assert!(
+            !body.contains("/pending"),
+            "greeting must not dump commands"
+        );
+        assert!(!body.contains("/dm"), "greeting must not dump commands");
+    }
+
+    #[test]
+    fn start_greeting_prefers_display_name() {
+        // /start prefers the friendly display_name (T-160) when set.
+        let body = start_help_body(false, Some("Director"));
+        assert_eq!(
+            body,
+            "Connected to Director via teamctl. Just type to chat."
+        );
+    }
+
+    #[test]
+    fn start_greeting_unscoped_points_to_help() {
+        // Unscoped bot has no single manager to name — still a one-liner,
+        // and it points the operator at /help for the command list.
+        let body = start_help_body(false, None);
+        assert_eq!(body, "Connected via teamctl. Send /help for commands.");
+        assert!(!body.contains("/dm"), "greeting must not dump commands");
+    }
+
+    #[test]
+    fn help_lists_advanced_commands_for_scoped_bot() {
+        // /help is where the power-user commands live now.
+        let body = start_help_body(true, Some("Director"));
+        assert!(body.contains("/pending"), "help must list /pending");
+        assert!(body.contains("/dm"), "help must list /dm");
+        assert!(
+            body.contains("slash-passthrough to Director's tmux session (Claude Code only)"),
+            "help must list slash-passthrough naming the manager: {body}"
+        );
+        assert!(
+            body.contains("chat with Director"),
+            "help should still tell the operator how to chat: {body}"
+        );
+    }
+
+    #[test]
+    fn help_lists_dm_and_pending_for_unscoped_bot() {
+        // Unscoped /help keeps the dm + pending commands discoverable;
+        // slash-passthrough is manager-scoped only, so it's absent here.
+        let body = start_help_body(true, None);
+        assert!(
+            body.contains("/dm <project>:<agent>"),
+            "unscoped help must list /dm"
+        );
+        assert!(
+            body.contains("/pending"),
+            "unscoped help must list /pending"
+        );
+        assert!(
+            !body.contains("slash-passthrough"),
+            "unscoped bot has no manager tmux session to pass through to: {body}"
+        );
     }
 
     #[test]
