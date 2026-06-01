@@ -139,16 +139,17 @@ teamctl ui          # watch them work
 teamctl status      # is everyone alive?
 ```
 
-## 🩺 Diagnosing your setup
+## 🔍 Inspect your setup (`teamctl ui`)
 
-`teamctl ui` opens a live control room for the whole team: who is up, what each agent is working on right now, and every message moving between them. `teamctl status` gives you the same health check from the command line.
+A super lightweight UI, built in Rust, for inspecting your agents and their *actual* Claude Code sessions. See which agents you have, the messages they have exchanged, and work with a live session right from the UI. Each agent runs in a tmux session in the background, so when you close the UI the sessions keep working.
 
-|  |  |
-|:---:|:---:|
-| <img src="docs/assets/ui/control-room.png" width="420"/> | <img src="docs/assets/ui/agent-detail.png" width="420"/> |
-| **Control room:** roster, the agent you picked, and the live mailbox in one view | **One agent up close:** read a single agent's full stream of work |
-| <img src="docs/assets/ui/type-into-pane.png" width="420"/> | <img src="docs/assets/ui/splash.png" width="420"/> |
-| **Jump in:** drop into any agent's pane and type to it directly | **At a glance:** the dashboard when you open `teamctl ui` |
+<p align="center"><img src="docs/assets/ui/splash.png" width="600"/></p>
+
+<p align="center"><img src="docs/assets/ui/control-room.png" width="600"/></p>
+
+<p align="center"><img src="docs/assets/ui/agent-detail.png" width="600"/></p>
+
+<p align="center"><img src="docs/assets/ui/type-into-pane.png" width="600"/></p>
 
 ## 📚 Learn more
 
