@@ -14,7 +14,7 @@ const upCmd = 'teamctl up';
 // like" section: side-project + manager + dev + researcher.
 const yaml = [
   'project:',
-  '  id: side-project',
+  '  id: product-team',
   '',
   'managers:',
   '  manager:',
@@ -101,7 +101,7 @@ const features = [
   {
     title: 'Persistent agents.',
     body:
-      'Each one has identity, memory, and a domain. They survive reboots.',
+      'Each one has identity, memory, and a domain it owns. Conversation state survives crashes and restarts.',
   },
   {
     title: 'A messaging backbone.',
@@ -116,7 +116,7 @@ const features = [
   {
     title: 'Multi-runtime.',
     body:
-      'Mix Claude Code, Codex, and Gemini in the same team. Different agents can use different keys for billing or rate-limit headroom.',
+      'Mix Claude Code, Codex, and Gemini in the same team, each agent with its own keys. Claude Code has the most complete feature set today.',
   },
   {
     title: 'Project isolation.',
@@ -138,15 +138,15 @@ const featureBody = (s: string) =>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>teamctl: a team of AI agents, declared in YAML</title>
+    <title>teamctl: declare a team of AI agents in YAML, run it anywhere</title>
     <meta
       name="description"
-      content="A team of AI agents, collaborating over a messaging system, all declared in YAML. Persistent and scalable. Built to scale agent-to-agent collaboration and solve bigger problems with better orchestration."
+      content="Stop rebuilding your AI agent setup every time. Define it in YAML, run it with one command, and share it like a recipe."
     />
-    <meta property="og:title" content="teamctl: a team of AI agents, declared in YAML" />
+    <meta property="og:title" content="teamctl: declare a team of AI agents in YAML, run it anywhere" />
     <meta
       property="og:description"
-      content="A team of AI agents, collaborating over a messaging system, all declared in YAML. Persistent and scalable. Built to scale agent-to-agent collaboration and solve bigger problems with better orchestration."
+      content="Stop rebuilding your AI agent setup every time. Define it in YAML, run it with one command, and share it like a recipe."
     />
   </head>
   <body>
@@ -164,16 +164,16 @@ const featureBody = (s: string) =>
       </figure>
 
       <header class="lede">
-        <h1>A team of AI agents, declared in YAML.</h1>
-        <p class="subline">Collaborating over a messaging system. Persistent and scalable.</p>
+        <h1>Stop rebuilding your AI agent setup every time.</h1>
+        <p class="subline">Define your team in YAML, run it with one command, and share it like a recipe.</p>
       </header>
 
       <p class="intro">
-        Each agent is a real Claude Code, Codex, or Gemini session with its own identity, its own memory, and a domain it owns end-to-end. They talk to each other through a durable mailbox. They collaborate the way real teammates do: handing off, pushing back, picking up where the other left off, asking for help when they need it, keeping the work moving while you sleep. You stay in the loop on what matters through Telegram, the TUI, or the CLI.
+        You describe your team in YAML: who the agents are, what each one owns, and how they talk to each other. Each agent is a real Claude Code, Codex, or Gemini session with its own memory. <code>teamctl up</code> brings them up. Hand it to a teammate and they get the same team, not a screenshot of yours.
       </p>
 
       <p class="intro">
-        teamctl is built to scale agent-to-agent collaboration and solve bigger problems with better orchestration.
+        I built this for myself. Experiments worth sharing, so here we are.
         <a href="/concepts/teams/">Read the methodology</a>, or skip to the examples below.
       </p>
 
@@ -186,7 +186,7 @@ const featureBody = (s: string) =>
           </button>
         </div>
         <p class="install-note">
-          Installs <code>teamctl</code>, <code>team-mcp</code>, <code>team-bot</code>, and <code>teamctl-ui</code> on your <code>$PATH</code>, plus the Claude Code plugin if <code>claude</code> is detected.
+          Installs <code>teamctl</code> in your command line, plus the Claude Code plugin if <code>claude</code> is detected.
         </p>
       </section>
 
@@ -256,7 +256,7 @@ const featureBody = (s: string) =>
         <h2>Learn more</h2>
         <ul class="learn-list">
           <li>
-            📖 <a href="/concepts/teams/">How to think about agent teams</a> for the methodology, the two-gate framing, and what TeamOps means in practice.
+            📖 <a href="/concepts/teams/">How to think about agent teams</a> for the methodology behind team design.
           </li>
           <li>
             📚 <a href="/getting-started/">Documentation</a> for full docs, concepts, reference, and ADRs.
