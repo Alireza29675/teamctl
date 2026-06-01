@@ -20,8 +20,8 @@ teamctl bot setup
 
 The wizard opens with a fork:
 
-1. **Managed bots** — you set up **one** manager bot, and it spawns a child bot per manager for you (no per-manager BotFather trips). Needs a manager bot with Telegram's [Managed Bots](#managed-bots) capability enabled. See [Managed bots](#managed-bots) below.
-2. **Manual token** — the original flow: you paste a BotFather token for each manager yourself. Documented just below.
+1. **Manual token** (default) — the original flow: you paste a BotFather token for each manager yourself. Documented just below.
+2. **Managed bots** — you set up **one** manager bot, and it spawns a child bot per manager for you (no per-manager BotFather trips). Needs a manager bot with Telegram's [Managed Bots](#managed-bots) capability enabled, and the Telegram-side bot creation is rougher. See [Managed bots](#managed-bots) below.
 
 Targeting a single manager (`teamctl bot setup news:head_editor`) always uses the manual path. The rest of this section covers the manual flow.
 
