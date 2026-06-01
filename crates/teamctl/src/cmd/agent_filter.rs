@@ -137,6 +137,7 @@ mod tests {
             interfaces: None,
             display_name: None,
             hooks: vec![],
+            mcps: Default::default(),
         }
     }
 

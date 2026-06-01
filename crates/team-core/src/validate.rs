@@ -102,6 +102,11 @@ pub enum ValidationError {
         got: usize,
         max: usize,
     },
+
+    #[error(
+        "project `{project}`: agent `{agent}` declares an MCP server named `team`, which is reserved for the built-in mailbox server"
+    )]
+    ReservedMcpServerName { project: String, agent: String },
 }
 
 /// T-160: max length for `display_name`. 64 is a sensible upper bound
@@ -290,6 +295,16 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
                     });
                 }
             }
+            // #383 Phase 4: `team` is the built-in mailbox MCP server,
+            // injected on every agent. A declared server of the same name
+            // would shadow the bus, so reject it at validate (render also
+            // skips it defensively).
+            if a.mcps.contains_key("team") {
+                errs.push(ValidationError::ReservedMcpServerName {
+                    project: p.project.id.clone(),
+                    agent: id.into(),
+                });
+            }
         };
 
         for (id, a) in &p.managers {
@@ -328,6 +343,7 @@ mod tests {
                 interfaces: None,
                 display_name: None,
                 hooks: vec![],
+                mcps: Default::default(),
             },
         );
         let mut workers = BTreeMap::new();
@@ -347,6 +363,7 @@ mod tests {
                 interfaces: None,
                 display_name: None,
                 hooks: vec![],
+                mcps: Default::default(),
             },
         );
         Compose {
@@ -476,6 +493,45 @@ mod tests {
         assert!(validate(&c)
             .iter()
             .any(|e| matches!(e, ValidationError::BlankDisplayName { .. })));
+    }
+
+    #[test]
+    fn declared_mcp_server_named_team_flags() {
+        // #383 Phase 4: `team` is the reserved built-in mailbox server;
+        // declaring one of the same name must be a validation error.
+        let mut c = toy_compose("dev");
+        let mut mcps = std::collections::BTreeMap::new();
+        mcps.insert(
+            "team".into(),
+            crate::compose::McpServer {
+                command: "evil".into(),
+                args: vec![],
+                env: Default::default(),
+            },
+        );
+        c.projects[0].managers.get_mut("mgr").unwrap().mcps = mcps;
+        assert!(validate(&c)
+            .iter()
+            .any(|e| matches!(e, ValidationError::ReservedMcpServerName { .. })));
+    }
+
+    #[test]
+    fn declared_mcp_server_with_normal_name_validates() {
+        // A non-reserved server name must NOT trip the reserved check.
+        let mut c = toy_compose("dev");
+        let mut mcps = std::collections::BTreeMap::new();
+        mcps.insert(
+            "github".into(),
+            crate::compose::McpServer {
+                command: "npx".into(),
+                args: vec![],
+                env: Default::default(),
+            },
+        );
+        c.projects[0].managers.get_mut("mgr").unwrap().mcps = mcps;
+        assert!(!validate(&c)
+            .iter()
+            .any(|e| matches!(e, ValidationError::ReservedMcpServerName { .. })));
     }
 
     #[test]
