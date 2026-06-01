@@ -3,10 +3,20 @@
 <br/>
 
 <p align="center">
-  <strong>You build the perfect Claude Code setup, then it dies with the session.</strong><br/>
-  <strong>You can't run it again, can't hand it to a teammate, can't pass it on.</strong><br/><br/>
+  You configure the perfect Claude Code or Codex session setup, then it dies with the session.<br/>
+  You can't run it again, can't hand it to a teammate, can't pass it on...<br/><br/>
   <strong>teamctl lets you bottle it: your whole agent setup as something you</strong><br/>
   <strong>can run, share, and remix like a recipe.</strong>
+</p>
+
+<br/>
+
+<p align="center">
+  <a href="https://github.com/Alireza29675/teamctl/actions/workflows/ci.yml"><img src="https://github.com/Alireza29675/teamctl/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+  <a href="https://github.com/Alireza29675/teamctl/releases"><img src="https://img.shields.io/github/v/release/Alireza29675/teamctl" alt="Latest release"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"/></a>
+  <img src="https://img.shields.io/badge/MSRV-1.78-orange" alt="MSRV 1.78"/>
+  <a href="https://teamctl.run"><img src="https://img.shields.io/badge/docs-teamctl.run-1f6feb" alt="Docs"/></a>
 </p>
 
 <br/>
@@ -65,7 +75,7 @@ A project YAML with one manager and three workers (illustrative, not a full conf
 version: 2
 
 project:
-  id: service-desk
+  id: product-team
 
 # 📡 Slack-like channels: agents in a channel can post messages and receive notifications
 channels:
