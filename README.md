@@ -1,4 +1,4 @@
-<h1 align="center">🫙 teamctl</h1>
+<h1 align="center">teamctl</h1>
 
 <br/>
 
@@ -143,13 +143,25 @@ teamctl status      # is everyone alive?
 
 A super lightweight UI, built in Rust, for inspecting your agents and their *actual* Claude Code sessions. See which agents you have, the messages they have exchanged, and work with a live session right from the UI. Each agent runs in a tmux session in the background, so when you close the UI the sessions keep working.
 
-<p align="center"><img src="docs/assets/ui/splash.png" width="600"/></p>
+<p align="center">
+  <img src="docs/assets/ui/splash.png" width="780"/><br/>
+  <em>Splash screen</em>
+</p>
 
-<p align="center"><img src="docs/assets/ui/control-room.png" width="600"/></p>
+<p align="center">
+  <img src="docs/assets/ui/control-room.png" width="780"/><br/>
+  <em>You can view all your teams, their actual sessions, their mailbox</em>
+</p>
 
-<p align="center"><img src="docs/assets/ui/agent-detail.png" width="600"/></p>
+<p align="center">
+  <img src="docs/assets/ui/agent-detail.png" width="780"/><br/>
+  <em>You can inspect each message exchanged between agents</em>
+</p>
 
-<p align="center"><img src="docs/assets/ui/type-into-pane.png" width="600"/></p>
+<p align="center">
+  <img src="docs/assets/ui/type-into-pane.png" width="780"/><br/>
+  <em>You can also connect to the actual tmux sessions by pressing Ctrl+E and take control of the session</em>
+</p>
 
 ## 📚 Learn more
 
