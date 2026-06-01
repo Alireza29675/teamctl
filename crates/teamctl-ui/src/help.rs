@@ -106,11 +106,11 @@ pub const COMPOSE: &[Binding] = &[
 pub const STREAM_KEYS: &[Binding] = &[
     Binding {
         chord: "Ctrl+E",
-        description: "stream keys to focused agent's tmux pane (when detail focused)",
+        description: "enter stream-keys mode — forward keys to focused agent's tmux pane (when detail focused)",
     },
     Binding {
-        chord: "Esc",
-        description: "exit stream-keys mode",
+        chord: "Ctrl+E",
+        description: "exit stream-keys mode (Esc forwards to the pane, e.g. to Claude Code)",
     },
 ];
 
