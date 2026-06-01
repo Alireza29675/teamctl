@@ -47,10 +47,10 @@ Read [How to think about agent teams](/concepts/teams/) first if you want the co
 If you'd rather skip the wizard, start from a real example. Pick the shape closest to your work:
 
 ```bash
-cp -r teamctl/examples/personal-research ~/my-team   # 1 agent
-cp -r teamctl/examples/newsletter-team   ~/my-team   # 2 agents
+cp -r teamctl/examples/personal-research ~/my-team   # 2 agents
 cp -r teamctl/examples/market-analysis   ~/my-team   # 4 agents
-cp -r teamctl/examples/saas-product      ~/my-team   # 6 agents
+cp -r teamctl/examples/oss-maintainer    ~/my-team   # 5 agents
+cp -r teamctl/examples/newsletter-office ~/my-team   # 7 agents
 cd ~/my-team
 teamctl validate
 teamctl up
