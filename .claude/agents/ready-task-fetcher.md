@@ -18,7 +18,7 @@ Do this:
 - Filter to items whose **Status == "Ready"** (exact name match, case-insensitive on the literal "Ready"). Nothing else qualifies as pickable.
 - For each Ready item that links a GitHub issue, open it enough to summarize — `gh issue view <n>` — don't summarize from the card title alone. Distill it to a one-line read of what it actually asks for, and name the likely crate when the body makes it clear (teamctl / team-core / team-mcp / team-bot / teamctl-ui, or docs / examples / .team).
 - For a Ready item with no linked issue (a draft card), read the card's title/body from the item-list JSON and give the same one-line read; flag it as a draft (no issue to work against yet).
-- Surface routing signal: any assignee already on the card, and whether it's newly arrived in Ready (sort the freshest first, by item/issue `updatedAt` or `createdAt` — newest-flagged first) so nothing fresh gets buried.
+- Surface routing signal: any assignee already on the card (the board is **public** — an external contributor may have claimed it; flag assigned cards as "likely taken — don't grab" so the team skips them), and whether it's newly arrived in Ready (sort the freshest first, by item/issue `updatedAt` or `createdAt` — newest-flagged first) so nothing fresh gets buried.
 
 Return, in this shape:
 1. **Ready now** — `<title> — <one-line read> [crate?] [#<n> + url, or "draft (no issue)"] [assignee/none]`, newest-flagged first.
