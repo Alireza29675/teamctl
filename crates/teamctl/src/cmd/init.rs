@@ -17,8 +17,10 @@
 //! - `blank`      — empty compose tree for operators who know exactly
 //!   what they want.
 //!
-//! Templates are baked into the binary via `include_str!` so `init` works
-//! offline. When run interactively (no `--yes`), the user picks a
+//! Templates are baked into the binary via `include_dir!` (each template
+//! is an embedded folder) so `init` works offline; the `_common/` shared
+//! files are kept explicit per template so they stay single-source. When
+//! run interactively (no `--yes`), the user picks a
 //! template and confirms; the picker shows Ideate & Build / Guided /
 //! Blank and defaults to Ideate & Build. `essentials` is intentionally
 //! hidden from the picker but stays reachable via `--template essentials`
@@ -32,14 +34,78 @@ use std::io::{self, BufRead, Write};
 use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
+use include_dir::{include_dir, Dir};
 
 #[derive(Clone, Copy)]
 pub struct Template {
     pub key: &'static str,
     pub label: &'static str,
     pub blurb: &'static str,
-    pub files: &'static [(&'static str, &'static str)],
+    /// The template's own file tree, embedded at compile time. Walked
+    /// recursively at materialize time; each file's path relative to the
+    /// embedded root becomes its destination relpath under `.team/`.
+    /// Adding a file to the folder needs no edit here.
+    pub dir: &'static Dir<'static>,
+    /// Shared `_common/` overlays that don't live in the template's own
+    /// folder, as `(dest relpath, contents)`. Kept explicit so `_common`
+    /// stays single-source rather than copied into each template folder.
+    pub shared: &'static [(&'static str, &'static str)],
 }
+
+impl Template {
+    /// Materialized file set: every file in `dir` (recursively, by
+    /// root-relative path) plus the `shared` overlays. Skips OS metadata
+    /// files (see `collect_dir`). Ordered deterministically so the
+    /// non-`--yes` dry-run preview reads naturally — `team-compose.yaml`
+    /// (the file that defines the team) leads, then everything else
+    /// alphabetically (so the dotfiles group together rather than the
+    /// `shared` overlays dangling at the end). The materialized tree is
+    /// identical regardless of order.
+    pub(crate) fn entries(&self) -> Vec<(String, &'static str)> {
+        let mut out: Vec<(String, &'static str)> = Vec::new();
+        collect_dir(self.dir, &mut out);
+        out.extend(self.shared.iter().map(|(p, c)| ((*p).to_string(), *c)));
+        out.sort_by(|a, b| {
+            let rank = |p: &str| usize::from(p != "team-compose.yaml");
+            rank(&a.0).cmp(&rank(&b.0)).then_with(|| a.0.cmp(&b.0))
+        });
+        out
+    }
+}
+
+/// Recursively collect `(root-relative path, utf8 contents)` for every
+/// file under `dir`, skipping OS-injected directory-metadata files.
+/// `include_dir` yields paths relative to the embedded root, which are
+/// exactly the destination relpaths under `.team/`.
+fn collect_dir(dir: &'static Dir<'static>, out: &mut Vec<(String, &'static str)>) {
+    for file in dir.files() {
+        let rel = file.path().to_string_lossy().into_owned();
+        // Never template content, but they embed at compile time if a
+        // maintainer's working tree has them when `include_dir!` runs.
+        if rel.ends_with(".DS_Store") || rel.ends_with("Thumbs.db") {
+            continue;
+        }
+        let contents = file
+            .contents_utf8()
+            .unwrap_or_else(|| panic!("template file `{rel}` is not valid UTF-8"));
+        out.push((rel, contents));
+    }
+    for sub in dir.dirs() {
+        collect_dir(sub, out);
+    }
+}
+
+static IDEATE_DIR: Dir<'static> =
+    include_dir!("$CARGO_MANIFEST_DIR/assets/templates/ideate-and-build");
+static ESSENTIALS_DIR: Dir<'static> =
+    include_dir!("$CARGO_MANIFEST_DIR/assets/templates/essentials");
+static BLANK_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/templates/blank");
+
+/// `_common/` files shared across templates, embedded once so they stay
+/// single-source. Referenced from each template's `shared` overlay under
+/// the destination path that template expects.
+const COMMON_GITIGNORE: &str = include_str!("../../assets/templates/_common/.gitignore");
+const COMMON_ENV: &str = include_str!("../../assets/templates/_common/.env.example");
 
 /// Sentinel key for the `guided` template. It ships no files; selecting
 /// it execs `claude /teamctl:init` instead of writing a tree, so we
@@ -57,174 +123,28 @@ pub const TEMPLATES: &[Template] = &[
         key: "ideate-and-build",
         label: "Ideate & Build",
         blurb: "An Executor, a Compass ideation partner, and two engineers — think it through, then build it.",
-        files: &[
-            (
-                "team-compose.yaml",
-                include_str!("../../assets/templates/ideate-and-build/team-compose.yaml"),
-            ),
-            (
-                "projects/main.yaml",
-                include_str!("../../assets/templates/ideate-and-build/projects/main.yaml"),
-            ),
-            (
-                "roles/_base.md",
-                include_str!("../../assets/templates/ideate-and-build/roles/_base.md"),
-            ),
-            (
-                "roles/_telegram.md",
-                include_str!("../../assets/templates/ideate-and-build/roles/_telegram.md"),
-            ),
-            (
-                "roles/_engineer.md",
-                include_str!("../../assets/templates/ideate-and-build/roles/_engineer.md"),
-            ),
-            (
-                "roles/executor.md",
-                include_str!("../../assets/templates/ideate-and-build/roles/executor.md"),
-            ),
-            (
-                "roles/compass.md",
-                include_str!("../../assets/templates/ideate-and-build/roles/compass.md"),
-            ),
-            // The sub-agents the engineer + Compass roles reference,
-            // rendered into Claude Code's `--agents` per agent via the
-            // `subagents:` field in projects/main.yaml.
-            (
-                "agents/code-investigator.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/code-investigator.md"),
-            ),
-            (
-                "agents/implementer.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/implementer.md"),
-            ),
-            (
-                "agents/test-author.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/test-author.md"),
-            ),
-            (
-                "agents/qa-tester.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/qa-tester.md"),
-            ),
-            (
-                "agents/pr-narrator.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/pr-narrator.md"),
-            ),
-            (
-                "agents/code-roaster.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/code-roaster.md"),
-            ),
-            (
-                "agents/memory-writer.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/memory-writer.md"),
-            ),
-            (
-                "agents/product-researcher.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/product-researcher.md"),
-            ),
-            (
-                "agents/feasibility-analyst.md",
-                include_str!(
-                    "../../assets/templates/ideate-and-build/agents/feasibility-analyst.md"
-                ),
-            ),
-            (
-                "agents/deep-research.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/deep-research.md"),
-            ),
-            (
-                "agents/learn.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/learn.md"),
-            ),
-            (
-                "agents/pr-summarizer.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/pr-summarizer.md"),
-            ),
-            (
-                "agents/ideator.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/ideator.md"),
-            ),
-            (
-                "agents/code-review.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/code-review.md"),
-            ),
-            (
-                "agents/security-review.md",
-                include_str!("../../assets/templates/ideate-and-build/agents/security-review.md"),
-            ),
-            (
-                "charter.md",
-                include_str!("../../assets/templates/ideate-and-build/charter.md"),
-            ),
-            (
-                ".env.example",
-                include_str!("../../assets/templates/ideate-and-build/.env.example"),
-            ),
-            (
-                ".gitignore",
-                include_str!("../../assets/templates/_common/.gitignore"),
-            ),
-            (
-                "README.md",
-                include_str!("../../assets/templates/ideate-and-build/README.md"),
-            ),
-        ],
+        dir: &IDEATE_DIR,
+        // Own folder ships roles/, agents/, charter.md, .env.example,
+        // README.md; only .gitignore comes from _common.
+        shared: &[(".gitignore", COMMON_GITIGNORE)],
     },
     Template {
         key: "essentials",
         label: "Essentials",
         blurb: "A blank project + an ops bot that helps you evolve it.",
-        files: &[
-            (
-                "team-compose.yaml",
-                include_str!("../../assets/templates/essentials/team-compose.yaml"),
-            ),
-            (
-                "projects/main.yaml",
-                include_str!("../../assets/templates/essentials/projects/main.yaml"),
-            ),
-            (
-                "projects/ops.yaml",
-                include_str!("../../assets/templates/essentials/projects/ops.yaml"),
-            ),
-            (
-                "roles/ops.md",
-                include_str!("../../assets/templates/essentials/roles/ops.md"),
-            ),
-            (
-                ".env.example",
-                include_str!("../../assets/templates/essentials/.env.example"),
-            ),
-            (
-                ".gitignore",
-                include_str!("../../assets/templates/_common/.gitignore"),
-            ),
-            (
-                "README.md",
-                include_str!("../../assets/templates/essentials/README.md"),
-            ),
-        ],
+        dir: &ESSENTIALS_DIR,
+        // Own folder ships its .env.example; only .gitignore is shared.
+        shared: &[(".gitignore", COMMON_GITIGNORE)],
     },
     Template {
         key: "blank",
         label: "Blank",
         blurb: "Empty compose tree. Wire it up yourself.",
-        files: &[
-            (
-                "team-compose.yaml",
-                include_str!("../../assets/templates/blank/team-compose.yaml"),
-            ),
-            (
-                "projects/main.yaml",
-                include_str!("../../assets/templates/blank/projects/main.yaml"),
-            ),
-            (
-                ".env.example",
-                include_str!("../../assets/templates/_common/.env.example"),
-            ),
-            (
-                ".gitignore",
-                include_str!("../../assets/templates/_common/.gitignore"),
-            ),
+        dir: &BLANK_DIR,
+        // Bare tree — both dotfiles come from _common.
+        shared: &[
+            (".env.example", COMMON_ENV),
+            (".gitignore", COMMON_GITIGNORE),
         ],
     },
 ];
@@ -363,13 +283,15 @@ pub fn run(
     subs.insert("project_id", pid.clone());
     subs.insert("project_name", titlecase(&pid));
 
+    let files = tpl.entries();
+
     if !yes {
         eprintln!();
         eprintln!("About to scaffold `.team/` at {}:", target.display());
         eprintln!("  template:    {} ({})", tpl.label, tpl.key);
         eprintln!("  project id:  {pid}");
         eprintln!("  files:");
-        for (path, _) in tpl.files {
+        for (path, _) in &files {
             eprintln!("    .team/{path}");
         }
         if !confirm("Proceed?")? {
@@ -378,7 +300,7 @@ pub fn run(
     }
 
     fs::create_dir_all(&target)?;
-    for (relpath, contents) in tpl.files {
+    for (relpath, contents) in &files {
         let dest = target.join(relpath);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
@@ -643,6 +565,180 @@ mod tests {
         assert!(keys.contains("ideate-and-build"));
         assert!(keys.contains("essentials"));
         assert!(keys.contains("blank"));
+    }
+
+    // ── `entries()` refactor (#395) ───────────────────────────────────
+    // Templates no longer hand-list files via `include_str!`; each carries
+    // an embedded `dir` walked recursively plus `shared` `_common/`
+    // overlays. These tests pin that mechanism so a future regression
+    // (a dropped file, a wrong dest path, a duplicated dotfile) is caught
+    // at the unit level — cli.rs already covers the materialized tree.
+
+    /// Find the contents for the entry at `dest`, if any. `entries()`
+    /// dest paths use `/` separators (include_dir yields root-relative
+    /// forward-slash paths), matching the literals the tests assert.
+    fn entry_for<'a>(entries: &'a [(String, &'static str)], dest: &str) -> Option<&'a str> {
+        entries.iter().find(|(p, _)| p == dest).map(|(_, c)| *c)
+    }
+
+    #[test]
+    fn entries_ships_compose_and_gitignore_for_every_template() {
+        // Core "no file silently dropped" guard: whatever the walk + shared
+        // overlay produce, every file-shipping template must still yield a
+        // compose root and a .gitignore, both with real contents.
+        for tpl in TEMPLATES {
+            let entries = tpl.entries();
+            let compose = entry_for(&entries, "team-compose.yaml")
+                .unwrap_or_else(|| panic!("template `{}` must ship team-compose.yaml", tpl.key));
+            assert!(
+                !compose.is_empty(),
+                "template `{}` ships an empty team-compose.yaml",
+                tpl.key
+            );
+            let gitignore = entry_for(&entries, ".gitignore")
+                .unwrap_or_else(|| panic!("template `{}` must ship .gitignore", tpl.key));
+            assert!(
+                !gitignore.is_empty(),
+                "template `{}` ships an empty .gitignore",
+                tpl.key
+            );
+        }
+    }
+
+    #[test]
+    fn entries_walks_nested_dirs() {
+        // The recursive walk must yield correct root-relative dest paths
+        // for files nested under subdirectories, not just top-level files.
+        let tpl = TEMPLATES
+            .iter()
+            .find(|t| t.key == "ideate-and-build")
+            .expect("ideate-and-build template");
+        let entries = tpl.entries();
+        for dest in [
+            "projects/main.yaml",
+            "roles/_base.md",
+            "agents/implementer.md",
+        ] {
+            assert!(
+                entry_for(&entries, dest).is_some(),
+                "ideate-and-build entries() must include nested `{dest}`; got {:?}",
+                entries.iter().map(|(p, _)| p).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn entries_includes_shared_common_overlays() {
+        // `_common/` overlays live in a single source folder but land in
+        // each template under the dest path the template's `shared` list
+        // declares. Prove both blank dotfiles come through with the exact
+        // single-source contents.
+        let blank = TEMPLATES
+            .iter()
+            .find(|t| t.key == "blank")
+            .expect("blank template");
+        let blank_entries = blank.entries();
+        assert_eq!(
+            entry_for(&blank_entries, ".env.example"),
+            Some(COMMON_ENV),
+            "blank .env.example must be the shared _common/.env.example"
+        );
+        assert_eq!(
+            entry_for(&blank_entries, ".gitignore"),
+            Some(COMMON_GITIGNORE),
+            "blank .gitignore must be the shared _common/.gitignore"
+        );
+
+        let essentials = TEMPLATES
+            .iter()
+            .find(|t| t.key == "essentials")
+            .expect("essentials template");
+        assert_eq!(
+            entry_for(&essentials.entries(), ".gitignore"),
+            Some(COMMON_GITIGNORE),
+            "essentials .gitignore must be the shared _common/.gitignore"
+        );
+    }
+
+    #[test]
+    fn entries_blank_does_not_duplicate_dotfiles() {
+        // Guards a future change that both walks a `_common` file from the
+        // template folder AND appends it via `shared` — each dotfile must
+        // appear exactly once so the write loop doesn't clobber itself.
+        let blank = TEMPLATES
+            .iter()
+            .find(|t| t.key == "blank")
+            .expect("blank template");
+        let entries = blank.entries();
+        let count = |dest: &str| entries.iter().filter(|(p, _)| p == dest).count();
+        assert_eq!(
+            count(".gitignore"),
+            1,
+            "blank must ship exactly one .gitignore"
+        );
+        assert_eq!(
+            count(".env.example"),
+            1,
+            "blank must ship exactly one .env.example"
+        );
+    }
+
+    #[test]
+    fn entries_skips_ds_store() {
+        // A stray macOS `.DS_Store` embedded at compile time must never
+        // reach a scaffolded tree — the walk filters it by suffix.
+        for tpl in TEMPLATES {
+            for (path, _) in tpl.entries() {
+                assert!(
+                    !path.ends_with(".DS_Store"),
+                    "template `{}` leaked a .DS_Store entry: `{path}`",
+                    tpl.key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_template_file_is_utf8() {
+        // `collect_dir` panics on a non-UTF-8 file (templates are text).
+        // This makes a binary asset accidentally committed to a template
+        // folder fail in CI rather than at runtime for an operator running
+        // `teamctl init` — important since adding a file is meant to need
+        // no code edit, so tests are the only guard.
+        fn check(dir: &Dir<'static>, bad: &mut Vec<String>) {
+            for f in dir.files() {
+                if f.contents_utf8().is_none() {
+                    bad.push(f.path().to_string_lossy().into_owned());
+                }
+            }
+            for d in dir.dirs() {
+                check(d, bad);
+            }
+        }
+        for tpl in TEMPLATES {
+            let mut bad = Vec::new();
+            check(tpl.dir, &mut bad);
+            assert!(
+                bad.is_empty(),
+                "template `{}` has non-UTF-8 file(s): {bad:?}",
+                tpl.key
+            );
+        }
+    }
+
+    #[test]
+    fn entries_lead_with_team_compose() {
+        // The non-`--yes` preview leads with the file that defines the
+        // team. Pin it so the readable ordering is a decision, not an
+        // accident of the sort.
+        for tpl in TEMPLATES {
+            let entries = tpl.entries();
+            assert_eq!(
+                entries[0].0, "team-compose.yaml",
+                "template `{}` should preview team-compose.yaml first, got `{}`",
+                tpl.key, entries[0].0
+            );
+        }
     }
 
     #[test]
