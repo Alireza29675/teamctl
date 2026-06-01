@@ -86,6 +86,55 @@ pub const TEMPLATES: &[Template] = &[
                 "roles/compass.md",
                 include_str!("../../assets/templates/ideate-and-build/roles/compass.md"),
             ),
+            // The sub-agents the engineer + Compass roles reference,
+            // rendered into Claude Code's `--agents` per agent via the
+            // `subagents:` field in projects/main.yaml.
+            (
+                "agents/code-investigator.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/code-investigator.md"),
+            ),
+            (
+                "agents/implementer.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/implementer.md"),
+            ),
+            (
+                "agents/test-author.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/test-author.md"),
+            ),
+            (
+                "agents/qa-tester.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/qa-tester.md"),
+            ),
+            (
+                "agents/pr-narrator.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/pr-narrator.md"),
+            ),
+            (
+                "agents/code-roaster.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/code-roaster.md"),
+            ),
+            (
+                "agents/memory-writer.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/memory-writer.md"),
+            ),
+            (
+                "agents/product-researcher.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/product-researcher.md"),
+            ),
+            (
+                "agents/feasibility-analyst.md",
+                include_str!(
+                    "../../assets/templates/ideate-and-build/agents/feasibility-analyst.md"
+                ),
+            ),
+            (
+                "agents/deep-research.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/deep-research.md"),
+            ),
+            (
+                "agents/learn.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/learn.md"),
+            ),
             (
                 "charter.md",
                 include_str!("../../assets/templates/ideate-and-build/charter.md"),

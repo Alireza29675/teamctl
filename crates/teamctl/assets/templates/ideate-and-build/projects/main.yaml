@@ -68,6 +68,19 @@ managers:
       - roles/_base.md
       - roles/_telegram.md
       - roles/compass.md
+    # Compass's investigation sub-agents (see roles/compass.md): capture
+    # ideas to memory, and ground ideation with code / prior-art / market /
+    # domain research. All read-only except memory-writer, which writes
+    # only the idea notes it's fed. `deep-research` and `learn` are this
+    # team's own bespoke sub-agents — self-contained, not the host's
+    # ambient skills.
+    subagents:
+      - agents/memory-writer.md
+      - agents/code-investigator.md
+      - agents/product-researcher.md
+      - agents/feasibility-analyst.md
+      - agents/deep-research.md
+      - agents/learn.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:
@@ -87,6 +100,17 @@ workers:
     role_prompt:
       - roles/_base.md
       - roles/_engineer.md
+    # The engineer's stable of sub-agents (see roles/_engineer.md §2).
+    # Each is a sub-agent markdown file under `agents/`; teamctl renders
+    # them into Claude Code's `--agents` so this agent can spin them up,
+    # on top of any project- or user-level sub-agents.
+    subagents:
+      - agents/code-investigator.md
+      - agents/implementer.md
+      - agents/test-author.md
+      - agents/qa-tester.md
+      - agents/pr-narrator.md
+      - agents/code-roaster.md
     permission_mode: auto
     autonomy: low_risk_only
     reports_to: executor
@@ -103,6 +127,17 @@ workers:
     role_prompt:
       - roles/_base.md
       - roles/_engineer.md
+    # The engineer's stable of sub-agents (see roles/_engineer.md §2).
+    # Each is a sub-agent markdown file under `agents/`; teamctl renders
+    # them into Claude Code's `--agents` so this agent can spin them up,
+    # on top of any project- or user-level sub-agents.
+    subagents:
+      - agents/code-investigator.md
+      - agents/implementer.md
+      - agents/test-author.md
+      - agents/qa-tester.md
+      - agents/pr-narrator.md
+      - agents/code-roaster.md
     permission_mode: auto
     autonomy: low_risk_only
     reports_to: executor
