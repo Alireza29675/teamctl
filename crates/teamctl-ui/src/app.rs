@@ -2063,15 +2063,20 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
                 KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('p') => app.tutorial_back(),
                 _ => app.tutorial_advance(),
             },
-            // T-108 stream-keys mode. Esc is the only chord we
-            // intercept — every other key (including `Ctrl+C`,
-            // `Ctrl+E`, arrow keys, `Enter`) forwards to the agent's
-            // tmux pane. The pass-through behaviour is intentional:
-            // the operator is "effectively attached," and a shell-
-            // user's Ctrl+C should send SIGINT to the agent, not
-            // bail them out of the mode they just entered.
+            // T-108 / T-374 stream-keys mode. `Ctrl+E` is the only
+            // chord we intercept — it's the symmetric exit toggle
+            // (the same chord enters the mode from a focused detail
+            // pane). Every other key — including `Esc`, `Ctrl+C`,
+            // arrow keys, `Enter` — forwards to the agent's tmux
+            // pane. The pass-through is intentional: the operator is
+            // "effectively attached," so `Esc` reaches Claude Code
+            // (it's load-bearing there) and a shell-user's `Ctrl+C`
+            // sends SIGINT to the agent rather than bailing out of
+            // the mode they just entered.
             Stage::StreamKeys => {
-                if matches!(k.code, KeyCode::Esc) {
+                if matches!(k.code, KeyCode::Char('e') | KeyCode::Char('E'))
+                    && k.modifiers.contains(KeyModifiers::CONTROL)
+                {
                     app.exit_stream_keys();
                 } else if let Some(session) = app.stream_target_session() {
                     if let Some(encoded) = encode_key(k) {
@@ -3587,17 +3592,47 @@ mod tests {
     }
 
     #[test]
-    fn esc_exits_stream_keys() {
+    fn esc_forwards_to_pane_in_stream_keys() {
+        // T-374: Esc is NOT the exit chord — it forwards to the
+        // agent's tmux pane like any other key, so Claude Code (where
+        // Esc is load-bearing) receives it. Exit is `Ctrl+E` now.
         use crate::keysender::test_support::MockKeySender;
+        use crossterm::event::KeyModifiers;
         let mut app = stream_keys_fixture();
         app.enter_stream_keys();
         assert_eq!(app.stage, Stage::StreamKeys);
         let ks = MockKeySender::default();
-        stream_dispatch(&mut app, key(KeyCode::Esc), &ks);
+        stream_dispatch(&mut app, key_with(KeyCode::Esc, KeyModifiers::NONE), &ks);
+        assert_eq!(
+            app.stage,
+            Stage::StreamKeys,
+            "Esc does NOT exit stream-keys"
+        );
+        let calls = ks.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "Esc forwards as one keystroke");
+        assert_eq!(calls[0].0, "t-p-a");
+        assert_eq!(calls[0].1.args, vec!["Escape".to_string()]);
+    }
+
+    #[test]
+    fn ctrl_e_exits_stream_keys() {
+        // T-374: Ctrl+E is the symmetric exit toggle (same chord
+        // that enters the mode). It must exit, not forward.
+        use crate::keysender::test_support::MockKeySender;
+        use crossterm::event::KeyModifiers;
+        let mut app = stream_keys_fixture();
+        app.enter_stream_keys();
+        assert_eq!(app.stage, Stage::StreamKeys);
+        let ks = MockKeySender::default();
+        stream_dispatch(
+            &mut app,
+            key_with(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &ks,
+        );
         assert_eq!(app.stage, Stage::Triptych);
         assert!(
             ks.calls.lock().unwrap().is_empty(),
-            "Esc is the exit chord — it must not forward as a keystroke"
+            "Ctrl+E is the exit chord — it must not forward as a keystroke"
         );
     }
 

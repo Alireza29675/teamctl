@@ -26,7 +26,7 @@ impl Widget for Statusline<'_> {
         // T-108 stream-keys: when stream-mode is active the
         // statusline becomes the load-bearing visual indicator —
         // bright reversed banner across the whole row, "STREAM-KEYS
-        // → <agent>  ·  Esc to exit". The bright reversed style
+        // → <agent>  ·  Ctrl+E to exit". The bright reversed style
         // matches the approvals stripe affordance so the operator
         // reads it as a sticky modal warning even in monochrome
         // terminals where colour alone wouldn't carry.
@@ -37,7 +37,7 @@ impl Widget for Statusline<'_> {
                 .unwrap_or_else(|| "<no agent>".into());
             let target = crate::data::agent_label(&self.app.team, &target_id);
             let banner = format!(
-                "● STREAM-KEYS → {target}   keystrokes forwarding to tmux pane   ·   Esc to exit"
+                "● STREAM-KEYS → {target}   keystrokes forwarding to tmux pane   ·   Ctrl+E to exit"
             );
             let style = Style::default()
                 .fg(self.app.capabilities.accent())

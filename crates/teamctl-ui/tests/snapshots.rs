@@ -774,7 +774,7 @@ fn stream_keys_mode_renders_banner_and_pane_marker() {
         "statusline banner missing the target id"
     );
     assert!(
-        rendered.contains("Esc to exit"),
+        rendered.contains("Ctrl+E to exit"),
         "statusline banner missing the exit hint"
     );
     assert!(
