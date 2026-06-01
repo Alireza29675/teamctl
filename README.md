@@ -77,7 +77,7 @@ managers:
   # 🛎️ your one manager: you chat with it on Telegram, it runs the show
   service_desk:
     runtime: claude-code
-    model: claude-opus-4-8
+    model: claude-sonnet-4-6
     role_prompt: roles/service_desk.md
     interfaces:
       telegram:               # 📱 tap to talk to your team from your phone
@@ -102,7 +102,7 @@ workers:
   # 🔭 autonomous discovery: keeps finding and prototyping ideas
   research:
     runtime: claude-code
-    model: claude-sonnet-4-6
+    model: claude-opus-4-8
     role_prompt: roles/research.md
     reports_to: service_desk
     subagents:
