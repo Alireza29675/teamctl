@@ -70,6 +70,7 @@ project:
 channels:
   - name: all
     members: "*"
+
   - name: dev                 # 🔀 the two executors review each other's PRs here
     members: [claude_exec, codex_exec]
 
@@ -95,6 +96,7 @@ workers:
     reports_to: service_desk
     subagents:                # 🧩 give an agent its own sub-agents (claude-code)
       - agents/researcher.md
+
   # 🤖 a Codex executor: the other half of the review loop
   codex_exec:
     display_name: "Codex Executor"
@@ -102,6 +104,7 @@ workers:
     model: gpt-5-codex
     role_prompt: roles/executor.md
     reports_to: service_desk
+
   # 🔭 autonomous discovery: keeps finding and prototyping ideas
   research:
     display_name: "Research and Discovery"
