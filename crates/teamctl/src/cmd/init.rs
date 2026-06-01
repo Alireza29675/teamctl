@@ -136,6 +136,22 @@ pub const TEMPLATES: &[Template] = &[
                 include_str!("../../assets/templates/ideate-and-build/agents/learn.md"),
             ),
             (
+                "agents/pr-summarizer.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/pr-summarizer.md"),
+            ),
+            (
+                "agents/ideator.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/ideator.md"),
+            ),
+            (
+                "agents/code-review.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/code-review.md"),
+            ),
+            (
+                "agents/security-review.md",
+                include_str!("../../assets/templates/ideate-and-build/agents/security-review.md"),
+            ),
+            (
                 "charter.md",
                 include_str!("../../assets/templates/ideate-and-build/charter.md"),
             ),

@@ -40,6 +40,11 @@ managers:
       - roles/_base.md
       - roles/_telegram.md
       - roles/executor.md
+    # The Executor's one sub-agent: turn an engineer's ready PR into a
+    # plain-language approve/merge summary it can forward to you on
+    # Telegram, so the decision reaches you without the diff.
+    subagents:
+      - agents/pr-summarizer.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:
@@ -81,6 +86,7 @@ managers:
       - agents/feasibility-analyst.md
       - agents/deep-research.md
       - agents/learn.md
+      - agents/ideator.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm:
@@ -111,6 +117,8 @@ workers:
       - agents/qa-tester.md
       - agents/pr-narrator.md
       - agents/code-roaster.md
+      - agents/code-review.md
+      - agents/security-review.md
     permission_mode: auto
     autonomy: low_risk_only
     reports_to: executor
@@ -138,6 +146,8 @@ workers:
       - agents/qa-tester.md
       - agents/pr-narrator.md
       - agents/code-roaster.md
+      - agents/code-review.md
+      - agents/security-review.md
     permission_mode: auto
     autonomy: low_risk_only
     reports_to: executor

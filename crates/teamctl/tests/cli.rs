@@ -389,6 +389,10 @@ fn init_ideate_and_build_template_scaffolds_with_subagents() {
         "agents/feasibility-analyst.md",
         "agents/deep-research.md",
         "agents/learn.md",
+        "agents/pr-summarizer.md",
+        "agents/ideator.md",
+        "agents/code-review.md",
+        "agents/security-review.md",
     ] {
         assert!(
             team_dir.join(relpath).is_file(),
@@ -444,6 +448,8 @@ fn ideate_and_build_template_renders_per_agent_subagents() {
         "qa-tester",
         "pr-narrator",
         "code-roaster",
+        "code-review",
+        "security-review",
     ];
     expect_names("engineer_1", &engineer_stable);
     expect_names("engineer_2", &engineer_stable);
@@ -456,18 +462,12 @@ fn ideate_and_build_template_renders_per_agent_subagents() {
             "feasibility-analyst",
             "deep-research",
             "learn",
+            "ideator",
         ],
     );
-
-    // The Executor declares no sub-agents — render must yield None, not
-    // an empty object, so the wrapper omits `--agents` entirely.
-    let executor = compose.agents().find(|h| h.agent == "executor").unwrap();
-    assert!(
-        team_core::render::render_subagents(&compose, executor)
-            .unwrap()
-            .is_none(),
-        "executor declares no sub-agents; render must be None"
-    );
+    // The Executor gets a single sub-agent: pr-summarizer, so it can turn
+    // an engineer's ready PR into a plain-language summary for the operator.
+    expect_names("executor", &["pr-summarizer"]);
 }
 
 #[test]
