@@ -9,6 +9,14 @@
   <strong>can run, share, and remix like a recipe.</strong>
 </p>
 
+<p align="center">
+  <a href="https://github.com/Alireza29675/teamctl/actions/workflows/ci.yml"><img src="https://github.com/Alireza29675/teamctl/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+  <a href="https://github.com/Alireza29675/teamctl/releases"><img src="https://img.shields.io/github/v/release/Alireza29675/teamctl" alt="Latest release"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"/></a>
+  <img src="https://img.shields.io/badge/MSRV-1.78-orange" alt="MSRV 1.78"/>
+  <a href="https://teamctl.run"><img src="https://img.shields.io/badge/docs-teamctl.run-1f6feb" alt="Docs"/></a>
+</p>
+
 <br/>
 
 You describe your team in YAML: who the agents are, what each one owns, and how they talk to each other. Each agent is a real Claude Code, Codex, or Gemini session with its own memory. `teamctl up` brings them up. Hand it to a teammate and they get the same team, not a screenshot of yours.
