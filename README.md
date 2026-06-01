@@ -1,3 +1,5 @@
+<h1 align="center">teamctl</h1>
+
 <p align="center">
   <strong>You build the perfect Claude Code setup, then it dies with the session.</strong><br/>
   <strong>You can't run it again, can't hand it to a teammate, can't pass it on.</strong><br/>
@@ -9,7 +11,7 @@ You describe your team in YAML: who the agents are, what each one owns, and how 
 
 I built this for myself. Experiments worth sharing, so here we are :)
 
-## Get started
+## 🚀 Get started
 
 ```bash
 curl -fsSL https://teamctl.run/install | sh
@@ -23,20 +25,31 @@ teamctl init
 
 `init` opens a short conversation that surfaces the domains in your work and proposes a team shape. You can let it design the team with you (guided), start from a small essentials scaffold, or take an empty tree and hand-wire it yourself. By the time you're done, `.team/team-compose.yaml` is on disk and the team is running in `tmux`.
 
-## Examples
+## 🍒 Extras on top
+
+Because teamctl runs your sessions, it can hand them tools they would not have on their own. A session can call `compact_self` to compact its own context and keep going, and that is just the start:
+
+1. 🔀 **[Orchestration and a shared mailbox](https://teamctl.run/concepts/channels/):** agents coordinate and message each other through durable channels you can audit.
+2. ⚙️ **[Per-agent settings](https://teamctl.run/reference/team-compose-yaml/):** give each agent its own runtime, model, role, and tools.
+3. 🖥️ **[One UI for the whole team](https://teamctl.run/reference/teamctl/):** watch every agent in one place with `teamctl ui`.
+4. 📱 **[Easy Telegram hookup](https://teamctl.run/guides/telegram-bot/):** steer your team from your phone (more interfaces on the way).
+
+## 🧩 Examples
 
 Real teams running on teamctl. Copy any of them as a starting point.
 
 | Example | What it does |
 |---|---|
+| 🏗️ **[product-team](examples/product-team/)** | A product squad: a PM and engineers coordinating around what to build and ship. |
 | 🛰️ **[oss-maintainer](examples/oss-maintainer/)** | Runs a one-person open-source project: triage, bug-fix PRs, docs, and release proposals you approve. |
+| 🧪 **[autonomous-prototyper](examples/autonomous-prototyper/)** | Comes up with ideas and prototypes them end to end. |
 | 🌱 **[personal-research](examples/personal-research/)** | A reading buddy that holds your interests, plus a curator that follows the news and surfaces what matters. |
 | 📈 **[market-analysts](examples/market-analysts/)** | A read-only research desk that backs financial decisions, with one analyst whose only job is to dissent. |
 | 💼 **[job-finder](examples/job-finder/)** | Runs your job search: watches boards, aligns your CV to postings, and drafts cover letters you approve. |
 
 More under [`examples/`](examples/).
 
-## What a team looks like
+## 🧱 What a team looks like
 
 A project YAML with one manager and two workers (illustrative, not a full config):
 
@@ -79,21 +92,16 @@ teamctl ui          # watch them work
 teamctl status      # is everyone alive?
 ```
 
-## What you get
-
-- **Persistent agents.** Each one has identity, durable memory, and a domain it owns. Their conversation state survives process crashes and restarts: bring the team back up with `teamctl up` and they resume where they left off.
-- **A messaging backbone.** Agents DM each other and broadcast through channels, and you can audit every line.
-- **Human-in-the-loop when it matters.** Agents are configured to route sensitive actions (publish, release, deploy, external email) through an approval gate that waits for your tap before proceeding. Enforced through agent role prompts and the `request_approval` tool, not by intercepting tool calls.
-- **Multi-runtime.** Mix Claude Code, Codex, and Gemini in one team, each agent with its own keys. Claude Code currently has the most complete feature set (session resume, `--fresh`), with Codex and Gemini at lighter parity.
-- **Project isolation.** Run unrelated teams side-by-side without cross-talk, and bridge two projects only when you mean to.
-- **Reach them where you are.** Watch and steer through the CLI, the TUI, or Telegram. (Telegram is the only adapter shipped today; Discord, email, and more on the way.)
-
-## Learn more
+## 📚 Learn more
 
 - 📖 [How to think about agent teams](https://teamctl.run/concepts/teams/) for the methodology behind team design.
 - 📚 [Documentation](https://teamctl.run) for full docs, concepts, and reference.
 - 🧪 [How teamctl compares](https://teamctl.run/compare/) for the feature matrix against neighboring tools.
 
-## License
+## 🤝 Contributing
+
+If anything feels missing or off, please open an issue or a PR. This is an experiment and there is plenty left to build, so help is genuinely welcome.
+
+## ⚖️ License
 
 [MIT](./LICENSE)
