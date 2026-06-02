@@ -23,7 +23,7 @@ Pick the example closest to your work, copy it, edit. The `personal-research` ex
 git clone git@github.com:Alireza29675/teamctl.git   # the curl install doesn't bundle the examples
 cp -r teamctl/examples/personal-research ~/my-team
 cd ~/my-team
-teamctl validate           # ok · 1 project · 2 agents
+teamctl validate           # ok · 1 project · 2 agent sessions
 teamctl up                 # renders .team/state/, starts tmux sessions
 teamctl status             # shows the buddy and curator running
 teamctl ui                 # watch them work
