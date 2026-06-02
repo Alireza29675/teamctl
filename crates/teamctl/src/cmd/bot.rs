@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -40,6 +40,18 @@ pub enum BotAction {
 
 // ── Setup wizard ────────────────────────────────────────────────────
 
+/// Wrap `s` in an ANSI SGR code when stdout is a terminal; plain text
+/// otherwise (piped/redirected stays clean). Same pattern as warn.rs —
+/// gate the raw ANSI on the `is_terminal()` of the stream it writes to
+/// (here stdout, where the wizard prints).
+fn styled(code: &str, s: &str) -> String {
+    if io::stdout().is_terminal() {
+        format!("\x1b[{code}m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
+}
+
 fn setup(root: &Path, force: bool, only_manager: Option<String>) -> Result<()> {
     source_env_files(root);
     let compose = super::load(root)?;
@@ -50,8 +62,15 @@ fn setup(root: &Path, force: bool, only_manager: Option<String>) -> Result<()> {
         return Ok(());
     }
 
-    println!("teamctl bot setup");
-    println!("─────────────────");
+    // No redundant "teamctl bot setup" heading (the operator just typed it).
+    // A grey italic note on scope instead.
+    println!(
+        "{}",
+        styled(
+            "3;90",
+            "Only Telegram is supported in this version — more interfaces are on the way."
+        )
+    );
 
     // Fork at the top: managed bots (one manager bot spawns the per-agent
     // child bots) vs manual token (the original BotFather-per-manager
@@ -80,10 +99,20 @@ fn choose_setup_mode(forced_manual: bool) -> Result<SetupMode> {
         return Ok(SetupMode::Manual);
     }
     println!("\nHow do you want to set up Telegram bots?");
-    println!("  1) Manual token — paste a BotFather token for each manager (the original flow)");
-    println!("  2) Managed bots — one manager bot spawns a child bot per agent (needs a manager bot with Managed Bots enabled; the Telegram-side bot creation is rougher)");
+    println!(
+        "  1) Manual token — paste a BotFather token for each manager {}",
+        styled("90", "(the original flow)")
+    );
+    println!(
+        "  2) Managed bots — one manager bot spawns a child bot per agent {}",
+        styled(
+            "90",
+            "(needs a manager bot with Managed Bots enabled; the Telegram-side bot creation is rougher)"
+        )
+    );
     loop {
-        match prompt("Choose [1/2]: ")?.trim() {
+        // Empty input (just Enter) defaults to 1, the manual flow.
+        match prompt("Choose [1/2] (default 1): ")?.trim() {
             "1" | "" => return Ok(SetupMode::Manual),
             "2" => return Ok(SetupMode::Managed),
             other => println!("  `{other}` — please enter 1 or 2."),
@@ -398,11 +427,43 @@ enum WizardOutcome {
     Cancelled,
 }
 
+/// Build the confirm-prompt wording for one manager. Keys on whether
+/// `.env` actually holds values (`token_set`/`chats_set`), NOT on whether
+/// the template merely declares the env-var names — declaring names alone
+/// must read as first-time setup, not a re-run (the bug this fixes). The
+/// `(true, true)` arm is only reachable under `--force`: the no-force
+/// fully-wired case early-returns in `wizard_one`.
+fn resume_prompt(
+    manager: &str,
+    token_env: &str,
+    chats_env: &str,
+    token_set: bool,
+    chats_set: bool,
+) -> String {
+    match (token_set, chats_set) {
+        (true, false) => format!(
+            "Resume Telegram setup for {manager}? Token already in {token_env}; \
+             we'll just collect the chat id. [Y/n] "
+        ),
+        (false, true) => format!(
+            "Resume Telegram setup for {manager}? Chat id already in {chats_env}; \
+             we'll just collect the token. [Y/n] "
+        ),
+        (true, true) => format!(
+            "Re-run Telegram setup for {manager}? Existing env-var names will be reused. [Y/n] "
+        ),
+        (false, false) => format!("Set up Telegram bot for {manager}? [Y/n] "),
+    }
+}
+
 /// Walk one manager through whatever steps remain. The wizard is
 /// **resumable**: if `interfaces.telegram` is already in the YAML we
 /// reuse those env-var names; if either env value is already in `.env`
 /// we keep it (re-validating the token via `getMe`) and only prompt
-/// for what's still missing. `--force` re-asks for everything.
+/// for what's still missing. The confirm wording keys on whether
+/// `.env` actually holds values — declaring the env-var names in the
+/// template alone reads as a first-time setup, not a re-run.
+/// `--force` re-asks for everything.
 fn wizard_one(root: &Path, compose: &Compose, manager: &str, force: bool) -> Result<WizardOutcome> {
     let existing = manager_telegram(compose, manager);
     let (token_env, chats_env, env_names_chosen_by_user) = match &existing {
@@ -422,20 +483,7 @@ fn wizard_one(root: &Path, compose: &Compose, manager: &str, force: bool) -> Res
     }
 
     println!("\n── {manager} ──");
-    let prompt_msg = match (existing.is_some(), token_set, chats_set) {
-        (true, true, false) => format!(
-            "Resume Telegram setup for {manager}? Token already in {token_env}; \
-             we'll just collect the chat id. [Y/n] "
-        ),
-        (true, false, true) => format!(
-            "Resume Telegram setup for {manager}? Chat id already in {chats_env}; \
-             we'll just collect the token. [Y/n] "
-        ),
-        (true, _, _) => format!(
-            "Re-run Telegram setup for {manager}? Existing env-var names will be reused. [Y/n] "
-        ),
-        _ => format!("Set up Telegram bot for {manager}? [Y/n] "),
-    };
+    let prompt_msg = resume_prompt(manager, &token_env, &chats_env, token_set, chats_set);
     if !confirm(&prompt_msg, true)? {
         println!("  skipped");
         return Ok(WizardOutcome::Cancelled);
@@ -648,16 +696,18 @@ fn capture_line<R: BufRead>(mut reader: R) -> io::Result<String> {
 }
 
 /// Prompt for a secret (the Telegram bot token). On an interactive
-/// unix terminal the input is read with echo disabled — typed *and*
-/// pasted characters never appear in the terminal, scrollback, a
-/// screen-share, or a recording (T-314). The captured value is
-/// unaffected: echo is a display concern only.
+/// unix terminal the input is masked: each typed *or* pasted character
+/// echoes a single `*`, so the real token never appears in the
+/// terminal, scrollback, a screen-share, or a recording (T-314). The
+/// captured value is unaffected — masking is a display concern only.
+/// Backspace clears the whole entry (the token is pasted as a blob;
+/// re-pasting beats editing a hidden secret).
 ///
 /// Non-interactive stdin (pipe/redirect — tests, automation) has no
-/// terminal echo to suppress and `tcgetattr` would fail on a non-tty,
-/// so it falls back to a plain read. Non-unix also falls back; the CI
-/// matrix and supported install targets are POSIX, where the masking
-/// is effective.
+/// terminal to mask and `tcgetattr` would fail on a non-tty, so it
+/// falls back to a plain read. Non-unix also falls back; the CI matrix
+/// and supported install targets are POSIX, where the masking is
+/// effective.
 fn prompt_secret(msg: &str) -> Result<String> {
     print!("{msg}");
     io::stdout().flush().ok();
@@ -694,24 +744,82 @@ fn prompt_secret(msg: &str) -> Result<String> {
                 return Err(io::Error::last_os_error()).context("tcgetattr (mask token input)");
             }
             let _restore = RestoreEcho { fd, original: term };
-            // Clear ECHO only — keep ICANON (line editing + Enter) and
-            // ISIG (Ctrl-C) so it behaves like a normal password
-            // prompt, just silent.
-            term.c_lflag &= !libc::ECHO;
+            // Clear ECHO (we draw our own `*`) and ICANON (read
+            // byte-by-byte instead of line-buffered) while keeping ISIG
+            // so Ctrl-C still interrupts. The drop-guard restores every
+            // original flag on exit.
+            term.c_lflag &= !(libc::ECHO | libc::ICANON);
             if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &term) } != 0 {
-                return Err(io::Error::last_os_error())
-                    .context("tcsetattr disable echo (mask token input)");
+                return Err(io::Error::last_os_error()).context("tcsetattr mask token input");
             }
 
-            let value = capture_line(io::stdin().lock()).context("read stdin")?;
+            // Read raw input bytes until Enter/EOF, echoing one `*` per
+            // printable byte. Backspace clears the whole entry and wipes
+            // the drawn asterisks. The raw stream is buffered verbatim and
+            // turned into the final value by `process_secret_bytes`, so a
+            // pasted token survives byte-for-byte regardless of the
+            // on-screen masking — exactly what `capture_line` returned.
+            use io::Read;
+            let mut stdin = io::stdin().lock();
+            let mut stdout = io::stdout();
+            let mut raw: Vec<u8> = Vec::new();
+            let mut byte = [0u8; 1];
+            loop {
+                if stdin.read(&mut byte).context("read stdin")? == 0 {
+                    break; // EOF — treat like Enter.
+                }
+                match byte[0] {
+                    // Enter (CR or LF): done.
+                    b'\r' | b'\n' => break,
+                    // Backspace / Delete: clear the whole entry and erase
+                    // the asterisks. `\x1b[J` clears from the cursor to the
+                    // end of the screen, so the wipe stays correct even when
+                    // a long or pasted token wrapped onto extra rows.
+                    0x7f | 0x08 => {
+                        raw.push(byte[0]);
+                        write!(stdout, "\r{msg}\x1b[J").ok();
+                        stdout.flush().ok();
+                    }
+                    // Printable: keep the byte, show a `*`.
+                    b if b >= 0x20 && b != 0x7f => {
+                        raw.push(b);
+                        write!(stdout, "*").ok();
+                        stdout.flush().ok();
+                    }
+                    // Other control bytes: buffered into `raw` (draw
+                    // nothing); `process_secret_bytes` drops them from the
+                    // final value.
+                    _ => raw.push(byte[0]),
+                }
+            }
             // The user's Enter wasn't echoed — advance the line so the
             // next output doesn't run onto the prompt text.
             println!();
-            return Ok(value);
+            return process_secret_bytes(&raw);
         }
     }
 
     capture_line(io::stdin().lock()).context("read stdin")
+}
+
+/// Decode the raw bytes captured by the masked secret reader into the
+/// final value, independent of the on-screen masking. Mirrors the
+/// reader's per-byte rules: printable bytes (`>= 0x20`, not DEL) are kept
+/// verbatim; Backspace/Delete (`0x7f`/`0x08`) clears the whole buffer
+/// (re-pasting beats editing a hidden secret); CR/LF ends input; any
+/// other control byte is dropped. The survivors are decoded once as UTF-8
+/// so a pasted multibyte token round-trips exactly.
+fn process_secret_bytes(bytes: &[u8]) -> Result<String> {
+    let mut buf: Vec<u8> = Vec::new();
+    for &b in bytes {
+        match b {
+            b'\r' | b'\n' => break,
+            0x7f | 0x08 => buf.clear(),
+            b if b >= 0x20 && b != 0x7f => buf.push(b),
+            _ => {}
+        }
+    }
+    String::from_utf8(buf).map_err(|e| anyhow!("token contains invalid UTF-8: {e}"))
 }
 
 fn prompt_with_default(label: &str, default: &str) -> Result<String> {
@@ -1598,5 +1706,138 @@ mod tests {
             .and_then(|t| t.manager_bot.as_ref())
             .expect("manager_bot round-trips through the schema");
         assert_eq!(mb.token_env, "TEAMCTL_TG_MANAGER_TOKEN");
+    }
+
+    // ── #385: resume_prompt keys on whether .env HAS values ──────────
+    //
+    // The bug this fixes: the wording must branch on whether `.env`
+    // actually holds the token / chat id (`token_set` / `chats_set`),
+    // not on whether the template merely declares the env-var names.
+    // Declaring names alone is first-time setup, not a re-run. Each arm
+    // is pinned by a distinctive substring rather than the whole string,
+    // so wording tweaks that preserve intent don't break the test.
+
+    #[test]
+    fn resume_prompt_nothing_set_reads_as_first_time_setup() {
+        let msg = resume_prompt("p:pm", "TOK_ENV", "CHATS_ENV", false, false);
+        assert!(
+            msg.contains("Set up Telegram bot for"),
+            "first-time wording expected:\n{msg}"
+        );
+        assert!(msg.contains("p:pm"), "manager name expected:\n{msg}");
+    }
+
+    #[test]
+    fn resume_prompt_token_only_collects_chat_id() {
+        let msg = resume_prompt("p:pm", "TOK_ENV", "CHATS_ENV", true, false);
+        assert!(
+            msg.contains("Token already in"),
+            "token-present wording expected:\n{msg}"
+        );
+        assert!(
+            msg.contains("TOK_ENV"),
+            "the token env-var name expected:\n{msg}"
+        );
+        assert!(
+            msg.contains("collect the chat id"),
+            "should promise to collect the missing chat id:\n{msg}"
+        );
+    }
+
+    #[test]
+    fn resume_prompt_chats_only_collects_token() {
+        let msg = resume_prompt("p:pm", "TOK_ENV", "CHATS_ENV", false, true);
+        assert!(
+            msg.contains("Chat id already in"),
+            "chat-id-present wording expected:\n{msg}"
+        );
+        assert!(
+            msg.contains("CHATS_ENV"),
+            "the chats env-var name expected:\n{msg}"
+        );
+        assert!(
+            msg.contains("collect the token"),
+            "should promise to collect the missing token:\n{msg}"
+        );
+    }
+
+    #[test]
+    fn resume_prompt_both_set_reads_as_re_run() {
+        // Only reachable under --force (the no-force fully-wired case
+        // early-returns in wizard_one).
+        let msg = resume_prompt("p:pm", "TOK_ENV", "CHATS_ENV", true, true);
+        assert!(
+            msg.contains("Re-run Telegram setup"),
+            "re-run wording expected:\n{msg}"
+        );
+        assert!(
+            msg.contains("Existing env-var names"),
+            "should note the existing env-var names are reused:\n{msg}"
+        );
+    }
+
+    // ── T-314: process_secret_bytes decodes the masked reader's stream ─
+    //
+    // Mirrors the per-byte rules of the echo-off termios reader (which
+    // needs a real tty and can't be unit-tested directly). The masking
+    // is display-only — the decoded value must match what was entered.
+
+    #[test]
+    fn process_secret_bytes_keeps_plain_ascii_verbatim() {
+        assert_eq!(
+            process_secret_bytes(b"123456:abcDEF").unwrap(),
+            "123456:abcDEF"
+        );
+    }
+
+    #[test]
+    fn process_secret_bytes_terminates_on_cr_or_lf() {
+        // CR/LF ends input; nothing before it is lost.
+        assert_eq!(process_secret_bytes(b"abc\r").unwrap(), "abc");
+        assert_eq!(process_secret_bytes(b"abc\n").unwrap(), "abc");
+    }
+
+    #[test]
+    fn process_secret_bytes_ignores_bytes_after_terminator() {
+        // A CR ends the read; any trailing bytes (e.g. the LF of a CRLF,
+        // or a second pasted line) are dropped.
+        assert_eq!(process_secret_bytes(b"abc\rxyz").unwrap(), "abc");
+    }
+
+    #[test]
+    fn process_secret_bytes_backspace_clears_whole_buffer() {
+        // Backspace / Delete wipes the ENTIRE entry (re-pasting beats
+        // editing a hidden secret), so only what follows survives. Both
+        // DEL (0x7f) and BS (0x08) behave identically.
+        assert_eq!(process_secret_bytes(b"abc\x7fxyz").unwrap(), "xyz");
+        assert_eq!(process_secret_bytes(b"abc\x08xyz").unwrap(), "xyz");
+    }
+
+    #[test]
+    fn process_secret_bytes_drops_other_control_bytes() {
+        // Non-printable control bytes (SOH, ESC, …) draw nothing and are
+        // dropped from the value; the printable bytes around them survive.
+        assert_eq!(process_secret_bytes(b"a\x01b\x1bc").unwrap(), "abc");
+    }
+
+    #[test]
+    fn process_secret_bytes_round_trips_pasted_multibyte_utf8() {
+        // A pasted token with multibyte UTF-8 (accented letters + a
+        // check mark) must survive byte-for-byte — the survivors are
+        // decoded once as UTF-8, not per-byte.
+        let original = "tökèn-✓-naïve";
+        assert_eq!(process_secret_bytes(original.as_bytes()).unwrap(), original);
+    }
+
+    #[test]
+    fn process_secret_bytes_empty_input_yields_empty_string() {
+        assert_eq!(process_secret_bytes(b"").unwrap(), "");
+    }
+
+    #[test]
+    fn process_secret_bytes_rejects_invalid_utf8() {
+        // A lone 0xff is not valid UTF-8; decoding must surface an error
+        // rather than silently producing a lossy / corrupt token.
+        assert!(process_secret_bytes(&[b'a', 0xff]).is_err());
     }
 }

@@ -230,11 +230,14 @@ enum Command {
     Gc,
 
     // ── Attach / exec ────────────────────────────────────────────────
-    /// Attach to an agent's tmux session (read-only by default).
+    /// Attach to an agent's tmux session (read-write by default).
     Attach {
         target: String,
-        /// Allow keyboard input. Dangerous — confirms before attaching.
+        /// Attach read-only — observe the session without sending keystrokes.
         #[arg(long)]
+        ro: bool,
+        /// Accepted for back-compat; read-write is now the default (no-op).
+        #[arg(long, hide = true)]
         rw: bool,
     },
     /// Run a command in an agent's CWD with its env loaded.
@@ -498,7 +501,7 @@ fn main() -> Result<()> {
             BridgeAction::Ls => cmd::bridge::list(&root),
             BridgeAction::Log { id } => cmd::bridge::log(&root, id),
         },
-        Command::Attach { target, rw } => cmd::attach::run(&root, &target, rw),
+        Command::Attach { target, ro, rw: _ } => cmd::attach::run(&root, &target, ro),
         Command::Exec { target, argv } => cmd::exec::run(&root, &target, &argv),
         Command::Shell { target } => cmd::exec::shell(&root, &target),
         Command::Env { doctor } => cmd::env::run(&root, doctor),
@@ -552,4 +555,56 @@ fn resolve_root_with_source(explicit: Option<PathBuf>) -> Result<(PathBuf, cmd::
     let cwd = std::env::current_dir().context("get cwd")?;
     let p = team_core::compose::Compose::discover(&cwd)?;
     Ok((p, RootSource::WalkUp))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parse an argv into the `Attach` variant or panic with the clap
+    /// error — keeps the per-case asserts focused on the flags.
+    fn parse_attach(args: &[&str]) -> (String, bool, bool) {
+        let cli = Cli::try_parse_from(args).expect("attach args parse");
+        match cli.command {
+            Command::Attach { target, ro, rw } => (target, ro, rw),
+            _ => panic!("expected the Attach subcommand"),
+        }
+    }
+
+    // #385: read-write is the default — bare `teamctl attach <id>` must
+    // leave `ro` false so keystrokes reach the agent.
+    #[test]
+    fn attach_defaults_to_read_write() {
+        let (target, ro, rw) = parse_attach(&["teamctl", "attach", "t-demo-mgr"]);
+        assert_eq!(target, "t-demo-mgr");
+        assert!(!ro, "attach must default to read-write");
+        assert!(!rw, "--rw not passed, so its flag stays false");
+    }
+
+    // `--ro` opts into read-only.
+    #[test]
+    fn attach_ro_flag_sets_read_only() {
+        let (_, ro, _) = parse_attach(&["teamctl", "attach", "t-demo-mgr", "--ro"]);
+        assert!(ro, "--ro must request a read-only attach");
+    }
+
+    // `--rw` is hidden back-compat: it still parses (so old muscle memory
+    // and scripts don't error) but is ignored — `ro` stays false and
+    // main.rs binds `rw: _`.
+    #[test]
+    fn attach_rw_flag_still_parses_and_is_ignored() {
+        let (target, ro, rw) = parse_attach(&["teamctl", "attach", "t-demo-mgr", "--rw"]);
+        assert_eq!(target, "t-demo-mgr");
+        assert!(rw, "--rw still parses for back-compat");
+        assert!(!ro, "--rw does not flip on read-only");
+    }
+
+    // `--ro --rw` together is accepted (no clap conflict) and resolves to
+    // read-only: `ro` wins and main.rs ignores `rw` (binds `rw: _`).
+    #[test]
+    fn attach_ro_and_rw_together_is_read_only() {
+        let (_, ro, rw) = parse_attach(&["teamctl", "attach", "t-demo-mgr", "--ro", "--rw"]);
+        assert!(ro, "--ro requests read-only even when --rw is also present");
+        assert!(rw, "--rw still parses alongside --ro");
+    }
 }

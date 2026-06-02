@@ -44,7 +44,7 @@ Back it up the way you back up any SQLite DB (VACUUM INTO, litestream, or copy w
 - `teamctl status`: agent state + inbox depth per agent.
 - `teamctl budget`: 24 h message / approval / USD counts per project.
 - `teamctl bridge list`: open and recently expired inter-project links.
-- `teamctl attach <project>:<agent>`: raw runtime TTY (read-only by default; pass `--rw` to type into the pane). Internally a `tmux attach -t <tmux_prefix><project>-<agent>` where `tmux_prefix` is `a-` by default and configurable in `team-compose.yaml`.
+- `teamctl attach <project>:<agent>`: raw runtime TTY (read-write by default — keystrokes reach the live agent; pass `--ro` to observe without typing). Internally a `tmux attach -t <tmux_prefix><project>-<agent>` where `tmux_prefix` is `a-` by default and configurable in `team-compose.yaml`.
 - `TEAMCTL_LOG=debug teamctl up`: verbose tracing from the control plane.
 
 ## Security posture

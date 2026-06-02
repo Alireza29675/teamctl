@@ -206,6 +206,13 @@ teamctl shell <agent>            # interactive shell in the agent's CWD with its
 
 `attach` defaults to read-only because muscle-memory typing in a tmux pane is how 4 a.m. mistakes happen. `--rw` opt-in feels right.
 
+> **Superseded (2026-06-02, #385):** `attach` now defaults to **read-write** —
+> the read-only default and the `--rw` retype-to-confirm gate described in this
+> section were removed. Pass `--ro` for read-only (observe without sending
+> input); `--rw` is still accepted as a no-op for back-compat. The confirm gate
+> added friction to the common "attach in order to type" path, and `--ro`
+> preserves the safety opt-out for observation. See #385.
+
 ### 7. Multiple teams on one machine — `teamctl context`
 
 Borrowed from `docker context` and `kubectl config`. A "context" is a named pointer to a `.team/` root.
