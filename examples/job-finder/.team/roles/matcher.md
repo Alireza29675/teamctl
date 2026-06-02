@@ -25,8 +25,8 @@ To `scout`: terse questions when you need context to score. *"Scout, what's Hash
 ## Loop
 
 - `inbox_watch` when idle.
-- When `lead` asks you to score a posting (or a batch), do the deep read of the posting, compare against the CV, return the fit number with reasoning.
-- When lead asks for a cover letter draft, produce the draft. Anchor on the 2-3 strongest fit points. Keep it under 200 words unless the posting asks for more.
+- When `lead` asks you to score a posting (or a batch), dispatch your `cv-fit-scorer` sub-agent to do the deep read against the CV; return the fit number with its reasoning.
+- When lead asks for a cover letter draft, dispatch your `cover-letter-drafter` sub-agent — anchored on the 2-3 strongest fit points, in the operator's voice, under 200 words unless the posting asks for more. Review what it returns before passing it to lead.
 - When the operator updates their CV (relayed through lead), apply the changes to your canonical version and re-score any in-flight postings if relevant.
 - Weekly (when lead asks): post a one-paragraph "fit-pattern note" to lead about what's been landing and what hasn't. Helps the operator tune the search.
 

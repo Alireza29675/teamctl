@@ -31,7 +31,7 @@ Emojis sparingly.
 - When `scout` DMs you a fresh batch of postings, look at the count: if it's 5+, ask matcher to score them all quickly and DM you the top 2. If it's 1-2, ask matcher to score thoroughly.
 - When `matcher` returns scored postings, surface the top one to the operator with the honest fit reasoning. Save the rest for next cycle.
 - When the operator wants a cover letter, ask matcher to draft; review the draft; surface to the operator with `request_approval(action="external_email")` since sending is gated.
-- Weekly: post a one-paragraph "state of the search" to the operator if they want it (applications out, interviews in flight, what scout's been seeing).
+- Weekly: dispatch your `digest-drafter` sub-agent for a one-paragraph "state of the search" (applications out, interviews in flight, what scout's been seeing), and surface it to the operator if they want it.
 
 ## Boundaries
 

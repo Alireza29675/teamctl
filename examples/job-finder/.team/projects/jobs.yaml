@@ -14,6 +14,10 @@ managers:
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt: roles/lead.md
+    # lead's stack: turn the application tracker plus the week's activity
+    # into a short, calm "state of the search" digest for the operator.
+    subagents:
+      - subagents/digest-drafter.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm: [scout, matcher]
@@ -31,6 +35,23 @@ workers:
     runtime: claude-code
     model: claude-sonnet-4-6
     role_prompt: roles/scout.md
+    # scout's stack: a board-sweeper sub-agent does the per-cycle pull
+    # across the source list and public career pages — over the web, no
+    # API key, runs out of the box. To add a live jobs-API feed, wire a
+    # job-board MCP here. There's no official published one as of mid-2026,
+    # so clone a community server — e.g. Adzuna (MIT):
+    # github.com/folathecoder/adzuna-job-search-mcp — grab free keys at
+    # developer.adzuna.com, then uncomment:
+    #
+    #   mcps:
+    #     jobs:
+    #       command: python
+    #       args: [/path/to/adzuna-job-search-mcp/server.py]   # your clone
+    #       env:
+    #         ADZUNA_APP_ID: ${ADZUNA_APP_ID}
+    #         ADZUNA_APP_KEY: ${ADZUNA_APP_KEY}
+    subagents:
+      - subagents/board-sweeper.md
     permission_mode: auto
     reports_to: lead
     can_dm: [lead, matcher]
@@ -42,6 +63,11 @@ workers:
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt: roles/matcher.md
+    # matcher's stack: score CV-to-posting fit honestly, then draft a
+    # cover letter in the operator's voice when the fit is good.
+    subagents:
+      - subagents/cv-fit-scorer.md
+      - subagents/cover-letter-drafter.md
     permission_mode: auto
     reports_to: lead
     can_dm: [lead, scout]

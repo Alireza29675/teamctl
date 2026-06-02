@@ -26,7 +26,7 @@ Title, company, level, location, salary visibility (or lack), key tech. One line
 ## Loop
 
 - `inbox_watch` when idle.
-- Once per cycle (default: daily, at a time lead and the operator settle on), pull from your source list, apply the filter, dedupe, and DM lead the batch.
+- Once per cycle (default: daily, at a time lead and the operator settle on), dispatch your `board-sweeper` sub-agent to pull from your source list, apply the filter, and dedupe; relay the batch it returns to lead.
 - When lead relays a criteria change from the operator, retune the filter immediately. Don't wait for the next cycle to apply it.
 - When matcher asks for more context on a posting (sometimes the deep-fit work needs the company's recent funding news, or the team's recent blog posts), help find it.
 
