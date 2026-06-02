@@ -91,10 +91,23 @@ const escape = (s: string) =>
 const yamlHtml = yaml
   .map((raw) => {
     if (raw === '') return '';
-    const m = /^(\s*)([A-Za-z_][\w-]*)(:.*)$/.exec(raw);
-    if (!m) return escape(raw);
-    const [, indent, key, rest] = m;
-    return `${indent}<span class="k">${escape(key)}:</span>${escape(rest.slice(1))}`;
+    // Full-line comment → muted.
+    const fc = /^(\s*)(#.*)$/.exec(raw);
+    if (fc) return `${fc[1]}<span class="cmt">${escape(fc[2])}</span>`;
+    // Split off a trailing inline comment (first " #") and mute it.
+    let code = raw;
+    let comment = '';
+    const ci = raw.indexOf(' #');
+    if (ci !== -1) {
+      code = raw.slice(0, ci);
+      comment = raw.slice(ci);
+    }
+    const m = /^(\s*)([A-Za-z_][\w-]*)(:.*)$/.exec(code);
+    const codeHtml = m
+      ? `${m[1]}<span class="k">${escape(m[2])}:</span>${escape(m[3].slice(1))}`
+      : escape(code);
+    const commentHtml = comment ? `<span class="cmt">${escape(comment)}</span>` : '';
+    return codeHtml + commentHtml;
   })
   .join('\n');
 
@@ -245,19 +258,19 @@ const withCode = (s: string) =>
       </section>
 
       <section class="start-team">
-        <h2>Start a team</h2>
+        <h2>🚀 Start a team</h2>
         <p>
           Then, inside your project directory:
         </p>
-        <pre class="up"><code><span class="prompt">$ </span>cd /path/to/your/project</code></pre>
-        <pre class="up"><code><span class="prompt">$ </span>{initCmd}</code></pre>
+        <pre class="cmd"><code><span class="prompt">$ </span>cd /path/to/your/project
+<span class="prompt">$ </span>{initCmd}</code></pre>
         <p>
           <code>init</code> opens a short conversation that surfaces the <em>domains</em> in your work and proposes a team shape. You can let it design the team with you (guided), start from a small essentials scaffold, or take an empty tree and hand-wire it yourself. By the time you're done, <code>.team/team-compose.yaml</code> is on disk and the team is running in <code>tmux</code>.
         </p>
       </section>
 
       <section class="extras">
-        <h2>Extras on top</h2>
+        <h2>🍒 Extras on top</h2>
         <p>
           Because teamctl runs your sessions, it can hand them tools they would not have on their own. A session can call <code>compact_self</code> to compact its own context and keep going, and that is just the start:
         </p>
@@ -278,7 +291,7 @@ const withCode = (s: string) =>
       </section>
 
       <section class="examples">
-        <h2>Examples</h2>
+        <h2>🧩 Examples</h2>
         <p>
           Real teams running on teamctl. Copy any of them as a starting point.
         </p>
@@ -301,16 +314,16 @@ const withCode = (s: string) =>
       </section>
 
       <section class="demo-section">
-        <h2>What a team looks like</h2>
+        <h2>🧱 What a team looks like</h2>
         <p>A project YAML with one manager and three workers (illustrative, not a full config):</p>
         <figure class="demo" aria-label="Example team-compose.yaml and the commands to run it">
           <div class="code-card">
             <pre class="yaml"><code set:html={yamlHtml}></code></pre>
           </div>
-          <pre class="up"><code><span class="prompt">$ </span>teamctl validate    <span class="cmt"># check the YAML</span></code></pre>
-          <pre class="up"><code><span class="prompt">$ </span>teamctl up          <span class="cmt"># bring the team up</span></code></pre>
-          <pre class="up"><code><span class="prompt">$ </span>teamctl ui          <span class="cmt"># watch them work</span></code></pre>
-          <pre class="up"><code><span class="prompt">$ </span>teamctl status      <span class="cmt"># is everyone alive?</span></code></pre>
+          <pre class="cmd"><code><span class="prompt">$ </span>teamctl validate    <span class="cmt"># check the YAML</span>
+<span class="prompt">$ </span>teamctl up          <span class="cmt"># bring the team up</span>
+<span class="prompt">$ </span>teamctl ui          <span class="cmt"># watch them work</span>
+<span class="prompt">$ </span>teamctl status      <span class="cmt"># is everyone alive?</span></code></pre>
         </figure>
         <p class="demo-note">
           <em>All of this lives in a <code>.team/</code> folder in your project, so you can read it, version it, and share it.</em>
@@ -318,7 +331,7 @@ const withCode = (s: string) =>
       </section>
 
       <section class="ui-section">
-        <h2>Inspect your setup (<code>teamctl ui</code>)</h2>
+        <h2>🔍 Inspect your setup (<code>teamctl ui</code>)</h2>
         <p>
           A super lightweight UI, built in Rust, for inspecting your agents and their <em>actual</em> Claude Code sessions. See which agents you have, the messages they have exchanged, and work with a live session right from the UI. Each agent runs in a tmux session in the background, so when you close the UI the sessions keep working.
         </p>
@@ -333,7 +346,7 @@ const withCode = (s: string) =>
       </section>
 
       <section class="learn-more">
-        <h2>Learn more</h2>
+        <h2>📚 Learn more</h2>
         <ul class="learn-list">
           <li>
             📖 <a href="/concepts/teams/">How to think about agent teams</a> for the methodology behind team design.
@@ -605,9 +618,8 @@ const withCode = (s: string) =>
         font-size: 0.95rem;
       }
 
-      /* Demo: code card + $ teamctl ... */
-      .demo { margin: 0.6rem 0 0; display: grid; gap: 0.35rem; }
-      .demo .code-card { margin-bottom: 0.65rem; }
+      /* Demo: code card + terminal command block */
+      .demo { margin: 0.6rem 0 0; display: grid; gap: 0.75rem; }
 
       .code-card {
         position: relative;
@@ -622,27 +634,41 @@ const withCode = (s: string) =>
       }
       .yaml {
         margin: 0;
-        padding: 1.5rem 1.75rem;
-        overflow-x: auto;
+        padding: 1.4rem 1.6rem;
+        overflow: auto;
+        max-height: 32rem;
         font-family: var(--mono);
-        font-size: 0.92rem;
-        line-height: 1.75;
+        font-size: 0.9rem;
+        line-height: 1.55;
         color: var(--fg);
         white-space: pre;
       }
       .yaml :global(.k) { color: var(--accent); }
+      .yaml :global(.cmt) { color: var(--fg-mute); }
 
-      .up {
+      .cmd {
         margin: 0;
-        padding: 0.4rem 0.25rem 0;
+        padding: 0.95rem 1.25rem;
+        background: var(--bg-soft);
+        border: 1px solid var(--hairline);
+        border-radius: 8px;
+        overflow-x: auto;
         font-family: var(--mono);
-        font-size: 0.92rem;
-        color: var(--fg-mute);
-        background: transparent;
+        font-size: 0.9rem;
+        line-height: 1.7;
+        color: var(--fg);
+        white-space: pre;
       }
-      .up .prompt { color: var(--fg-mute); user-select: none; }
-      .up code { color: var(--fg); }
-      .up .cmt { color: var(--fg-mute); }
+      .cmd .prompt { color: var(--fg-mute); user-select: none; }
+      .cmd code { color: var(--fg); }
+      .cmd .cmt { color: var(--fg-mute); }
+      /* Neutralize the global inline-code chip inside code blocks (it tints
+         each wrapped line). Keep plain monospace on the pre instead. */
+      .yaml code, .cmd code {
+        background: none;
+        padding: 0;
+        border-radius: 0;
+      }
       .demo-note {
         margin: 0.6rem 0 0;
         color: var(--fg-mute);
