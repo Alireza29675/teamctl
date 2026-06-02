@@ -14,6 +14,11 @@ managers:
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt: roles/buddy.md
+    # Buddy's stack (claude-only): turn a source into the cutting paragraph,
+    # and weave each new finding into the operator's compounding mental model.
+    subagents:
+      - subagents/summarizer.md
+      - subagents/synthesizer.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm: [curator]
@@ -32,6 +37,21 @@ workers:
     runtime: claude-code
     model: claude-sonnet-4-6
     role_prompt: roles/curator.md
+    # Curator's stack. A dedicated search/news MCP (runtime-agnostic) so the
+    # daily pull hits fresh, recency-ranked results — Brave Search here; swap
+    # in whatever search/news server you like (it just needs a stdio command
+    # + key). Claude Code already has generic web search; a focused news MCP
+    # earns its place by ranking for recency on the curator's loop.
+    mcps:
+      search:
+        command: npx
+        args: ["-y", "@brave/brave-search-mcp-server"]
+        env:
+          BRAVE_API_KEY: "${BRAVE_API_KEY}"
+    # And a source-scout subagent (claude-only) to research WHERE to look
+    # when the operator adds an interest — who's worth following, what's noise.
+    subagents:
+      - subagents/source-scout.md
     permission_mode: auto
     reports_to: buddy
     can_dm: [buddy]
