@@ -2698,6 +2698,7 @@ dependencies = [
  "blake3",
  "chrono",
  "clap",
+ "include_dir",
  "libc",
  "portable-pty",
  "regex",

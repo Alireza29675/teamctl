@@ -1363,7 +1363,7 @@ mod tests {
             .iter()
             .find(|t| t.key == "essentials")
             .expect("essentials template present");
-        for (rel, content) in ess.files {
+        for (rel, content) in ess.entries() {
             let body = content
                 .replace("{{project_id}}", "main")
                 .replace("{{project_name}}", "Main");
@@ -1572,7 +1572,7 @@ mod tests {
             .iter()
             .find(|t| t.key == "essentials")
             .expect("essentials template present");
-        for (rel, content) in ess.files {
+        for (rel, content) in ess.entries() {
             let body = content
                 .replace("{{project_id}}", "main")
                 .replace("{{project_name}}", "Main");
