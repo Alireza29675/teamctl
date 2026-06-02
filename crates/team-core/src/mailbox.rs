@@ -3,6 +3,22 @@
 //! The actual connection handling lives in `team-mcp`; this module defines
 //! the schema + migrations so both crates agree on the shape of the data.
 
+/// The one privileged mailbox `kind`. A `system` message is a lifecycle signal
+/// (drain, startup, rate-limit) the supervisor emits inline + real-time; only a
+/// `system:*` source may originate one (#254). If any agent or `user:*` could,
+/// a forged "session terminating" signal would be trivial.
+pub const PRIVILEGED_KIND: &str = "system";
+
+/// Is `kind` the privileged system kind? Single source of truth for the
+/// privileged-kind contract, consulted on every mailbox *write* path — the
+/// insert allowlist (`team-mcp` `store::send_dm_kind`, sender-gated) and the
+/// UPDATE guard (`team-bot` media dispatch, which refuses it outright) — so the
+/// contract has one definition rather than a `"system"` literal copied per site
+/// (#320).
+pub fn is_privileged_kind(kind: &str) -> bool {
+    kind == PRIVILEGED_KIND
+}
+
 /// Idempotent schema bootstrap. Safe to run on every connect.
 pub const SCHEMA: &str = r#"
 -- NOTE: pragmas (journal_mode=WAL, busy_timeout, foreign_keys) are set by
@@ -146,13 +162,14 @@ pub fn ensure(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // T-086-A: discriminator + structured payload for non-text mailbox kinds
         // (image, file, reaction). Existing text rows have NULL on both — readers
         // treat NULL kind as 'text' for back-compat.
-        // #254: `'system'` is also a recognized kind value — lifecycle/system
-        // signals (drain, startup, rate-limit) the supervisor emits. No schema
-        // change is needed: `kind` is free-form TEXT with no CHECK/enum and the
-        // db has no version mechanism, so the value's contract lives in code —
-        // `system:*`-only at the insert choke point (store::send_dm_kind) and
-        // always-inline channel delivery (team-mcp format_channel_event), never
-        // a lazy stub.
+        // #254/#320: `'system'` is also a recognized kind value — lifecycle/
+        // system signals (drain, startup, rate-limit) the supervisor emits. No
+        // schema change is needed: `kind` is free-form TEXT with no CHECK/enum
+        // and the db has no version mechanism, so the value's contract lives in
+        // code (see `is_privileged_kind`): originated only by a `system:*`
+        // source at the insert choke point (store::send_dm_kind), refused on
+        // every UPDATE path (team-bot media dispatch), and always-inline channel
+        // delivery (team-mcp format_channel_event), never a lazy stub.
         "ALTER TABLE messages ADD COLUMN kind TEXT",
         "ALTER TABLE messages ADD COLUMN structured_payload TEXT",
         // T-086-B: Telegram message id this row pertains to. Direction-
@@ -186,4 +203,36 @@ pub fn ensure(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn privileged_kind_const_is_system() {
+        // The privileged-kind contract is pinned to the literal `'system'`
+        // (#254/#320). A rename here would silently desync the insert
+        // allowlist and the UPDATE guard, so pin the value itself.
+        assert_eq!(PRIVILEGED_KIND, "system");
+    }
+
+    #[test]
+    fn is_privileged_kind_true_only_for_system() {
+        assert!(is_privileged_kind("system"));
+    }
+
+    #[test]
+    fn is_privileged_kind_false_for_ordinary_kinds() {
+        // Every kind a non-`system:*` source legitimately writes — the
+        // media UPDATE kinds, plain text, and the empty/NULL-as-text
+        // sentinel — must be allowed through, or the guard would refuse
+        // ordinary traffic (#320).
+        for kind in ["image", "file", "media_error", "text", ""] {
+            assert!(
+                !is_privileged_kind(kind),
+                "kind {kind:?} must not be privileged"
+            );
+        }
+    }
 }

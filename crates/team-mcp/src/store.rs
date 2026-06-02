@@ -221,8 +221,10 @@ impl Store {
         // real-time. Only `system:*` sources may originate it; if any
         // agent or `user:*` could, a forged "session terminating" signal
         // would be trivial. This is the single insert choke point for
-        // non-text kinds, so the allowlist lives here.
-        if kind == "system" && !sender.starts_with("system:") {
+        // non-text kinds, so the allowlist lives here. The privileged-kind
+        // predicate is shared with the UPDATE guard (#320) so both write
+        // paths agree on what "privileged" means.
+        if team_core::mailbox::is_privileged_kind(kind) && !sender.starts_with("system:") {
             bail!("kind 'system' may only be sent by a system:* source (got sender '{sender}')");
         }
         let conn = self.conn.lock().unwrap();
