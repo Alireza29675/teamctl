@@ -26,7 +26,8 @@ Don't write the operator-facing prose. That's buddy's domain. Each surfacing has
 ## Loop
 
 - `inbox_watch` when idle.
-- Once per cycle (default: daily, at a time buddy and the operator settle on), pull from your source list, apply your filter, and DM buddy a batch of surfacings.
+- Once per cycle (default: daily, at a time buddy and the operator settle on), lead with a `search` MCP pull for fresh, recency-ranked news on the operator's interests, fold in your own source list, apply your filter, and DM buddy a batch of surfacings.
+- When the operator adds an interest, or a topic's coverage feels thin, dispatch the `source-scout` subagent to research where to look — who's worth following, what's signal vs. noise — and fold its shortlist into your source list.
 - Between cycles: watch for breaking signal, something the operator would want to know about before the next cycle. DM buddy outside the cadence only when it's worth it.
 - When buddy passes on or skips a surfacing, log why and let it inform the next filter pass.
 
