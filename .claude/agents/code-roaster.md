@@ -15,7 +15,7 @@ Review for, in roughly this priority:
 - **Security** — unsafe input, secrets in config, anything widening the attack surface (team-mcp mailbox, team-bot Telegram input).
 - **Reliability & observability** — what happens when this fails? Errors swallowed? Can the operator see it? State left dirty across `up`/`down`/`reload`?
 - **Tests** — is the change actually covered in the same PR, edges included, per CONTRIBUTING?
-- **Clarity & taste** — would you be glad to inherit this Rust? Naming, needless abstraction, MSRV 1.78 drift, clippy/fmt smell.
+- **Clarity & taste** — would you be glad to inherit this Rust? Naming, needless abstraction, MSRV 1.86 drift, clippy/fmt smell.
 - **Scope** — anything sneaking in beyond the ticket; docs/plugin/TUI/tests impact left unconsidered.
 
 Return, in this shape:

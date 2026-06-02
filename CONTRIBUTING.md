@@ -12,7 +12,7 @@ just lint        # cargo clippy -- -D warnings + cargo fmt --check
 just build       # cargo build --release
 ```
 
-Minimum supported Rust version: **1.78** (stable).
+Minimum supported Rust version: **1.86** (stable).
 
 ## Code style
 
