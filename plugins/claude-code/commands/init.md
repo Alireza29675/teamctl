@@ -3,9 +3,9 @@ description: First-run teamctl onboarding — from no-teamctl-installed to a run
 allowed-tools: Bash, Read, Write, Edit, AskUserQuestion, Agent
 ---
 
-`/teamctl:init` is the first-run onboarding for teamctl. A pre-flight `.team/` guard bows out to `/teamctl:adjust` if a team already exists. Otherwise, seven stages: prerequisites and install (Stage 1), an intent on-ramp + a discovery conversation that surfaces the user's domains (Stage 2) — fed by the user explaining their work, a codebase-investigation pass, or a fast-path scaffold (the operator's pick — four routes), confirm the proposed org (Stage 3), scaffold `.team/` and reveal the YAML (Stage 4 — emits 3-tier cascading role prompts), bring it up (Stage 5), wire Telegram + voice-customize (Stage 6), point at the lifecycle commands (Stage 7).
+`/teamctl:init` is the first-run onboarding for teamctl. A pre-flight `.team/` guard bows out to `/teamctl:adjust` if a team already exists. Otherwise: prerequisites and install (Stage 1), then **open on the goal** — understand what the team is *for*, with pickable starter goals (the Goal beat) — an intent on-ramp + a discovery conversation that surfaces the user's domains (Stage 2) fed by the user's work, a codebase-investigation pass, or a fast-path scaffold (four routes), then propose the org as a **capability setup** the user signs off on (Stage 3 — sessions, models, sub-agents, skills, hooks, `/loop`; the diagram is a small supporting visual, not the headline), iterate until it's right (the refine loop), scaffold `.team/` and reveal the YAML (Stage 4 — emits cascading role prompts **and the per-agent capability stack: sub-agents, skills, the earned hook**), bring it up (Stage 5), wire Telegram + voice-customize (Stage 6), point at the lifecycle commands (Stage 7).
 
-Read [RULES.md](../RULES.md) and [INTERACTIVE.md](../INTERACTIVE.md) before each stage. RULES carries the architecture invariants; INTERACTIVE carries the UI invariants — when to reach for `AskUserQuestion`, the Apply/Modify/Reject gate, the headless-pane fallback, docs-as-ground-truth, voice control. Voice rails: 1-2 sentences per beat, "experienced reliable coworker", emojis sparingly. Body voice is runtime-neutral. *"Claude Code runtime"* is a fact about the agent and stays; *"Claude reads the file"* is voice drift and goes. Substrate constraints are non-negotiable. The flow is resumable and idempotent — re-running skips anything already done.
+Read [RULES.md](../RULES.md), [INTERACTIVE.md](../INTERACTIVE.md), and [capability-catalog.md](../capability-catalog.md) before the stages that use them. RULES carries the architecture invariants; INTERACTIVE carries the UI invariants — when to reach for `AskUserQuestion`, the Apply/Modify/Reject gate, the headless-pane fallback, docs-as-ground-truth, voice control; the **capability catalog** is the palette Stage 3 reasons from and Stage 4 emits (sub-agent / skill / hook archetypes, the bespoke escape hatch, the cron/MCP guard on the generated team). Voice rails: 1-2 sentences per beat, "experienced reliable coworker", emojis sparingly. Body voice is runtime-neutral. *"Claude Code runtime"* is a fact about the agent and stays; *"Claude reads the file"* is voice drift and goes. Substrate constraints are non-negotiable. The flow is resumable and idempotent — re-running skips anything already done.
 
 ## Preamble — detect interactive vs headless
 
@@ -21,7 +21,7 @@ fi
 
 `headless` means a supervised teamctl agent is calling this skill — `AskUserQuestion` is denied by the wrapper's `PreToolUse` hook (see [#189](https://github.com/Alireza29675/teamctl/issues/189)). Fall back to plain-text Q&A for the whole invocation per [INTERACTIVE.md §5](../INTERACTIVE.md). In practice `/teamctl:init` is overwhelmingly run from a fresh interactive `claude` session (there's no `.team/` yet), so the headless path here is mostly a defensive catch.
 
-> **The shape of Stage 2 matters.** Stage 2 — *domain discovery* — does not hand users a template menu. It walks them through a discovery conversation that surfaces the *domains* in their work: the things with their own state, history, and decisions that compound over time. The cut is by domain ownership, not by job function. The intent on-ramp ("Mode pick" below) is the only place an option menu is allowed; Stage 2 stays free-form when it runs. Read [`docs/src/content/docs/concepts/teams.md`](../../../docs/src/content/docs/concepts/teams.md) before tuning Stage 2 prose; the methodology there is canonical.
+> **The shape of Stage 2 matters.** Stage 2 — *domain discovery* — does not hand users a template menu. It walks them through a discovery conversation that surfaces the *domains* in their work: the things with their own state, history, and decisions that compound over time. The cut is by domain ownership, not by job function. The Goal beat and the intent on-ramp ("Mode pick" below) are where option menus live; Stage 2 itself stays free-form when it runs. Read [`docs/src/content/docs/concepts/teams.md`](../../../docs/src/content/docs/concepts/teams.md) before tuning Stage 2 prose; the methodology there is canonical.
 
 ## Pre-flight — `.team/` guard
 
@@ -107,9 +107,37 @@ options:
 
 On `Install it`, run the platform install (`brew install <tool>` on macOS-with-brew, the distro package manager on Linux, etc.), then re-probe with `command -v` and report the result inline. On `Skip`, print the canonical manual path in one line and continue — neither hard-blocks the scaffold, but `tmux` is needed for `teamctl up` at Stage 5, so surface that consequence when the user skips it rather than pretending it's free. `claude` is never the missing one — this skill runs inside it. Don't pretend to install runtimes the plugin can't reasonably manage; surface the gap and continue.
 
+## Goal — open on what the team is for
+
+Dep checks are mechanical pre-flight; the **first real beat of the conversation is the goal** (owner direction). Before any team-shape talk, understand what the user wants this team *to do*, and offer a short set of **starter goals they can just pick** — most users land faster picking-and-editing a goal than describing one cold. In an interactive session this is an `AskUserQuestion` pick-list; prose fallback when headless ([INTERACTIVE.md §5](../INTERACTIVE.md)).
+
+```text
+question: "What do you want this team to do?"
+header: "Goal"
+options:
+  - label: "Ship product ideas"
+    description: "Take an idea to a working, shipped change — build, test, PR. (A build team.)"
+  - label: "Maintain a repo"
+    description: "Keep an existing codebase healthy — triage, fixes, reviews, releases."
+  - label: "Research a topic"
+    description: "Turn open questions into cited, written findings you come back to."
+  - label: "Something else"
+    description: "Describe the goal in your own words — I'll shape the team around it."
+```
+
+On `Something else`, ask one free-text follow-up — *"In a sentence, what should this team get done for you?"* — and take the answer as the goal. Keep the four labels honest to what teamctl is good at (a persistent team that owns work over time); don't promise one-shot tasks a sub-agent already handles.
+
+**The goal is load-bearing downstream — carry it forward.** It shapes three things the rest of the flow decides:
+
+- **Domains** — discovery (Stage 2) is anchored to the goal: the domains that earn an agent are the ones the *goal* needs owned.
+- **Capability stacks** — a *build* goal tilts agents toward the build-side sub-agents + `ship-it`/`tdd` + the `fmt-lint` hook; a *research* goal tilts toward the research/ideation sub-agents + `shape-idea` (see [capability-catalog.md](../capability-catalog.md)).
+- **Who runs a `/loop`** — a goal with an autonomous build→ship drive earns a builder-shaped agent on a `/loop`; a conversational/triage goal stays event-driven, no loop.
+
+Restate the goal in one line before advancing so the user sees it landed, then move to the mode pick.
+
 ## Mode pick — intent on-ramp (four routes)
 
-Once dep checks pass and the operator confirmed they're ready (Stage 1's closing `Start?` beat), fork on how the team gets sourced. Fire `AskUserQuestion`:
+With the goal in hand, fork on how the team gets sourced. Fire `AskUserQuestion`:
 
 ```text
 question: "How should we shape this?"
@@ -125,7 +153,7 @@ options:
     description: "Investigate the codebase and scaffold a sensible default I can edit. Fastest path."
 ```
 
-All four routes converge on Stage 3 (synthesis + the Apply/Modify/Reject gate). The pick is upstream — it only controls what context feeds the team-structure reasoning. Stage 2's earned methodology (sharpening, stress tests, two-gate validation) is preserved verbatim; the intent gates *whether* and *how* the user enters it.
+All four routes converge on Stage 3 (the capability setup, its approve/refine gate, and the refine loop). The pick is upstream — it only controls what context feeds the team-structure reasoning. Stage 2's earned methodology (sharpening, stress tests, two-gate validation) is preserved verbatim; the intent gates *whether* and *how* the user enters it.
 
 **Route (a) — `Co-design a team`.** Run the investigation pass below. The summary becomes 2–3 candidate domain *suggestions* surfaced as a short prose beat at the top of Stage 2 (in the user's own terminology where possible, extracted from README / commit subjects). The user edits, brainstorms more, or adds their own; sharpening (2b), stress-tests (2c), and two-gate validation (2d) still run on the final set.
 
@@ -146,7 +174,7 @@ The answer becomes a single domain. Agent kind = manager (Telegram-bound, since 
 | `personal / scratch` (`$HOME`, dotfile-heavy, no project markers) | 1 manager (`assistant`). Single-agent team. |
 | `unknown` | 1 manager (`assistant`). Single-agent team. |
 
-Tune team name + manager domain copy from the investigation digest where it adds signal (e.g. a Rust web app digest tilts the `pm`'s wording toward "Rust service lead"). Don't over-bake; the user can edit the YAML afterwards (substrate constraint #4). Advance to Stage 3 — the Apply/Modify/Reject gate still fires; the user gets the override.
+Tune team name + manager domain copy from the investigation digest where it adds signal (e.g. a Rust web app digest tilts the `pm`'s wording toward "Rust service lead"). Don't over-bake; the user can edit the YAML afterwards (substrate constraint #4). Advance to Stage 3 — the setup-approval gate still fires; the user gets the override.
 
 ### Investigation pass
 
@@ -173,7 +201,7 @@ In both cases, apply the same methodology when reasoning about candidates:
 
 The Stage 3 proposal cites both the investigation summary (the receipt) and the methodology doc, in the same comprehensive shape Stage 3 already requires. Stage 4 role-prompt generation uses the summary's characterisation of each domain in place of the user's own words for routes (a) and (d).
 
-In a headless invocation the intent pick still applies; the investigation sub-agent (when routes (a) or (d) fire) runs without a human gate on the investigation pass itself, and its summary is recorded before Stage 3. Stage 3's Apply/Modify/Reject gate still applies (in its plain-text form per [INTERACTIVE.md §5](../INTERACTIVE.md)) — the investigation is ungated, the team-shape decision is not.
+In a headless invocation the intent pick still applies; the investigation sub-agent (when routes (a) or (d) fire) runs without a human gate on the investigation pass itself, and its summary is recorded before Stage 3. Stage 3's setup-approval gate (and the refine loop) still applies (in its plain-text form per [INTERACTIVE.md §5](../INTERACTIVE.md)) — the investigation is ungated, the team-shape decision is not.
 
 ## Stage 2 — Discover the domains
 
@@ -355,13 +383,32 @@ Both are valid; don't silently truncate.
 
 ### Reasoning depth — what the proposal must cover
 
-Per [INTERACTIVE.md §7](../INTERACTIVE.md), the synthesis proposal carries three layers of reasoning **before** the gate:
+Per [INTERACTIVE.md §7](../INTERACTIVE.md), the synthesis proposal carries reasoning **before** the gate. The reshape expands the middle layer from "sub-agents" to the **full capability stack**, because the capability setup — not the org chart — is now what the user signs off on (owner direction: *the diagram matters less; the setup matters*).
 
 1. **Where the cut lives.** For each proposed agent, name which Gate (b) trigger fires (domain separation, focus separation, multiple opinions, synergy — from the user's own words in Stage 2). Apply the **ship-alone test**: can this agent ship its artifact alone? If no, surface that the cut is function-shaped and propose a domain-shaped alternative before continuing.
-2. **What sub-agents each agent will spawn.** Suggest 1–3 sub-agent shapes per agent (research passes, large refactors, parallel reads) — anchored on the agent's domain, not on generic templates. Persistent agents own domains; sub-agents handle fire-and-forget specialised work inside them.
+2. **The capability stack — per agent.** For each proposed agent, name its stack from [capability-catalog.md](../capability-catalog.md), picked by the agent's domain and shape (builder vs. compass):
+   - **(i) sub-agents** — the fire-and-forget specialised work inside its domain. Build-side (`code-investigator`, `implementer`, `test-author`, `qa-tester`, `pr-narrator`, `code-roaster`) for builders; research/ideation (`product-researcher`, `feasibility-analyst`, `deep-research`, `memory-writer`, `ideator`) for compass-shaped; `pr-summarizer` for a forwarding manager. Adapt from the catalog; bespoke escape hatch for a genuine long-tail specialty.
+   - **(ii) skills** — repeatable routines: `ship-it` / `tdd` for builders, `shape-idea` for compass-shaped.
+   - **(iii) does it run a `/loop`?** — a *builder*-shaped agent (autonomous goal→ship drive) runs a `/loop` as its heartbeat; a *compass*-shaped agent (conversational / event-driven) does not. Name which, per agent, and why.
+   - **(iv) the one earned hook** — `fmt-lint` (`PreToolUse` on `Edit|Write`) **iff the agent writes code**. No other hooks in v1; don't sprinkle them.
+
+   **Capabilities-not-seats (the lean default).** When discovery surfaced something that's really *more work for an existing agent*, the proposal says so: *"that's a sub-agent/skill on `<agent>`, not a new seat."* A new persistent agent is earned only by a new **domain** (the two-gate test); fire-and-forget work is a capability, not a seat.
+
+   **Guard the generated team's output (RULES).** The capability menu deliberately excludes **cron** and **extra MCP servers**. `/loop` is the cron-free heartbeat; the built-in `team` mailbox MCP is all an agent needs. Never propose a cron block or an `mcps:` server for the team being generated.
 3. **What channels / workflows the agent participates in.** `can_dm` and `can_broadcast` from the synthesised reports-to relationships, plus the `all` channel by default. Manager is Telegram-bound; workers aren't. Cite [teams.md](../../../docs/src/content/docs/concepts/teams.md) and [channels.md](../../../docs/src/content/docs/concepts/channels.md) once each in the proposal prose.
 
-Render the org as a named ASCII tree. Manager on top with the "← you talk to this one on Telegram" annotation, workers fanning out below. Use the same shape the legacy stage used:
+### Present the setup, then ask (setup over diagram)
+
+The presentation **leads with the setup, not the chart** (owner direction). For each agent, render one tight block — this is the substance the user signs off on:
+
+```
+<agent>  ·  <model>  ·  <builder | compass>[ · /loop]
+   owns:       <one line — the domain, in the user's words>
+   sub-agents: <comma-separated picks from the catalog>
+   skills:     <picks>          hook: <fmt-lint, only if it writes code>
+```
+
+Then a **small supporting** ASCII tree — demoted to a glance-level visual, no longer the headline. Manager on top with the "← you talk to this one on Telegram" annotation, workers below:
 
 ```
               ┌──────────────────┐
@@ -369,7 +416,6 @@ Render the org as a named ASCII tree. Manager on top with the "← you talk to t
               └────────┬─────────┘
                        │
        ┌───────────────┼─────────────────┐
-       │               │                 │
   ┌────▼────┐ ┌────────▼─────┐ ┌─────────▼────┐
   │ <wkr_1> │ │   <wkr_2>    │ │   <wkr_3>    │
   └─────────┘ └──────────────┘ └──────────────┘
@@ -378,28 +424,41 @@ Render the org as a named ASCII tree. Manager on top with the "← you talk to t
 Closing line above the gate:
 
 ```
-N Claude Code agents · Opus 4.7 · effort high.
+N Claude Code agents · Opus 4.8 · effort high.
 ```
 
-Where N is the surfaced count. Then fire the **Apply/Modify/Reject gate** (the universal shape, [INTERACTIVE.md §4](../INTERACTIVE.md)):
+Where N is the surfaced count. Then fire the **setup-approval gate** — the universal three-branch gate ([INTERACTIVE.md §4](../INTERACTIVE.md): advance / loop-back-to-refine / discard) with setup-specific labels:
 
 ```text
-question: "Apply this team shape?"
-header: "Apply?"
+question: "Happy with this setup?"
+header: "Setup?"
 options:
-  - label: "Apply"
-    description: "Advance to Stage 4 — scaffold `.team/` and validate."
-  - label: "Modify"
-    description: "Tell me what to adjust (rename an agent, swap roles, drop a candidate) and I'll re-render the tree."
-  - label: "Reject"
+  - label: "Looks good"
+    description: "Approve the setup. Advance to Stage 4 — scaffold `.team/` and validate."
+  - label: "Refine it"
+    description: "Adjust the setup — more/fewer agents, swap a model, add/drop a sub-agent or skill, toggle a loop — and I'll re-present."
+  - label: "Start over"
     description: "Discard. Step back to Stage 2 and re-sharpen the domains."
 ```
 
-On `Modify`, accept the edit inline (free-form is fine here — the user is describing the change) and re-render the tree, then fire the gate again on the refined proposal. On `Reject`, step back to Stage 2 and re-sharpen — don't force a shape the user doesn't recognise.
+Headless prose fallback ([INTERACTIVE.md §5](../INTERACTIVE.md)) mirrors *these* labels, not the generic ones: *"Happy with this setup? Reply `looks good`, `refine` (and say what to adjust), or `start over`."*
+
+On `Refine it`, enter the **refine loop** below. On `Start over`, step back to Stage 2 and re-sharpen — don't force a shape the user doesn't recognise. On `Looks good`, advance to Stage 4.
+
+### Refine loop — iterate until the setup is right
+
+Owner direction: *suggest basics, then iterate until the setup is right.* Between propose and scaffold, loop on the user's adjustments until they approve — nothing is written to disk until then:
+
+1. Take the user's adjustment in free text (it's an open description, not a finite set — *"drop the test-author sub-agent on `eng`," "give `builder` the `tdd` skill," "make `researcher` run a loop too," "merge these two agents"*).
+2. Apply it to the in-memory setup. If the change touches the capability stack, re-pick from [capability-catalog.md](../capability-catalog.md) and keep the capabilities-not-seats + cron/MCP guards.
+3. **Re-present** the full setup blocks + the small tree + the closing line.
+4. Fire the setup-approval gate again. `Looks good` → Stage 4; `Refine it` → loop; `Start over` → Stage 2.
+
+Each pass is one `AskUserQuestion` gate (prose fallback when headless). Don't pre-scaffold a "draft" team to disk between passes — the loop is in-conversation; Stage 4 is the single commit point.
 
 ## Stage 4 — Scaffold from synthesis, then reveal
 
-This is the moment the plugin commits to disk. Inputs handed off from Stages 2-3: the **surfaced domains** (each with the user's own words for what the agent owns + the gates that justified its persistence), the **manager / worker split**, the **team name**, and the **cwd** to scaffold into.
+This is the moment the plugin commits to disk. Inputs handed off from Stages 2-3: the **surfaced domains** (each with the user's own words for what the agent owns + the gates that justified its persistence), the **manager / worker split**, the **per-agent capability setup** the user approved (sub-agents / skills / `/loop` / the earned hook, from Stage 3), the **team name**, and the **cwd** to scaffold into.
 
 The plugin scaffolds `.team/` programmatically from the synthesised inputs. **No example folder is copied byte-for-byte.** The legacy `examples/<folder>/.team/` trees are role-prompt **substance inspiration** only (see role-prompt generation below); they are never the source of `team-compose.yaml` or `projects/<project-id>.yaml`.
 
@@ -415,16 +474,21 @@ The plugin scaffolds `.team/` programmatically from the synthesised inputs. **No
 ```
 <cwd>/.team/
 ├── team-compose.yaml         # synthesised from a programmatic template; tmux_prefix + projects: file:
-├── projects/<project-id>.yaml # synthesised — channels, manager, workers, Telegram interface placeholders
+├── projects/<project-id>.yaml # synthesised — channels, manager, workers, Telegram + per-agent capability keys
 ├── roles/<role>.md           # one per agent — generated on the fly, see below
+├── subagents/<name>.md       # per picked archetype, adapted to the agent's domain (see capability emit)
+├── skills/<name>/SKILL.md    # per picked skill archetype (the `skills:` path is the DIR)
+├── hooks/<name>.sh           # the one earned hook (fmt-lint), chmod +x — only if an agent writes code
 ├── .env.example              # canonical template; TEAMCTL_TG_<NAME>_TOKEN / _CHATS placeholders per manager
 └── .gitignore                # canonical template
 ```
 
+`subagents/`, `skills/`, and `hooks/` are written only for the capabilities the proposal earned — a research-only team has no `hooks/`, a single conversational agent may have no `skills/`. See **Capability emit** below.
+
 The shape of each file:
 
 - **`team-compose.yaml`** — `version: 2`, broker `sqlite` at `state/mailbox.db`, supervisor `tmux` with `tmux_prefix: <project-id>-`, a single `projects:` entry pointing at `projects/<project-id>.yaml`, and a `globally_sensitive_actions` block carrying the canonical defaults (publish, release, deploy, payment, external messages — same shape the legacy examples use). No plugin-specific keys, no markers.
-- **`projects/<project-id>.yaml`** — `project.id: <project-id>`, `project.name: <team display name>`, an `all` channel with `members: '*'`, a `managers:` map with the manager entry (runtime `claude-code`, model `claude-opus-4-8`, effort `high`, `role_prompt:` as a **list in cascade order** `[roles/_base.md, roles/<name>.md]`, `interfaces.telegram` with `bot_token_env: TEAMCTL_TG_<MANAGER_UPPER>_TOKEN` and `chat_ids_env: TEAMCTL_TG_<MANAGER_UPPER>_CHATS`), and a `workers:` map with each worker entry (same fields except `role_prompt:` is `[roles/_base.md, roles/_worker.md, roles/<name>.md]` and no `interfaces.telegram` block). `can_dm` and `can_broadcast` populated from the manager-worker relationships. The list form is consumed by `team-core`'s render layer (`RolePrompt::Multiple` / `write_role_prompt_concat`) — see the role-prompt generation section below.
+- **`projects/<project-id>.yaml`** — `version: 2` (a **required, non-defaulted** int — omitting it fails deserialization; every shipped example carries it), `project.id: <project-id>`, `project.name: <team display name>`, an `all` channel with `members: '*'`, a `managers:` map with the manager entry (runtime `claude-code`, model `claude-opus-4-8`, effort `high`, `role_prompt:` as a **list in cascade order** `[roles/_base.md, roles/<name>.md]`, `interfaces.telegram` with `bot_token_env: TEAMCTL_TG_<MANAGER_UPPER>_TOKEN` and `chat_ids_env: TEAMCTL_TG_<MANAGER_UPPER>_CHATS`), and a `workers:` map with each worker entry (same fields except `role_prompt:` is `[roles/_base.md, roles/_worker.md, roles/<name>.md]` and no `interfaces.telegram` block). Each agent that earned a capability stack also carries its **`subagents:` / `skills:` / `hooks:` keys** (the **Capability emit** section below; key shapes from #383). `can_dm` and `can_broadcast` populated from the manager-worker relationships. The list form is consumed by `team-core`'s render layer (`RolePrompt::Multiple` / `write_role_prompt_concat`) — see the role-prompt generation section below.
 - **`.env.example`** — one block per manager, the two env vars commented with what to fill in. Same shape as legacy `.env.example` files.
 - **`.gitignore`** — canonical: `state/`, `.env`.
 
@@ -525,9 +589,47 @@ The mechanism is already shipped and tested:
 
 Stage 4 only needs to **emit** the list form. Validate (below) and `teamctl up` do the rest.
 
+### Capability emit (sub-agents / skills / hooks)
+
+This is the layer the reshape adds: Stage 4 now **materializes the per-agent capability files and declares their keys**, turning the Stage-3 setup into real artifacts. The keys ship in #383 (`team-core::compose::Agent`); Stage 4 only emits them. Their shape:
+
+```yaml
+managers:
+  <builder>:
+    role_prompt: [roles/_base.md, roles/<builder>.md]
+    subagents:                                   # list of paths to .md sub-agent files
+      - subagents/code-investigator.md
+      - subagents/implementer.md
+    skills:                                      # list of paths to skill DIRECTORIES (the folder holding SKILL.md)
+      - skills/ship-it
+    hooks:                                       # list of {event, matcher?, command} objects
+      - event: PreToolUse
+        matcher: "Edit|Write"
+        command: hooks/fmt-lint.sh
+```
+
+`subagents:` → `.md` files · `skills:` → skill **directories** (not the `SKILL.md` itself) · `hooks:` → objects with `event`, optional `matcher`, and a compose-root-relative `command`. All paths are compose-root-relative, resolved like `role_prompt`.
+
+**Generation procedure (per agent, mirrors role-prompt generation).** For each agent that earned a stack in the Stage-3 setup:
+
+1. **Read [capability-catalog.md](../capability-catalog.md)** — the palette + the per-archetype body shape. The catalog is the source; `examples/` and the dogfood `.claude/agents/` are not reached into at runtime.
+2. **Pick by domain.** Take the sub-agents / skills / hook the Stage-3 proposal named for this agent (build-side vs. research-side per its builder/compass shape). Lean — only what it will actually reach for.
+3. **Materialize adapted files** into `<cwd>/.team/`:
+   - `subagents/<name>.md` — a standard sub-agent file (frontmatter `name` / `description` / `tools`, body = system prompt), authored from the catalog's body-shape and adapted to this team's domain and vocabulary. Materialize each archetype **once** per team (a sub-agent shared by two agents is one file, declared in both).
+   - `skills/<name>/SKILL.md` — frontmatter `name` / `description`, body adapted to the team's stack. `ship-it` wires `/loop` + `AskUserQuestion` + `request_approval` (catalog).
+   - `hooks/<name>.sh` — only the earned `fmt-lint`, **`chmod +x`** on emit, the `case`-arms adapted to the team's source languages (catalog skeleton). Keep the degrade-to-warning posture.
+4. **Declare the keys, file-first.** Add `subagents:` / `skills:` / `hooks:` to this agent's entry in `projects/<project-id>.yaml` **after** its files exist on disk, so every declared path resolves by construction.
+5. **Self-check.** Before validate, confirm each declared path exists (`test -e` the sub-agent files, the skill dirs, the hook commands). A dangling path is a generation bug — fix it here, don't ship it.
+
+**Path resolution — what validate does and doesn't catch.** `teamctl validate` checks **schema + team coherence**; it does **not** verify that `subagents:` / `skills:` / `hooks:` paths exist on disk (a dangling path validates green). **The file-first emit + the step-5 self-check are the load-bearing guard** — and they're the *only* guard for skills and hooks: at `teamctl up` / `teamctl reload`, render hard-errors only on a missing **sub-agent** file (it's `read_to_string`'d), whereas a missing **skill** dir mounts as a dead symlink and a missing **hook** command renders into settings — both degrade silently rather than erroring. So don't lean on `up` to catch a mis-emitted skill or hook; catch it in the self-check.
+
+**Substrate-clean (constraint #3).** Adapted archetypes look exactly like a careful human authored them — no `# generated-by:` markers, no plugin-only keys. A user reading `.team/subagents/qa-tester.md` cannot tell it came from a catalog.
+
+**Guard the output (RULES).** Emit **no** cron block and **no** `mcps:` server for the generated team. `/loop` is the heartbeat (wired into the agent's role prompt §5); the built-in `team` MCP is all it needs.
+
 ### Validate
 
-Run `teamctl validate` from `<cwd>`. Exit 0 is the gate.
+Run `teamctl validate` from `<cwd>`. Exit 0 is the gate — it confirms **schema + team coherence** (well-formed compose, `reports_to` resolves, role prompts non-blank, no `team`-named MCP clobber). It does **not** check that capability paths exist (see the path-resolution note above) — the file-first emit + self-check cover that, and `teamctl up` is the backstop.
 
 If validate succeeds, advance to the reveal beat.
 
