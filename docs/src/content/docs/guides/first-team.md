@@ -51,4 +51,4 @@ Edit a role prompt and run `teamctl reload`: only the affected agents restart, o
 
 - Add a [Telegram bot](/guides/telegram-bot/) so you can DM the manager from your phone.
 - Read about [channels](/concepts/channels/) to wire up broadcast groups.
-- See the bigger [`oss-maintainer`](https://github.com/Alireza29675/teamctl/tree/main/examples/oss-maintainer), [`market-analysts`](https://github.com/Alireza29675/teamctl/tree/main/examples/market-analysts), and [`newsletter-office`](https://github.com/Alireza29675/teamctl/tree/main/examples/newsletter-office) examples for more developed shapes.
+- See the bigger [`oss-maintainer`](https://github.com/Alireza29675/teamctl/tree/main/examples/oss-maintainer) and [`newsletter-office`](https://github.com/Alireza29675/teamctl/tree/main/examples/newsletter-office) examples for more developed shapes.
