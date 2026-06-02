@@ -1,0 +1,152 @@
+# projects/product-team.yaml — the product squad.
+#
+# Four agents, two tracks. The *what* track (pm) and the *how* track
+# (em) are the only two the human touches, both over Telegram. The two
+# engineers build against `requirements.md` and review each other's PRs
+# across model families. The whole team operates on the bundled
+# habit-tracker seed app; repoint `cwd` to grow your own product.
+
+version: 2
+
+project:
+  id: product-team
+  name: Product Team
+  # The codebase the team builds. `../habit-tracker` is the bundled seed
+  # app (a tiny habit/streak tracker the team grows from skeleton →
+  # working). 👉 To aim this team at your OWN product, repoint this one
+  # line at your repo — nothing else has to change.
+  cwd: ../habit-tracker
+
+channels:
+  # The requirements handoff line. The pm posts the living
+  # `requirements.md` here; the em reads it and turns it into work.
+  - name: product
+    members: [pm, em]
+  # Build coordination. The em routes slices to the engineers and
+  # integrates what comes back.
+  - name: eng
+    members: [em, eng-claude, eng-codex]
+  # The cross-model review room. The two engineers review each other's
+  # PRs here — two model families catch different bug classes. This is a
+  # real quality mechanism, not decoration.
+  - name: code_review
+    members: [eng-claude, eng-codex]
+
+managers:
+  # The *what*. You tell the pm the goal on Telegram; it runs product
+  # discovery, writes and maintains `requirements.md`, and hands it to
+  # the em. It pings you only when a product decision is genuinely
+  # ambiguous and blocking.
+  pm:
+    display_name: "Product Manager"
+    runtime: claude-code
+    model: claude-opus-4-8
+    role_prompt:
+      - roles/_base.md
+      - roles/_telegram.md
+      - roles/pm.md
+    # The pm's discovery stack: ground the goal in what exists, then
+    # turn findings into a crisp requirements doc.
+    subagents:
+      - subagents/product-researcher.md
+      - subagents/prd-drafter.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    can_dm: [em]
+    can_broadcast: [product]
+    # Your 1:1 Telegram bot for the product conversation. `teamctl bot
+    # setup` fills these env vars in.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_PM_TOKEN
+        chat_ids_env: TEAMCTL_TG_PM_CHATS
+
+  # The *how*. The em reads `requirements.md`, decomposes it, routes
+  # slices to the engineers, integrates the results, and reports
+  # shippable increments to you. It owns the hard gates: nothing
+  # sensitive ships without your tap.
+  em:
+    display_name: "Engineering Manager"
+    runtime: claude-code
+    model: claude-opus-4-8
+    role_prompt:
+      - roles/_base.md
+      - roles/_telegram.md
+      - roles/em.md
+    # The em's stack: read the codebase to scope work, and turn a ready
+    # PR into a plain-language approve/merge summary for you.
+    subagents:
+      - subagents/code-investigator.md
+      - subagents/pr-summarizer.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    can_dm: [pm, eng-claude, eng-codex]
+    can_broadcast: [product, eng]
+    # A SEPARATE Telegram bot from the pm — you hold two conversations,
+    # the product one and the delivery one.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_EM_TOKEN
+        chat_ids_env: TEAMCTL_TG_EM_CHATS
+
+workers:
+  # The Claude engineer. Builds its slices and reviews eng-codex's PRs.
+  # Carries the full build stack as per-agent sub-agents, plus a hard
+  # fmt+lint gate that fires before every Edit/Write.
+  eng-claude:
+    display_name: "Engineer (Claude)"
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt:
+      - roles/_base.md
+      - roles/_engineer.md
+      - roles/eng.md
+    subagents:
+      - subagents/code-investigator.md
+      - subagents/implementer.md
+      - subagents/test-author.md
+      - subagents/qa-tester.md
+      - subagents/pr-narrator.md
+      - subagents/code-roaster.md
+    # A PreToolUse hook: every Edit/Write is gated through fmt+lint, so
+    # malformed code never even lands on disk. Hooks are a claude-code
+    # capability (see eng-codex below for the parity note).
+    hooks:
+      - event: PreToolUse
+        matcher: "Edit|Write"
+        command: hooks/fmt-lint.sh
+    permission_mode: auto
+    autonomy: low_risk_only
+    reports_to: em
+    can_dm: [em, eng-codex]
+    can_broadcast: [eng, code_review]
+
+  # The Codex engineer — the other half of the cross-model review loop.
+  # It builds its slices and reviews eng-claude's PRs with a different
+  # model family's eye. By design it runs lighter-stacked: a Codex agent
+  # gets its role + native Codex tooling, but NOT the sub-agent / skill /
+  # hook stack (those are claude-only in v1 — see this example's README,
+  # "The cross-model parity gap"). It can still take a per-agent MCP
+  # server, which IS runtime-agnostic — e.g. to give it a tool the
+  # Claude side doesn't have:
+  #
+  #   mcps:
+  #     fetch:
+  #       command: uvx
+  #       args: [mcp-server-fetch]
+  #
+  # The cross-model PR review loop works fully regardless — review needs
+  # no sub-agents.
+  eng-codex:
+    display_name: "Engineer (Codex)"
+    runtime: codex
+    model: gpt-5-codex
+    role_prompt:
+      - roles/_base.md
+      - roles/_engineer.md
+      - roles/eng.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    reports_to: em
+    can_dm: [em, eng-claude]
+    can_broadcast: [eng, code_review]

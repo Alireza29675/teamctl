@@ -58,7 +58,7 @@ Real teams running on teamctl. Copy any of them as a starting point.
 
 | Example | What it does |
 |---|---|
-| 🏗️ **[product-team](examples/product-team/)** | A product squad: a PM and engineers coordinating around what to build and ship. |
+| 🏗️ **[product-team](examples/product-team/)** | A product squad: a Product Manager and engineers coordinating around what to build and ship. |
 | 🛰️ **[oss-maintainer](examples/oss-maintainer/)** | Runs a one-person open-source project: triage, bug-fix PRs, docs, and release proposals you approve. |
 | 🧪 **[autonomous-prototyper](examples/autonomous-prototyper/)** | Comes up with ideas and prototypes them end to end. |
 | 🌱 **[personal-research](examples/personal-research/)** | A reading buddy that holds your interests, plus a curator that follows the news and surfaces what matters. |
@@ -68,7 +68,7 @@ More under [`examples/`](examples/).
 
 ## 🧱 What a team looks like
 
-A project YAML with one manager and three workers (illustrative, not a full config):
+A project YAML with two managers you talk to and two engineers who build — the shape of the [`product-team`](examples/product-team/) example (illustrative, not a full config):
 
 ```yaml
 version: 2
@@ -78,63 +78,74 @@ project:
 
 # 📡 Slack-like channels: agents in a channel can post messages and receive notifications
 channels:
-  - name: all
-    members: "*"
+  - name: product             # 🧭 the Product Manager hands requirements.md to the Engineering Manager here
+    members: [pm, em]
 
-  - name: code_review         # 🔀 so the executors can ask each other to review each other's PRs
-    members: [claude_exec, codex_exec]
+  - name: eng                 # 🛠️ the Engineering Manager routes build work to the engineers
+    members: [em, eng-claude, eng-codex]
+
+  - name: code_review         # 🔀 the two engineers review each other's PRs (cross-model)
+    members: [eng-claude, eng-codex]
 
 managers:
-  # 🛎️ your one manager: you chat with it on Telegram, it runs the show
-  service_desk:
-    display_name: "Service Desk"
+  # 🧭 you talk to the Product Manager about *what* to build — it owns requirements.md
+  pm:
+    display_name: "Product Manager"
     runtime: claude-code
-    model: claude-sonnet-4-6
+    model: claude-opus-4-8
     role_prompt:               # 🧬 cascading roles: _base.md layers into every agent
       - roles/_base.md
-      - roles/service_desk.md
+      - roles/pm.md
+    subagents:                # 🧩 give an agent its own sub-agents (claude-code)
+      - subagents/product-researcher.md
+      - subagents/prd-drafter.md
     interfaces:
       telegram:               # 📱 tap to talk to your team from your phone
-        bot_token_env: TEAMCTL_TG_TOKEN
-        chat_ids_env: TEAMCTL_TG_CHATS
+        bot_token_env: TEAMCTL_TG_PM_TOKEN
+        chat_ids_env: TEAMCTL_TG_PM_CHATS
 
-workers:
-  # 🤖 a Claude executor: ships work and reviews the Codex executor's PRs
-  claude_exec:
-    display_name: "Executor (Claude)"
+  # 🛠️ you talk to the Engineering Manager about *how* it ships — it routes work and gates merges
+  em:
+    display_name: "Engineering Manager"
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt:
       - roles/_base.md
-      - roles/_engineer.md     # 🧬 group layer shared by the engineers
-      - roles/executor.md
-    reports_to: service_desk
-    subagents:                # 🧩 give an agent its own sub-agents (claude-code)
-      - agents/researcher.md
+      - roles/em.md
+    interfaces:
+      telegram:               # 📱 a separate bot: two conversations, product & delivery
+        bot_token_env: TEAMCTL_TG_EM_TOKEN
+        chat_ids_env: TEAMCTL_TG_EM_CHATS
 
-  # 🤖 a Codex executor: the other half of the review loop
-  codex_exec:
-    display_name: "Executor (Codex)"
+workers:
+  # 🤖 a Claude engineer: builds, and reviews the Codex engineer's PRs
+  eng-claude:
+    display_name: "Engineer (Claude)"
+    runtime: claude-code
+    model: claude-sonnet-4-6
+    role_prompt:
+      - roles/_base.md
+      - roles/_engineer.md     # 🧬 group layer shared by both engineers
+      - roles/eng.md
+    reports_to: em
+    subagents:
+      - subagents/implementer.md
+      - subagents/test-author.md
+    hooks:                    # 🪝 fmt+lint gate on every Edit/Write (claude-code)
+      - event: PreToolUse
+        matcher: "Edit|Write"
+        command: hooks/fmt-lint.sh
+
+  # 🤖 a Codex engineer: the other half of the cross-model review loop
+  eng-codex:
+    display_name: "Engineer (Codex)"
     runtime: codex
     model: gpt-5-codex
     role_prompt:
       - roles/_base.md
       - roles/_engineer.md
-      - roles/executor.md
-    reports_to: service_desk
-
-  # 🔭 autonomous discovery: keeps finding and prototyping ideas
-  research:
-    display_name: "Research and Discovery"
-    runtime: claude-code
-    model: claude-opus-4-8
-    role_prompt:
-      - roles/_base.md
-      - roles/research.md
-    reports_to: service_desk
-    subagents:
-      - agents/researcher.md
-      - agents/code_search.md
+      - roles/eng.md
+    reports_to: em
 ```
 
 > *All of this lives in a .team/ folder in your project, so you can read it, version it, and share it.*
