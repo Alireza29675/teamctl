@@ -43,6 +43,11 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// How often the team snapshot + detail-pane capture get refreshed.
 /// PR-UI-2 polls; PR-UI-3 may upgrade to event subscriptions.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+/// How often the *focused* agent's pane is re-captured on its own. The
+/// full 1s refresh is too slow for the detail view to feel live, so we
+/// re-capture just the one focused pane this often between refreshes —
+/// a single `tmux capture-pane`, cheap enough to run ~10×/s.
+const PANE_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
@@ -117,6 +122,9 @@ pub struct App {
     /// Last time the snapshot + pane capture were refreshed. Used by
     /// `tick()` to gate the next refresh.
     pub last_refresh: Instant,
+    /// Last time the focused agent's pane was re-captured on the fast
+    /// `PANE_REFRESH_INTERVAL` cadence (between full refreshes).
+    pub last_pane_refresh: Instant,
     pub running: bool,
     /// First-launch detection — when the marker file exists, future
     /// stacked-PRs (PR-UI-7) skip the tutorial after splash. PR-UI-1
@@ -289,6 +297,7 @@ impl App {
             capabilities: detect_capabilities(),
             splash_started: Instant::now(),
             last_refresh: Instant::now() - REFRESH_INTERVAL,
+            last_pane_refresh: Instant::now(),
             running: true,
             tutorial_completed: tutorial::is_completed(),
             mailbox_tab: MailboxTab::Inbox,
@@ -1061,6 +1070,7 @@ pub fn refresh<P: PaneSource, M: MailboxSource, A: ApprovalSource>(
     refresh_mailbox(app, mailbox_source);
     refresh_approvals(app, approval_source);
     app.last_refresh = Instant::now();
+    app.last_pane_refresh = Instant::now();
 }
 
 /// Approvals-only refresh. Extracted on the same shape as
@@ -1164,9 +1174,26 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
             if app.team.root != prior_root {
                 watch = Watch::try_new(&app.team.root.join("state"));
             }
+        } else if app.last_pane_refresh.elapsed() >= PANE_REFRESH_INTERVAL {
+            // Between full refreshes, keep the detail view live by
+            // re-capturing just the focused agent's pane.
+            recapture_focused_pane(&mut app, &pane_source);
         }
     }
     Ok(())
+}
+
+/// Fast-cadence re-capture of only the focused agent's tmux pane, so
+/// the detail view tracks the live session between the heavier 1s full
+/// refreshes. A single `capture-pane` subprocess — no team / mailbox /
+/// approval / sysinfo work. No-op when no agent is focused.
+fn recapture_focused_pane<P: PaneSource>(app: &mut App, pane_source: &P) {
+    if let Some(session) = app.focused_session().map(|s| s.to_string()) {
+        if let Ok(lines) = pane_source.capture(&session) {
+            app.set_detail_buffer(lines);
+        }
+    }
+    app.last_pane_refresh = Instant::now();
 }
 
 /// T-199: push the focused agent's inner tmux pane to match the
@@ -1199,7 +1226,18 @@ pub fn sync_focused_pane_size_to<R: crate::pane_resize::PaneResizer>(
     let Some(session) = app.focused_session().map(|s| s.to_string()) else {
         return;
     };
-    let target = (detail.width, detail.height);
+    // `render_detail` wraps the captured pane in a bordered block with a
+    // top title (Borders::ALL + `.title(...)`), so it draws into an inner
+    // rect 2 cols and 2 rows smaller than `detail`. Size the tmux pane to
+    // that INNER area — sizing to the outer rect makes the agent reflow to
+    // N rows while we only render N-2, leaving an empty gap at the bottom
+    // and nudging the first line down a row.
+    let inner_w = detail.width.saturating_sub(2);
+    let inner_h = detail.height.saturating_sub(2);
+    if inner_w == 0 || inner_h == 0 {
+        return;
+    }
+    let target = (inner_w, inner_h);
     if !crate::pane_resize::should_sync(&app.last_synced_pane_sizes, &session, target) {
         return;
     }
@@ -1235,6 +1273,7 @@ fn refresh_with_default_sources<P: PaneSource>(app: &mut App, pane_source: &P) {
     app.sysinfo.refresh_cpu_usage();
     app.sysinfo.refresh_memory();
     app.last_refresh = Instant::now();
+    app.last_pane_refresh = Instant::now();
 }
 
 pub fn draw(f: &mut Frame<'_>, app: &App) {
@@ -2074,10 +2113,34 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
             // sends SIGINT to the agent rather than bailing out of
             // the mode they just entered.
             Stage::StreamKeys => {
-                if matches!(k.code, KeyCode::Char('e') | KeyCode::Char('E'))
-                    && k.modifiers.contains(KeyModifiers::CONTROL)
-                {
+                let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+                let ctrl_shift = k
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+                if ctrl && matches!(k.code, KeyCode::Char('e') | KeyCode::Char('E')) {
                     app.exit_stream_keys();
+                } else if ctrl_shift && matches!(k.code, KeyCode::Up | KeyCode::Down) {
+                    // Ctrl+Shift+↑/↓ switches which agent receives
+                    // keystrokes without leaving stream-keys mode, so the
+                    // banner, the detail pane, and the stream target move
+                    // together. (Ctrl+↑/↓ alone is reserved by macOS
+                    // Mission Control, so the switch chord adds Shift.)
+                    //
+                    // Only act when the stream target IS the roster
+                    // selection — i.e. no detail split is focused. With a
+                    // split focused, `stream_target_session` targets the
+                    // split's agent rather than `selected_agent`, so moving
+                    // the roster selection would desync the banner/detail
+                    // from the session keystrokes actually land in. There
+                    // we consume the chord as a no-op instead of misrouting
+                    // or leaking a stray `C-S-arrow` to the pane.
+                    if app.detail_splits.is_empty() || app.selected_split == 0 {
+                        if matches!(k.code, KeyCode::Up) {
+                            app.select_prev();
+                        } else {
+                            app.select_next();
+                        }
+                    }
                 } else if let Some(session) = app.stream_target_session() {
                     if let Some(encoded) = encode_key(k) {
                         // Best-effort: a tmux failure (session
@@ -3732,6 +3795,200 @@ mod tests {
         assert!(ks.calls.lock().unwrap().is_empty());
     }
 
+    // ── fast-cadence focused-pane re-capture ────────────────────────
+
+    #[test]
+    fn recapture_focused_pane_sets_buffer_and_advances_clock() {
+        // Between full 1s refreshes the run loop re-captures just the
+        // focused agent's pane so the detail view stays live. It must
+        // (a) push the captured lines into the detail buffer and
+        // (b) advance `last_pane_refresh` so the next tick re-gates.
+        use crate::pane::test_support::MockPaneSource;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        assert_eq!(app.selected_agent, Some(0));
+        let mock = MockPaneSource {
+            lines: vec!["hello".into(), "world".into()],
+            asked: std::sync::Mutex::new(Vec::new()),
+        };
+        // Backdate the clock so any advance is observable.
+        let before = Instant::now() - PANE_REFRESH_INTERVAL;
+        app.last_pane_refresh = before;
+
+        super::recapture_focused_pane(&mut app, &mock);
+
+        assert_eq!(app.detail_buffer, vec!["hello", "world"]);
+        // The focused agent's session — and only that one — got captured.
+        assert_eq!(mock.asked.lock().unwrap().clone(), vec!["t-p-a"]);
+        assert!(
+            app.last_pane_refresh > before,
+            "re-capture advances the fast-cadence clock"
+        );
+    }
+
+    #[test]
+    fn recapture_focused_pane_no_op_when_no_agent_focused() {
+        // Empty team → `focused_session()` is None, so there is nothing
+        // to capture. It must not panic and must not query the source.
+        use crate::pane::test_support::MockPaneSource;
+        let mut app = App::new();
+        app.dismiss_splash();
+        assert_eq!(app.selected_agent, None);
+        let mock = MockPaneSource {
+            lines: vec!["unused".into()],
+            asked: std::sync::Mutex::new(Vec::new()),
+        };
+
+        super::recapture_focused_pane(&mut app, &mock);
+
+        assert!(
+            mock.asked.lock().unwrap().is_empty(),
+            "no focused agent → no capture call"
+        );
+        assert!(
+            app.detail_buffer.is_empty(),
+            "detail buffer untouched with no agent"
+        );
+    }
+
+    #[test]
+    fn recapture_focused_pane_no_op_when_selection_cleared() {
+        // A populated team but `selected_agent == None` (e.g. focus
+        // dropped) is also a no-op — the source is never queried.
+        use crate::pane::test_support::MockPaneSource;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        app.selected_agent = None;
+        let mock = MockPaneSource {
+            lines: vec!["unused".into()],
+            asked: std::sync::Mutex::new(Vec::new()),
+        };
+
+        super::recapture_focused_pane(&mut app, &mock);
+
+        assert!(mock.asked.lock().unwrap().is_empty());
+        assert!(app.detail_buffer.is_empty());
+    }
+
+    // ── Ctrl+Shift+↑/↓ stream-keys agent switch ─────────────────────
+
+    /// Two-agent variant of `stream_keys_fixture`: Detail focused,
+    /// agent 0 selected, already in StreamKeys mode. Used by the
+    /// agent-switch chord tests.
+    fn stream_keys_fixture_two_agents() -> App {
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![
+            agent("p:a", AgentState::Running),
+            agent("p:b", AgentState::Running),
+        ]));
+        app.dismiss_splash();
+        app.cycle_focus(); // Roster → Detail
+        assert_eq!(app.focused_pane, Pane::Detail);
+        assert_eq!(app.selected_agent, Some(0));
+        app.enter_stream_keys();
+        assert_eq!(app.stage, Stage::StreamKeys);
+        app
+    }
+
+    #[test]
+    fn ctrl_shift_down_moves_selection_to_next_agent_no_split() {
+        // With no detail split focused, the switch chord steps the
+        // roster selection forward, stays in StreamKeys, and consumes
+        // the chord (no stray keystroke forwarded to the pane).
+        use crate::keysender::test_support::MockKeySender;
+        let mut app = stream_keys_fixture_two_agents();
+        let ks = MockKeySender::default();
+        stream_dispatch(
+            &mut app,
+            key_with(KeyCode::Down, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            &ks,
+        );
+        assert_eq!(app.selected_agent, Some(1), "switched to next agent");
+        assert_eq!(app.stage, Stage::StreamKeys, "stays in stream-keys");
+        assert!(
+            ks.calls.lock().unwrap().is_empty(),
+            "the switch chord never forwards a keystroke"
+        );
+    }
+
+    #[test]
+    fn ctrl_shift_up_moves_selection_to_prev_agent_no_split() {
+        // Mirror of the Down case: Ctrl+Shift+Up steps the selection
+        // backward (wrapping from agent 0 to the last agent).
+        use crate::keysender::test_support::MockKeySender;
+        let mut app = stream_keys_fixture_two_agents();
+        let ks = MockKeySender::default();
+        stream_dispatch(
+            &mut app,
+            key_with(KeyCode::Up, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            &ks,
+        );
+        assert_eq!(
+            app.selected_agent,
+            Some(1),
+            "Up from agent 0 wraps to the last agent"
+        );
+        assert_eq!(app.stage, Stage::StreamKeys);
+        assert!(ks.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ctrl_shift_switch_no_op_when_split_focused() {
+        // Regression guard (the bug this PR fixes): with a detail split
+        // focused, `stream_target_session` routes to the split's agent,
+        // not `selected_agent`. Moving the roster selection there would
+        // desync the banner/detail from where keystrokes actually land,
+        // so the chord is consumed as a pure no-op: selection unchanged,
+        // stage unchanged, and nothing forwarded to the pane.
+        use crate::keysender::test_support::MockKeySender;
+        for code in [KeyCode::Up, KeyCode::Down] {
+            let mut app = stream_keys_fixture_two_agents();
+            // Push a split for `p:b` and focus it (cell 0 = focused
+            // agent, cell 1 = first split).
+            app.detail_splits
+                .push(("p:b".into(), SplitOrientation::Vertical));
+            app.selected_split = 1;
+            let ks = MockKeySender::default();
+            stream_dispatch(
+                &mut app,
+                key_with(code, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+                &ks,
+            );
+            assert_eq!(
+                app.selected_agent,
+                Some(0),
+                "split focused → selection must not move ({code:?})"
+            );
+            assert_eq!(app.stage, Stage::StreamKeys);
+            assert!(
+                ks.calls.lock().unwrap().is_empty(),
+                "split-focused switch chord is consumed, not forwarded ({code:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_shift_switch_single_agent_is_no_op() {
+        // Single-agent team: stepping forward wraps back to index 0,
+        // so the selection is effectively unchanged. No panic, and the
+        // chord still doesn't leak a keystroke to the pane.
+        use crate::keysender::test_support::MockKeySender;
+        let mut app = stream_keys_fixture(); // one agent, StreamKeys-capable
+        app.enter_stream_keys();
+        assert_eq!(app.selected_agent, Some(0));
+        let ks = MockKeySender::default();
+        stream_dispatch(
+            &mut app,
+            key_with(KeyCode::Down, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            &ks,
+        );
+        assert_eq!(app.selected_agent, Some(0), "single agent → stays at 0");
+        assert_eq!(app.stage, Stage::StreamKeys);
+        assert!(ks.calls.lock().unwrap().is_empty());
+    }
+
     // ── T-199: detail-pane → inner-tmux size sync ───────────────────
 
     fn pane_sync_fixture() -> App {
@@ -3760,8 +4017,8 @@ mod tests {
         // session (mgr) at the typical 120×40 Triptych Detail rect.
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "t-hello-mgr");
-        assert_eq!(calls[0].1, 92); // Detail width = 120 - 28 sidebar
-        assert_eq!(calls[0].2, 24); // Detail height = 3/5 of 40
+        assert_eq!(calls[0].1, 90); // inner = (120 - 28 sidebar) - 2 border
+        assert_eq!(calls[0].2, 22); // inner = (3/5 of 40) - 2 border
     }
 
     #[test]
@@ -3799,11 +4056,11 @@ mod tests {
         );
         let calls = resizer.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].1, 92);
-        assert_eq!(calls[0].2, 24);
-        assert_eq!(calls[1].1, 172); // 200 - 28
-                                     // Height = 3/5 of 60 = 36.
-        assert_eq!(calls[1].2, 36);
+        assert_eq!(calls[0].1, 90); // (120 - 28) - 2 border
+        assert_eq!(calls[0].2, 22); // (3/5 of 40) - 2 border
+        assert_eq!(calls[1].1, 170); // (200 - 28) - 2 border
+                                     // Height = (3/5 of 60) - 2 border = 34.
+        assert_eq!(calls[1].2, 34);
     }
 
     #[test]
@@ -3885,9 +4142,10 @@ mod tests {
             &resizer,
         );
         let calls = resizer.calls.lock().unwrap();
-        // Stripe consumes one row → Detail height is 3/5 of 39 = 23.
+        // Stripe consumes one row → Detail height 3/5 of 39 = 23 outer,
+        // minus 2 border = 21 inner.
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].2, 23);
+        assert_eq!(calls[0].2, 21);
     }
 
     // T-131 PR-2: mailbox filter/search input-mode integration tests.
