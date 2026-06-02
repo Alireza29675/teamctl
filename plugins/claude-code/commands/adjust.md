@@ -3,7 +3,7 @@ description: Open-ended "talk to it" command for evolving an existing teamctl te
 allowed-tools: Bash, Read, Write, Edit, AskUserQuestion
 ---
 
-`/teamctl:adjust` is the command you reach for after onboarding ends. Describe the change in plain English — *"add a docs worker reporting to maintainer"*, *"retire the bug_fix worker"*, *"open a bridge to the ops project"* — and `/teamctl:adjust` walks you through the picks, proposes the YAML diff, applies it on confirmation, validates, and offers to reload.
+`/teamctl:adjust` is the command you reach for after onboarding ends. Describe the change in plain English — *"add a docs worker reporting to maintainer"*, *"remove the bug_fix worker"*, *"open a bridge to the ops project"* — and `/teamctl:adjust` walks you through the picks, proposes the YAML diff, applies it on confirmation, validates, and offers to reload.
 
 Read [RULES.md](../RULES.md), [INTERACTIVE.md](../INTERACTIVE.md), and [capability-catalog.md](../capability-catalog.md) before each invocation. RULES carries the architecture invariants (including the capability invariants — capabilities over new sessions, no-cron/no-extra-MCP in the team); INTERACTIVE carries the UI invariants (when to reach for `AskUserQuestion`, the Apply/Modify/Reject gate, the headless-pane fallback, docs-as-ground-truth, voice control); the catalog is the palette for the capability stack a new agent session earns and Verb 8 evolves. Substrate constraint #4 is the non-negotiable: every action this command takes is reproducible with `vim .team/team-compose.yaml`. The mindset has to survive *evolution*, not just init — a new agent session is a parallel session for separate focus, defined by its capabilities and connections; it gets its capability stack on creation, and the stack is a first-class thing to adjust.
 
@@ -122,7 +122,7 @@ Then fire the Apply/Modify/Reject gate.
 
 User says: *"add a docs worker"*, *"add a researcher reporting to the editor"*.
 
-**Capabilities over new sessions — check before spawning one.** If the ask reads like *more capability for an existing agent session* rather than separate focus (*"add a QA worker"* when an engineer already owns the code, *"add someone to write release notes"* when a maintainer ships releases), surface the leaner path first. Resolve which existing session it lands on from the ask (ask in one line if it's not obvious), then fire `AskUserQuestion` with `<agent>` filled in:
+**Capabilities over new sessions — check before spawning one.** If the ask reads like *more work for an existing session* rather than separate focus (*"add a QA worker"* when an engineer already owns the code, *"add someone to write release notes"* when a maintainer ships releases), surface the leaner path first. Resolve which existing session it lands on from the ask (ask in one line if it's not obvious), then fire `AskUserQuestion` with `<agent>` filled in:
 
 ```text
 question: "That sounds like a capability on `<agent>`, not a new session — leaner. Which?"
@@ -180,7 +180,7 @@ If `interfaces.telegram` already exists on the manager and the user is asking fo
 
 ### Verb 4 — Remove an agent session
 
-User says: *"remove the bug_fix worker session"*, *"close ops_lead"*, *"drop the docs session"*. Removing an agent session retires that parallel focus — its entry, role file, and connections come out of the team.
+User says: *"remove the bug_fix worker session"*, *"close ops_lead"*, *"drop the docs session"*. Removing an agent session ends that parallel focus — its entry, role file, and connections come out of the team.
 
 Touches:
 - The agent's entry under `managers:` or `workers:` — removed wholesale.
