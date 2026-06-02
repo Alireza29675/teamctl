@@ -124,7 +124,7 @@ pub const TEMPLATES: &[Template] = &[
         label: "Ideate & Build",
         blurb: "An Executor, a Compass ideation partner, and two engineers — think it through, then build it.",
         dir: &IDEATE_DIR,
-        // Own folder ships roles/, agents/, charter.md, .env.example,
+        // Own folder ships roles/, subagents/, charter.md, .env.example,
         // README.md; only .gitignore comes from _common.
         shared: &[(".gitignore", COMMON_GITIGNORE)],
     },
@@ -915,7 +915,7 @@ mod tests {
         for dest in [
             "projects/main.yaml",
             "roles/_base.md",
-            "agents/implementer.md",
+            "subagents/implementer.md",
         ] {
             assert!(
                 entry_for(&entries, dest).is_some(),
