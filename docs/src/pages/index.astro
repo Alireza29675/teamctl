@@ -4,8 +4,8 @@
 // teamctl ui + learn-more. Linear-tier layout, Vercel-tier code container,
 // no animation. Strict accent rule: YAML keys + Copy hover only.
 
-import { Picture, Image } from 'astro:assets';
-import heroPng from '../../assets/hero.png';
+import { Image } from 'astro:assets';
+import logoPng from '../../assets/logo.png';
 import uiSplash from '../../assets/ui/splash.png';
 import uiControlRoom from '../../assets/ui/control-room.png';
 import uiAgentDetail from '../../assets/ui/agent-detail.png';
@@ -220,15 +220,7 @@ const withCode = (s: string) =>
   <body>
     <main>
       <figure class="hero">
-        <Picture
-          src={heroPng}
-          alt=""
-          loading="eager"
-          decoding="async"
-          formats={['avif', 'webp']}
-          fallbackFormat="jpg"
-          quality={80}
-        />
+        <Image src={logoPng} alt="teamctl" loading="eager" decoding="async" />
       </figure>
 
       <header class="lede">
@@ -422,18 +414,17 @@ const withCode = (s: string) =>
       a { color: var(--fg); }
       a:hover { color: var(--accent); }
 
-      /* Hero */
+      /* Hero — the README's teamctl wordmark, centered and borderless */
       .hero {
         margin: 0;
-        border-radius: 10px;
-        overflow: hidden;
-        border: 1px solid var(--hairline);
-        background: var(--bg-soft);
+        text-align: center;
       }
       .hero img {
         display: block;
         width: 100%;
+        max-width: 34rem;
         height: auto;
+        margin: 0 auto;
       }
 
       /* Lede */
@@ -635,8 +626,7 @@ const withCode = (s: string) =>
       .yaml {
         margin: 0;
         padding: 1.4rem 1.6rem;
-        overflow: auto;
-        max-height: 32rem;
+        overflow-x: auto;
         font-family: var(--mono);
         font-size: 0.9rem;
         line-height: 1.55;
