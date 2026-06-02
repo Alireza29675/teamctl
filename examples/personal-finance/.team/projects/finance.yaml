@@ -14,6 +14,11 @@ managers:
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt: roles/books.md
+    # books's stack: turn whatever tracker or analyst surfaced into the
+    # short, calm, operator-facing Telegram briefing — in the operator's
+    # voice, only once books has decided it earns a ping.
+    subagents:
+      - subagents/briefing-drafter.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm: [tracker, analyst]
@@ -31,6 +36,27 @@ workers:
     runtime: claude-code
     model: claude-sonnet-4-6
     role_prompt: roles/tracker.md
+    # tracker's stack: an anomaly-scanner sub-agent flags outliers against
+    # the operator's own baseline, plus a live financial-data MCP feed.
+    # The MCP below is Plaid's OFFICIAL server — the PyPI package
+    # mcp-server-plaid, NOT the unrelated npm package of the same name.
+    # Out of the box it serves Plaid's *sandbox* — mock accounts and
+    # transactions, the honest way to try the wiring end to end with free
+    # Sandbox keys (dashboard.plaid.com → free client_id/secret). Point it
+    # at your production Plaid setup (or swap in the aggregator you use)
+    # for live data. It reads PLAID_CLIENT_ID / PLAID_SECRET from env (or
+    # pass --client-id / --secret in args). Needs `uv` (astral.sh/uv); or
+    # `pip install mcp-server-plaid` and set command: python,
+    # args: [-m, mcp_server_plaid].
+    subagents:
+      - subagents/anomaly-scanner.md
+    mcps:
+      plaid:
+        command: uvx
+        args: [mcp-server-plaid]
+        env:
+          PLAID_CLIENT_ID: ${PLAID_CLIENT_ID}
+          PLAID_SECRET: ${PLAID_SECRET}
     permission_mode: auto
     reports_to: books
     can_dm: [books, analyst]
@@ -42,6 +68,12 @@ workers:
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt: roles/analyst.md
+    # analyst's stack: a trend-analyzer sub-agent does the longitudinal
+    # math (savings rate, category drift, holdings), and a digest-writer
+    # turns those trends into the structured digest it hands books.
+    subagents:
+      - subagents/trend-analyzer.md
+      - subagents/digest-writer.md
     permission_mode: auto
     reports_to: books
     can_dm: [books, tracker]
