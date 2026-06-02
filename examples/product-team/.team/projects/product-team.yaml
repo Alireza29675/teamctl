@@ -38,7 +38,7 @@ managers:
   # the em. It pings you only when a product decision is genuinely
   # ambiguous and blocking.
   pm:
-    display_name: "PM"
+    display_name: "Product Manager"
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt:
@@ -66,7 +66,7 @@ managers:
   # shippable increments to you. It owns the hard gates: nothing
   # sensitive ships without your tap.
   em:
-    display_name: "EM"
+    display_name: "Engineering Manager"
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt:

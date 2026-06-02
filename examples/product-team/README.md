@@ -1,17 +1,17 @@
 # Example: product-team
 
 Product discovery while an engineering team builds. You set a goal, and
-two managers you talk to on Telegram run with it: a **PM** who owns the
-*what* (product discovery → a living `requirements.md`) and an **EM** who
+two managers you talk to on Telegram run with it: a **Product Manager** who owns the
+*what* (product discovery → a living `requirements.md`) and an **Engineering Manager** who
 owns the *how* (decompose, route, integrate, ship, gate). Behind them,
 **two engineers on two model families** build the product and review each
 other's PRs. You touch exactly two agents; everything between a settled
 requirement and a shipped increment runs on its own.
 
 ```
-        ┌─ pm  (Claude Opus)    ← Telegram: PM bot   · the *what*: discovery → requirements.md
+        ┌─ pm  (Claude Opus)    ← Telegram: Product Manager bot       · the *what*: discovery → requirements.md
 You ────┤
-        └─ em  (Claude Opus)    ← Telegram: EM bot   · the *how*: decompose, route, integrate, gate
+        └─ em  (Claude Opus)    ← Telegram: Engineering Manager bot   · the *how*: decompose, route, integrate, gate
                  │
                  ├─ eng-claude  (Claude Sonnet)  · builds slices · reviews eng-codex's PRs
                  └─ eng-codex   (Codex GPT-5)    · builds slices · reviews eng-claude's PRs
@@ -26,23 +26,23 @@ product in one line (see [Point it at your own product](#point-it-at-your-own-pr
 
 ## The autonomy loop
 
-`requirements.md` is the contract between the two tracks. The PM writes
-it; the EM delivers against it.
+`requirements.md` is the contract between the two tracks. The Product Manager writes
+it; the Engineering Manager delivers against it.
 
-1. **You → PM** (Telegram): "build X" — the goal.
-2. **PM** runs discovery (`product-researcher`), writes/maintains
-   `requirements.md` (`prd-drafter`), and posts it to the EM on
+1. **You → Product Manager** (Telegram): "build X" — the goal.
+2. **Product Manager** runs discovery (`product-researcher`), writes/maintains
+   `requirements.md` (`prd-drafter`), and posts it to the Engineering Manager on
    `#product`. It pings you *only* when a product decision is genuinely
    ambiguous and blocking.
-3. **EM** reads the contract, decomposes it, and routes slices to the
+3. **Engineering Manager** reads the contract, decomposes it, and routes slices to the
    engineers on `#eng`. It integrates results and reports shippable
    increments to you.
 4. **eng-claude / eng-codex** build their slices and review each other on
    `#code_review` — a cross-model pass before anything goes to a gate.
-5. **EM** gates anything sensitive (`merge_to_main`, `release`, `deploy`,
+5. **Engineering Manager** gates anything sensitive (`merge_to_main`, `release`, `deploy`,
    `publish`, `external_api_post`) → a Telegram approval prompt to you.
-6. The loop continues: the PM keeps discovering and refining; you adjust
-   the *what* anytime via the PM; the EM keeps shipping toward the current
+6. The loop continues: the Product Manager keeps discovering and refining; you adjust
+   the *what* anytime via the Product Manager; the Engineering Manager keeps shipping toward the current
    contract. You're never the bottleneck.
 
 ## What this demonstrates
@@ -63,7 +63,7 @@ Three properties make this a working team, not a toy:
    review *each other's* PRs on `#code_review`. Two model families catch
    different bug classes — a genuine quality mechanism, not decoration.
 3. **A deliberately narrow human surface.** You touch exactly two agents,
-   on two separate bots: product with the PM, delivery with the EM.
+   on two separate bots: product with the Product Manager, delivery with the Engineering Manager.
    Everything between a requirement and a shipped increment is autonomous,
    with hard gates only where work reaches the outside world.
 
@@ -90,8 +90,8 @@ curl -sSf https://teamctl.run/install | sh
 npm i -g @anthropic-ai/claude-code
 # codex: see OpenAI's install docs (used by eng-codex)
 
-# 2. Create TWO Telegram bots via @BotFather — one for the PM, one for
-#    the EM. Get your chat id from @userinfobot.
+# 2. Create TWO Telegram bots via @BotFather — one for the Product Manager, one for
+#    the Engineering Manager. Get your chat id from @userinfobot.
 
 # 3. Copy this example somewhere writable.
 cp -r /path/to/teamctl/examples/product-team ~/product-team
@@ -122,14 +122,14 @@ The mailbox lives at `.team/state/mailbox.db` — its path is relative to the
 compose file, not your shell:
 
 ```bash
-# PM bot — the product conversation
+# Product Manager bot — the product conversation
 team-bot \
   --mailbox ./.team/state/mailbox.db \
   --token   "$TEAMCTL_TG_PM_TOKEN" \
   --authorized-chat-ids "$TEAMCTL_TG_PM_CHATS" \
   --manager product-team:pm
 
-# EM bot — the delivery conversation
+# Engineering Manager bot — the delivery conversation
 team-bot \
   --mailbox ./.team/state/mailbox.db \
   --token   "$TEAMCTL_TG_EM_TOKEN" \
@@ -137,9 +137,9 @@ team-bot \
   --manager product-team:em
 ```
 
-DM the **PM** the goal ("build a habit tracker — I want streaks"). It runs
-discovery, writes `requirements.md`, and hands off to the EM. Delivery
-updates and merge-gate approvals arrive in the **EM** chat.
+DM the **Product Manager** the goal ("build a habit tracker — I want streaks"). It runs
+discovery, writes `requirements.md`, and hands off to the Engineering Manager. Delivery
+updates and merge-gate approvals arrive in the **Engineering Manager** chat.
 
 ## Point it at your own product
 
@@ -148,7 +148,7 @@ your own repo, change one line and one file:
 
 1. **`cwd`** in `.team/projects/product-team.yaml` → your project's path.
 2. **`.team/requirements.md`** → your product's contract (clear the
-   habit-tracker starter; the PM grows the rest from your goal).
+   habit-tracker starter; the Product Manager grows the rest from your goal).
 
 The four-agent shape, the channels, and the per-agent stacks are
 unchanged — only the target moves.

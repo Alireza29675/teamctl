@@ -1,6 +1,6 @@
 ---
 name: product-researcher
-description: Researches prior art, competitors, and user expectations for a goal. The PM dispatches it to ground product discovery in what already exists and what people expect. Returns conclusions with sources; read-only.
+description: Researches prior art, competitors, and user expectations for a goal. The Product Manager dispatches it to ground product discovery in what already exists and what people expect. Returns conclusions with sources; read-only.
 tools: Read, Grep, Glob, WebSearch, WebFetch
 ---
 

@@ -4,7 +4,7 @@
 // it out toward .team/requirements.md: define a habit, mark it done for
 // today, show the current streak, and persist locally across reloads.
 //
-// The open questions the PM is still resolving (see requirements.md)
+// The open questions the Product Manager is still resolving (see requirements.md)
 // shape what goes here — e.g. whether a streak breaks on the first
 // missed day, or counts vs. a simple done/not-done.
 

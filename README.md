@@ -58,7 +58,7 @@ Real teams running on teamctl. Copy any of them as a starting point.
 
 | Example | What it does |
 |---|---|
-| 🏗️ **[product-team](examples/product-team/)** | A product squad: a PM and engineers coordinating around what to build and ship. |
+| 🏗️ **[product-team](examples/product-team/)** | A product squad: a Product Manager and engineers coordinating around what to build and ship. |
 | 🛰️ **[oss-maintainer](examples/oss-maintainer/)** | Runs a one-person open-source project: triage, bug-fix PRs, docs, and release proposals you approve. |
 | 🧪 **[autonomous-prototyper](examples/autonomous-prototyper/)** | Comes up with ideas and prototypes them end to end. |
 | 🌱 **[personal-research](examples/personal-research/)** | A reading buddy that holds your interests, plus a curator that follows the news and surfaces what matters. |
@@ -78,19 +78,19 @@ project:
 
 # 📡 Slack-like channels: agents in a channel can post messages and receive notifications
 channels:
-  - name: product             # 🧭 the PM hands requirements.md to the EM here
+  - name: product             # 🧭 the Product Manager hands requirements.md to the Engineering Manager here
     members: [pm, em]
 
-  - name: eng                 # 🛠️ the EM routes build work to the engineers
+  - name: eng                 # 🛠️ the Engineering Manager routes build work to the engineers
     members: [em, eng-claude, eng-codex]
 
   - name: code_review         # 🔀 the two engineers review each other's PRs (cross-model)
     members: [eng-claude, eng-codex]
 
 managers:
-  # 🧭 you talk to the PM about *what* to build — it owns requirements.md
+  # 🧭 you talk to the Product Manager about *what* to build — it owns requirements.md
   pm:
-    display_name: "PM"
+    display_name: "Product Manager"
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt:               # 🧬 cascading roles: _base.md layers into every agent
@@ -104,9 +104,9 @@ managers:
         bot_token_env: TEAMCTL_TG_PM_TOKEN
         chat_ids_env: TEAMCTL_TG_PM_CHATS
 
-  # 🛠️ you talk to the EM about *how* it ships — it routes work and gates merges
+  # 🛠️ you talk to the Engineering Manager about *how* it ships — it routes work and gates merges
   em:
-    display_name: "EM"
+    display_name: "Engineering Manager"
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt:

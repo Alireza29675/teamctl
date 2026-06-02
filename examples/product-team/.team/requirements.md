@@ -1,8 +1,8 @@
 # Requirements — Habit Tracker
 
-> The product contract for this team. The **PM owns and maintains this file** from product discovery; everyone else reads it every loop and builds toward it. If your memory and this file disagree, this file wins.
+> The product contract for this team. The **Product Manager owns and maintains this file** from product discovery; everyone else reads it every loop and builds toward it. If your memory and this file disagree, this file wins.
 >
-> This is a *starting* contract for the bundled `habit-tracker/` seed app — deliberately thin, with real open questions, so the PM has genuine discovery to do on the first goal. The PM grows it as the build runs. (Repointing the team at your own product? Replace this whole file with your product's contract.)
+> This is a *starting* contract for the bundled `habit-tracker/` seed app — deliberately thin, with real open questions, so the Product Manager has genuine discovery to do on the first goal. The Product Manager grows it as the build runs. (Repointing the team at your own product? Replace this whole file with your product's contract.)
 
 ## Goal
 
@@ -33,7 +33,7 @@ Deliberately *not* in v1 — don't build these by accident:
 
 ## Open questions
 
-The real discovery surface — the PM resolves these (with the operator only where genuinely blocking):
+The real discovery surface — the Product Manager resolves these (with the operator only where genuinely blocking):
 
 - **Streak definition:** does a streak break at the first missed day, or is there a grace day / freeze?
 - **Counts vs. binary:** is each habit a simple done/not-done, or does some habit need a count (e.g. "8 glasses of water")?
