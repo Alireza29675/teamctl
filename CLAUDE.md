@@ -16,7 +16,7 @@ User-facing intro and install path: see `@README.md`.
 
 ## Stack and entry points
 
-Multi-crate Rust workspace, MSRV **Rust 1.78 (stable)**.
+Multi-crate Rust workspace, MSRV **Rust 1.86 (stable)**.
 
 - `crates/teamctl/` — the CLI (`teamctl init | up | down | reload | status | ...`).
 - `crates/team-core/` — schema, validate, render, supervisor.

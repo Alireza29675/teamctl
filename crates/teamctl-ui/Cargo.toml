@@ -2,7 +2,11 @@
 name = "teamctl-ui"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# Higher than the workspace MSRV (1.86): the ratatui 0.29 dep tree pulls
+# `instability`/`darling`, which require Rust 1.88. teamctl-ui is an opt-in
+# crate installed separately (`cargo install teamctl-ui`), so this does not
+# raise the CLI's advertised MSRV — it just states this crate's real floor.
+rust-version = "1.88"
 license.workspace = true
 repository.workspace = true
 description = "Interactive TUI for teamctl — Triptych view, approvals modal, send-mail compose."

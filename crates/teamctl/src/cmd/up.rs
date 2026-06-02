@@ -281,7 +281,7 @@ fn ensure_claude_trust_for_project(compose: &Compose, project_id: &str) -> Resul
 fn ensure_claude_trust_inner(compose: &Compose, project_id: Option<&str>) -> Result<()> {
     let cwds: BTreeSet<PathBuf> = compose
         .agents()
-        .filter(|h| project_id.map_or(true, |id| h.project == id))
+        .filter(|h| project_id.is_none_or(|id| h.project == id))
         .filter(|h| h.spec.runtime == "claude-code")
         .filter_map(|h| {
             let project = compose

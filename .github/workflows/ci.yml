@@ -13,11 +13,20 @@ jobs:
   test:
     name: test / ${{ matrix.rust }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # T-397: force the matrix toolchain to be the *active* one for every cargo
+    # invocation. The repo's rust-toolchain.toml pins channel=stable, and a
+    # rust-toolchain.toml directory override outranks the `rustup default` that
+    # dtolnay/rust-toolchain sets — so without this the MSRV leg silently ran
+    # `stable` and never tested the MSRV (the old `1.78` leg was green against
+    # clap_lex 1.1.0, a crate 1.78 cannot even parse). RUSTUP_TOOLCHAIN outranks
+    # rust-toolchain.toml, making the matrix authoritative. See the assert below.
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04]
-        rust: [stable, "1.78"]
+        rust: [stable, "1.86"]
         # T-192: add a macOS runner so darwin-flavor regressions
         # (bash 3.2 wrapper parse-fails, FS quirks, tmux behaviour
         # differences) get caught at PR time instead of in operator
@@ -64,6 +73,28 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # T-397: prove the matrix toolchain is the one actually in use. The MSRV
+      # leg used to run `stable` (rust-toolchain.toml shadow, fixed by
+      # RUSTUP_TOOLCHAIN above); this step fails loudly if that ever regresses,
+      # so the MSRV guard can never silently stop testing the MSRV again. A
+      # guard that doesn't fail on a real violation is worse than none.
+      - name: Assert the matrix toolchain is active
+        # EXPECTED comes from the matrix via env (not templated into the shell
+        # source); the glob anchors the trailing dot so `1.86` matches `1.86.0`
+        # but never `1.860`. RUSTUP_TOOLCHAIN selects the toolchain dtolnay
+        # installed under this same bare name.
+        env:
+          EXPECTED: ${{ matrix.rust }}
+        run: |
+          echo "cargo: $(cargo --version)"
+          echo "rustc: $(rustc --version)"
+          if [ "$EXPECTED" != 'stable' ]; then
+            got=$(rustc --version | awk '{print $2}')
+            case "$got" in
+              "$EXPECTED".*) echo "ok: MSRV toolchain $got is active" ;;
+              *) echo "::error::MSRV guard shadowed — expected $EXPECTED, active toolchain is $got"; exit 1 ;;
+            esac
+          fi
       # T-193: Linux runners use bash 4+ / dash for `/bin/sh`, so
       # bash 3.2 parser bugs (e.g. `${VAR:=DEFAULT}` failing on
       # escape sequences in DEFAULT) ship silently — exactly the
@@ -82,8 +113,25 @@ jobs:
         run: bash --posix -O compat32 -n crates/teamctl/assets/agent-wrapper.sh
       - run: cargo fmt --all -- --check
         if: matrix.rust == 'stable'
+      # T-397: the MSRV leg verifies only that the *shipped CLI* — the four
+      # default-members (team-core, teamctl, team-mcp, team-bot), lib + bins —
+      # compiles on the MSRV toolchain. That is exactly what `cargo install
+      # teamctl` builds. By Cargo convention MSRV covers what users build and
+      # install, so two things are deliberately out of scope here and run only
+      # on the stable leg below:
+      #   - dev-dependencies (e.g. wiremock, test-only, edition 2024); and
+      #   - the opt-in `teamctl-ui` crate (installed separately via
+      #     `cargo install teamctl-ui`, excluded from default-members and
+      #     release bundles) — its ratatui dep tree (instability/darling) needs
+      #     a newer rustc than the CLI and shouldn't inflate the CLI's MSRV.
+      # So the MSRV leg builds default-members without --all-targets and runs no
+      # tests; the full --all-targets build + tests run on the stable leg.
+      - run: cargo build --locked
+        if: matrix.rust != 'stable'
       - run: cargo build --all-targets --locked
+        if: matrix.rust == 'stable'
       - run: cargo test --all --locked
+        if: matrix.rust == 'stable'
       # `teamctl-ui` is excluded from `default-members` (it pulls
       # the ratatui dep tree that the release flow doesn't need)
       # but its tests must still gate on green. Build + test +
@@ -91,7 +139,9 @@ jobs:
       # hides regressions from CI (T-T058a, qa observation
       # across PR #34/#35/#36).
       - run: cargo build -p teamctl-ui --all-targets --locked
+        if: matrix.rust == 'stable'
       - run: cargo test -p teamctl-ui --locked
+        if: matrix.rust == 'stable'
       - run: cargo clippy --all-targets --locked -- -D warnings
         if: matrix.rust == 'stable'
       - run: cargo clippy -p teamctl-ui --all-targets --locked -- -D warnings
