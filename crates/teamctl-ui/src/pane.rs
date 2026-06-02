@@ -64,8 +64,10 @@ pub fn tail_lines(lines: &[String], n: usize) -> Vec<String> {
     lines[start..].to_vec()
 }
 
-#[cfg(test)]
-mod tests {
+/// Test fixtures. Made `pub` (rather than `#[cfg(test)]`) so sibling
+/// modules' tests (e.g. `app`) can reach them — same pattern as
+/// `keysender::test_support` and `compose::test_support`.
+pub mod test_support {
     use super::*;
     use std::sync::Mutex;
 
@@ -84,6 +86,13 @@ mod tests {
             Ok(self.lines.clone())
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::MockPaneSource;
+    use super::*;
+    use std::sync::Mutex;
 
     #[test]
     fn tail_lines_takes_last_n() {

@@ -37,7 +37,7 @@ impl Widget for Statusline<'_> {
                 .unwrap_or_else(|| "<no agent>".into());
             let target = crate::data::agent_label(&self.app.team, &target_id);
             let banner = format!(
-                "● STREAM-KEYS → {target}   keystrokes forwarding to tmux pane   ·   Ctrl+E to exit"
+                "● STREAM-KEYS → {target}   keys → tmux pane   ·   Ctrl+Shift+↑/↓ switch agent   ·   Ctrl+E to exit"
             );
             let style = Style::default()
                 .fg(self.app.capabilities.accent())
