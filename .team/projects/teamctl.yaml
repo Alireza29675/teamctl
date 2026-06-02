@@ -20,7 +20,6 @@ managers:
     - roles/_base.md
     - roles/_telegram.md
     - roles/sage.md
-    permission_mode: auto
     autonomy: low_risk_only
     can_dm:
     - hugo
@@ -43,7 +42,6 @@ managers:
     - roles/_base.md
     - roles/_telegram.md
     - roles/hugo.md
-    permission_mode: auto
     autonomy: low_risk_only
     can_dm:
     - sage
@@ -69,7 +67,6 @@ managers:
     - roles/_base.md
     - roles/_telegram.md
     - roles/neda.md
-    permission_mode: auto
     autonomy: low_risk_only
     can_dm:
     - sage
@@ -97,7 +94,6 @@ workers:
     - roles/_base.md
     - roles/_engineer.md
     - roles/ada.md
-    permission_mode: auto
     autonomy: low_risk_only
     reports_to: hugo
     can_dm:
@@ -114,7 +110,6 @@ workers:
     - roles/_base.md
     - roles/_engineer.md
     - roles/kian.md
-    permission_mode: auto
     autonomy: low_risk_only
     reports_to: hugo
     can_dm:

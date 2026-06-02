@@ -94,7 +94,7 @@ options:
 #### Verb 1a — Add a manager
 
 Touches:
-- A new entry under `managers:` in the project YAML — `runtime: claude-code`, `model: claude-opus-4-8`, `role_prompt: roles/<name>.md`, `permission_mode: auto`, `autonomy: low_risk_only`, `can_dm: []`, `can_broadcast: [all]`.
+- A new entry under `managers:` in the project YAML — `runtime: claude-code`, `model: claude-opus-4-8`, `role_prompt: roles/<name>.md`, `autonomy: low_risk_only`, `can_dm: []`, `can_broadcast: [all]`.
 - A new `roles/<name>.md` written per the [8-section spine](../role-prompt-style.md).
 - The agent's **capability stack** from [capability-catalog.md](../capability-catalog.md), emitted the same way `/teamctl:init` Stage 4 does (materialize the adapted files, declare the keys, file-first). A new manager is usually compass-shaped — name its research/forwarding sub-agents (`pr-summarizer` for a manager who forwards PRs, the research set for an ideation-shaped one), any skills, and that it runs **no `/loop`** (managers are conversational). The propose beat names the stack alongside reports-to.
 - If the user mentions telegram (*"with telegram"*, *"for me to reach"*), inline an `interfaces.telegram` block with `bot_token_env: TEAMCTL_TG_<NAME>_TOKEN` / `chat_ids_env: TEAMCTL_TG_<NAME>_CHATS` (canonical pattern), and tell the user to run `teamctl bot setup` afterwards to register the actual bot.
@@ -137,7 +137,7 @@ options:
 On `Capability on <agent>`, route to **Verb 8**. On `New session`, continue. A new agent session is earned only by separate focus — a new **domain** (RULES: capabilities over new sessions) — proceed only once it clears that bar.
 
 Touches:
-- A new entry under `workers:` — `runtime: claude-code`, `model: claude-sonnet-4-6` (cost-tier-appropriate default), `permission_mode: auto`, `reports_to: <manager>`, `can_dm: [<manager>]`, `can_broadcast: []`.
+- A new entry under `workers:` — `runtime: claude-code`, `model: claude-sonnet-4-6` (cost-tier-appropriate default), `reports_to: <manager>`, `can_dm: [<manager>]`, `can_broadcast: []`.
 - A new `roles/<name>.md` per the [8-section spine](../role-prompt-style.md).
 - The worker's **capability stack** from [capability-catalog.md](../capability-catalog.md), emitted like `/teamctl:init` Stage 4 (materialize adapted files, declare keys, file-first). A builder-shaped worker earns the build-side sub-agents + `ship-it`/`tdd` + the `fmt-lint` hook (iff it writes code) + a `/loop`; a research-shaped worker earns the research set + `shape-idea`, no `/loop`. The propose beat names the stack.
 - The worker added to the manager's `can_dm` list (so the manager can route to it).
@@ -205,7 +205,7 @@ Touches one or more of:
 - `model` — pick from runtime-supported list with `AskUserQuestion`.
 - `runtime` — pick from `claude-code` / `codex` / `gemini` with `AskUserQuestion`; cite [runtimes.md](../../../docs/src/content/docs/concepts/runtimes.md).
 - `autonomy` — pick `full` / `low_risk_only` / `proposal_only` with `AskUserQuestion`; cite [hitl.md](../../../docs/src/content/docs/concepts/hitl.md).
-- `permission_mode` — pick `auto` / `attended` (when [#189](https://github.com/Alireza29675/teamctl/issues/189) lands) with `AskUserQuestion`.
+- `permission_mode` — pick `attended` (human at the keyboard) or an explicit Claude mode such as `plan` (a read-only critic) with `AskUserQuestion`; leave unset for the headless default (`--dangerously-skip-permissions`). Avoid `auto` for headless agents — it still prompts and strands an unattended pane.
 - `role_prompt` — open the existing `roles/<agent>.md` for in-place edit; the user describes the change in free-form and the skill proposes a unified diff against the file.
 - **capability stack** — add/remove a sub-agent, add/remove a skill, toggle the `/loop` drive, add/remove the `fmt-lint` hook. This is **Verb 8**; route there for the catalog pick + materialize-and-emit mechanics rather than hand-editing the keys here.
 

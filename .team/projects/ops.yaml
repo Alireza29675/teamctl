@@ -15,7 +15,6 @@ managers:
     - roles/_base.md
     - roles/_telegram.md
     - roles/otto.md
-    permission_mode: auto
     autonomy: low_risk_only
     can_dm: []
     can_broadcast:

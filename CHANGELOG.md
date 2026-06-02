@@ -21,6 +21,29 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   on a bare Enter) and **managed bots** as option 2 — the managed Telegram-side
   bot creation is rougher, so new users aren't led down it first. (#366)
 
+### Fixed
+
+- Headless `claude-code` agents launch with `--dangerously-skip-permissions`
+  again, fixing a 0.8.7 regression (#361) where every spawned agent stranded on
+  a permission prompt — operators had to attach each tmux pane and accept
+  manually. #361 had swapped the skip-permissions flag for `--permission-mode
+  auto`, but `auto` is a safety-classifier mode that still prompts and blocks:
+  its first-run trust prompt isn't one the wrapper's auto-confirm watcher
+  recognizes (so fresh sessions hang), it falls back to interactive prompting
+  after repeated classifier blocks (unanswerable in an unattended pane), and it
+  is only available on Opus 4.6+/Sonnet 4.6 over the Anthropic API (so agents on
+  other models/providers degrade). `--dangerously-skip-permissions` is the only
+  mode that reliably keeps an unattended pane draining its inbox.
+  `permission_mode: attended` (human at the keyboard) is unchanged.
+- A `permission_mode:` of `plan` (or any explicit Claude mode) now actually
+  takes effect for a headless agent. Previously the wrapper appended
+  `--dangerously-skip-permissions` on top of the forwarded `--permission-mode`,
+  and skip-permissions overrides the mode — so a read-only `plan` critic was
+  silently granted full write/exec. The wrapper now forwards an explicit mode
+  on its own (no skip-permissions), so a `plan` critic is genuinely read-only;
+  the unset default still gets skip-permissions. This latent gate predated #361
+  (the bypass-everything flag had masked it since before 0.8.6).
+
 ## [0.8.7] - 2026-06-01
 
 ### Added

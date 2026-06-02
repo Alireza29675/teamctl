@@ -45,7 +45,6 @@ managers:
     # Telegram, so the decision reaches you without the diff.
     subagents:
       - subagents/pr-summarizer.md
-    permission_mode: auto
     autonomy: low_risk_only
     can_dm:
       - engineer_1
@@ -87,7 +86,6 @@ managers:
       - subagents/deep-research.md
       - subagents/learn.md
       - subagents/ideator.md
-    permission_mode: auto
     autonomy: low_risk_only
     can_dm:
       - executor
@@ -119,7 +117,6 @@ workers:
       - subagents/code-roaster.md
       - subagents/code-review.md
       - subagents/security-review.md
-    permission_mode: auto
     autonomy: low_risk_only
     reports_to: executor
     can_dm:
@@ -148,7 +145,6 @@ workers:
       - subagents/code-roaster.md
       - subagents/code-review.md
       - subagents/security-review.md
-    permission_mode: auto
     autonomy: low_risk_only
     reports_to: executor
     can_dm:

@@ -74,7 +74,6 @@ managers:
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt: roles/head_editor.md
-    permission_mode: auto
     autonomy: low_risk_only
     can_dm: [fact_checker, news_writer, seo]
     can_broadcast: [editorial, all]
@@ -143,7 +142,7 @@ workers:
 | `runtime` | string | `claude-code` | Must match a `runtimes/<name>.yaml`. |
 | `model` | string | runtime default | Runtime-specific model id. |
 | `role_prompt` | path or list of paths | — | System prompt source. A single string keeps the current behavior — the file is passed straight to the runtime. A list concatenates the files in declared order (separated by an em-dash) into `state/role_prompts/<project>-<agent>.md` and points the runtime at that file. Re-materialized on every render, so editing any source file flows into the agent's prompt at the next `up` / `reload`. |
-| `permission_mode` | string | `auto` (headless) | Claude Code permission mode. Headless agents default to `auto`: a classifier lets routine work run without prompts and blocks risky actions outright, so an unattended pane never freezes on a permission dialog. `attended` is teamctl-specific — it marks a human-at-keyboard agent, so `teamctl` passes no `--permission-mode` and skips the `PreToolUse` deny hook that blocks synchronous-prompt tools (`AskUserQuestion`, plan mode) on headless agents. Set `bypassPermissions` for the old bypass-everything behavior (disposable sandboxes only); other Claude modes (`plan`, `acceptEdits`, `dontAsk`) pass through. Note: `auto` requires Claude Opus 4.6+ / Sonnet 4.6 on the Anthropic API (not Bedrock/Vertex); on other models/providers it is unavailable and Claude Code falls back. |
+| `permission_mode` | string | headless (`--dangerously-skip-permissions`) | Claude Code permission mode. Headless agents launch with `--dangerously-skip-permissions` so an unattended pane never freezes on a permission dialog no human is there to answer — the only mode that reliably keeps a headless agent draining its inbox. `attended` is teamctl-specific — it marks a human-at-keyboard agent, so `teamctl` passes no skip-permissions / `--permission-mode` flag and skips the `PreToolUse` deny hook that blocks synchronous-prompt tools (`AskUserQuestion`, plan mode) on headless agents. An explicit Claude mode (`plan` for a read-only critic, `acceptEdits`, `bypassPermissions`, `dontAsk`) is forwarded as `--permission-mode`. Avoid `auto` for headless agents: it is a classifier mode that still prompts/blocks (and whose first-run trust prompt the auto-confirm watcher cannot satisfy), so it strands unattended panes. |
 | `interfaces.telegram` | map | — | Manager-only. 1:1 Telegram bot for this manager (presence implies it receives Telegram forwards and may call `reply_to_user`). |
 | `autonomy` | string | `low_risk_only` | `full` · `low_risk_only` · `proposal_only`. |
 | `can_dm` | list | `[]` = unrestricted | Short-names this agent may DM. |

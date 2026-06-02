@@ -642,7 +642,7 @@ mod tests {
                 runtime: "claude-code".into(),
                 model: Some("claude-opus-4-8".into()),
                 role_prompt: Some(RolePrompt::Single(PathBuf::from("roles/mgr.md"))),
-                permission_mode: Some("auto".into()),
+                permission_mode: Some("plan".into()),
                 autonomy: "low_risk_only".into(),
                 can_dm: vec![],
                 can_broadcast: vec![],

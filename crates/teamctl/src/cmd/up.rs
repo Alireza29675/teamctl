@@ -618,22 +618,43 @@ mod tests {
         );
     }
 
-    /// T-361: headless claude-code agents default to `--permission-mode
-    /// auto` and no longer pass `--dangerously-skip-permissions`. The
-    /// attended opt-out keys off PERMISSION_MODE, which `render()` omits for
-    /// agents with no `permission_mode:` — so under `set -u` the comparison
-    /// must default the var. Pin the new shape so a silent edit can't bring
-    /// back the bypass-everything flag, drop the auto default, or break the
-    /// unset-safe attended branch.
+    /// The wrapper's permission handling is a three-way, mutually exclusive
+    /// branch — skip-permissions OVERRIDES a forwarded `--permission-mode`,
+    /// so the two are never combined:
+    ///
+    /// - `attended`: no permission flag (a human answers prompts).
+    /// - An explicit mode (e.g. `plan`): forwarded as `--permission-mode`
+    ///   with NO skip-permissions, so the mode actually gates (a `plan`
+    ///   critic stays read-only).
+    /// - Unset: `--dangerously-skip-permissions`, the only flag that keeps
+    ///   an unattended pane from freezing on a prompt no human is there to
+    ///   answer.
+    ///
+    /// T-361 had defaulted the unset case to `--permission-mode auto` (a
+    /// classifier that still prompts, so it stranded every spawned session);
+    /// this pins the fix. The `elif` is load-bearing: it keeps the
+    /// explicit-mode branch separate from the skip-permissions branch, so a
+    /// forwarded mode is never silently bypassed. The attended/unset
+    /// comparison keys off PERMISSION_MODE, which `render()` omits for agents
+    /// with no `permission_mode:` — so under `set -u` it must default the var.
     #[test]
-    fn wrapper_defaults_headless_to_permission_mode_auto() {
+    fn wrapper_permission_branches_are_mutually_exclusive() {
         assert!(
-            DEFAULT_WRAPPER.contains("--permission-mode \"${PERMISSION_MODE:-auto}\""),
-            "wrapper must default headless agents to --permission-mode auto",
+            DEFAULT_WRAPPER.contains("--dangerously-skip-permissions"),
+            "wrapper must pass --dangerously-skip-permissions for the unset/headless default",
         );
         assert!(
-            !DEFAULT_WRAPPER.contains("--dangerously-skip-permissions"),
-            "wrapper must not pass --dangerously-skip-permissions (#361)",
+            !DEFAULT_WRAPPER.contains("${PERMISSION_MODE:-auto}"),
+            "wrapper must not default headless agents to --permission-mode auto (T-361 regression)",
+        );
+        assert!(
+            DEFAULT_WRAPPER.contains("elif [ -n \"$PERMISSION_MODE\" ]; then"),
+            "wrapper must forward an explicit permission_mode in its OWN branch, \
+             not alongside --dangerously-skip-permissions (which would override it)",
+        );
+        assert!(
+            DEFAULT_WRAPPER.contains("set -- \"$@\" --permission-mode \"$PERMISSION_MODE\""),
+            "wrapper must forward an explicit permission_mode (e.g. plan) verbatim",
         );
         assert!(
             DEFAULT_WRAPPER.contains("[ \"${PERMISSION_MODE:-}\" = \"attended\" ]"),

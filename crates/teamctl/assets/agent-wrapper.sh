@@ -82,8 +82,8 @@ log() {
 #     while team-mcp is off Anthropic's allowlist (Channels research
 #     preview).
 #   - "Bypass Permissions mode"        — fires on first launch under
-#     `permission_mode: bypassPermissions` (the opt-in escape hatch)
-#     when the acceptance marker isn't on disk (fresh $HOME, new VM).
+#     --dangerously-skip-permissions (the headless default) when the
+#     acceptance marker isn't on disk (fresh $HOME, fresh user, new VM).
 #   - "Stop and wait for limit to reset" — fires when claude hits a
 #     usage-limit cap and asks the operator whether to wait, switch
 #     to extra usage, or upgrade. Default-highlighted option is
@@ -172,28 +172,38 @@ while :; do
                 fi
             fi
             [ -n "$CLAUDE_SESSION_NAME" ] && set -- "$@" -n "$CLAUDE_SESSION_NAME"
-            # T-189 / T-361: `permission_mode: attended` is the opt-out for
-            # the headless-default footgun protections. When attended, a
-            # human is at the keyboard and can answer interactive prompts,
-            # so we skip both:
-            #   - `--permission-mode` (claude has no "attended" mode — it's
-            #     a teamctl-level concept; a human drives the normal prompts),
-            #   - `--settings <hook-deny>` (let interactive tools run).
-            # Any other permission_mode (or unset) means headless. We default
-            # to `auto`: claude's classifier lets routine work run without
-            # prompts and blocks risky actions outright, so an unattended pane
-            # keeps draining its inbox instead of freezing on a permission
-            # dialog. (Edge: if auto blocks 3x consecutively or 20x total in a
-            # session it falls back to prompting — see CHANGELOG.) An operator
-            # who genuinely needs the old bypass-everything behavior for a
-            # disposable sandbox can set `permission_mode: bypassPermissions`,
-            # which flows through here (no teamctl-specific escape hatch). We
-            # also ship the deny hook so AskUserQuestion / plan-mode pickers
-            # can't strand the pane.
+            # T-189: `permission_mode` selects how a headless pane avoids
+            # freezing on a prompt no human is there to answer. Three cases,
+            # mutually exclusive (skip-permissions would OVERRIDE a forwarded
+            # --permission-mode, so the two can never be combined):
+            #   1. `attended` — a human is at the keyboard and answers the
+            #      normal prompts, so we pass no permission flag and no deny
+            #      hook. ("attended" is a teamctl-level mode; claude has no
+            #      such --permission-mode.)
+            #   2. an explicit claude mode (`plan` for a read-only critic,
+            #      `acceptEdits`, `bypassPermissions`, `dontAsk`, ...) — we
+            #      forward it as `--permission-mode` and let it actually
+            #      gate. We do NOT add --dangerously-skip-permissions here:
+            #      it bypasses the very mode the operator asked for (e.g. it
+            #      makes a `plan` critic writable). The deny hook still ships
+            #      so AskUserQuestion / plan-mode pickers can't strand the
+            #      pane.
+            #   3. unset — the true headless default. We pass
+            #      `--dangerously-skip-permissions` so claude never blocks on
+            #      its own permission dialog. This is the only flag that
+            #      reliably keeps an unattended pane draining its inbox. (A
+            #      classifier mode like `auto` is NOT a safe default: it
+            #      still prompts/blocks, and the auto-confirm watcher above
+            #      only knows the bypass-permissions dialog, so auto's
+            #      first-run trust prompt strands the pane — the T-361
+            #      regression.)
             if [ "${PERMISSION_MODE:-}" = "attended" ]; then
                 :
+            elif [ -n "$PERMISSION_MODE" ]; then
+                set -- "$@" --permission-mode "$PERMISSION_MODE"
+                [ -n "$CLAUDE_SETTINGS" ] && set -- "$@" --settings "$CLAUDE_SETTINGS"
             else
-                set -- "$@" --permission-mode "${PERMISSION_MODE:-auto}"
+                set -- "$@" --dangerously-skip-permissions
                 [ -n "$CLAUDE_SETTINGS" ] && set -- "$@" --settings "$CLAUDE_SETTINGS"
             fi
             [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
