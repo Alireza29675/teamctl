@@ -74,7 +74,7 @@ fn validate_passes_on_clean_compose() {
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("1 project"), "got: {stdout}");
-    assert!(stdout.contains("2 agents"), "got: {stdout}");
+    assert!(stdout.contains("2 agent sessions"), "got: {stdout}");
 }
 
 // ── T-325: init Stage 4 emits cascading role_prompt list form ───────────
@@ -151,7 +151,7 @@ workers:
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("1 project"), "got: {stdout}");
-    assert!(stdout.contains("2 agents"), "got: {stdout}");
+    assert!(stdout.contains("2 agent sessions"), "got: {stdout}");
 }
 
 #[test]
@@ -271,6 +271,19 @@ fn init_blank_template_scaffolds_minimal_tree() {
         String::from_utf8_lossy(&out.stderr)
     );
 
+    // Blank scaffolds no agents, so `lead_attach_target` → None and the
+    // `Next:` block must omit the attach/bot hints. Guards the agentless
+    // branch end-to-end (complements the agent-bearing ideate assertion).
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("teamctl attach"),
+        "agentless blank must not suggest attach; got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("teamctl bot setup"),
+        "agentless blank must not suggest bot setup; got:\n{stdout}"
+    );
+
     let team_dir = tmp.path().join("starter/.team");
     assert!(
         team_dir.is_dir(),
@@ -371,6 +384,22 @@ fn init_ideate_and_build_template_scaffolds_with_subagents() {
         out.status.success(),
         "init ideate-and-build stderr: {}",
         String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The hero-path `Next:` block must wire the derived lead manager into
+    // the attach hint end-to-end. `init` derives it from the just-written
+    // compose on disk — a different parse path than the `lead_attach_target`
+    // unit tests exercise. ideate-and-build's workers report to `executor`,
+    // so the hint is `teamctl attach main:executor`, not the back-channel
+    // `compass`; an agent-bearing template also offers `teamctl bot setup`.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("teamctl attach main:executor"),
+        "Next: block must suggest attaching to the lead manager; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("teamctl bot setup"),
+        "Next: block must offer bot setup for an agent-bearing template; got:\n{stdout}"
     );
 
     let team_dir = tmp.path().join("studio/.team");
