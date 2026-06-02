@@ -15,7 +15,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use rusqlite::{params, Connection};
 use teloxide::net::Download;
@@ -1696,10 +1696,9 @@ async fn handle_inbound_media(bot: &Bot, msg: &Message, state: &State) -> Respon
                 MediaKind::File => "file",
             };
             let c = state.conn.lock().await;
-            let _ = c.execute(
-                "UPDATE messages SET kind = ?1, structured_payload = ?2 WHERE id = ?3",
-                params![kind, payload, row_id],
-            );
+            if let Err(e) = update_message_kind(&c, row_id, kind, &payload) {
+                tracing::error!("inbound media: failed to finalize message {row_id}: {e}");
+            }
             drop(c);
             bot.send_message(msg.chat.id, format!("→ {manager}"))
                 .await?;
@@ -1707,16 +1706,40 @@ async fn handle_inbound_media(bot: &Bot, msg: &Message, state: &State) -> Respon
         Err(err) => {
             let payload = media_error_payload(&caption, &err);
             let c = state.conn.lock().await;
-            let _ = c.execute(
-                "UPDATE messages SET kind = 'media_error', structured_payload = ?1 WHERE id = ?2",
-                params![payload, row_id],
-            );
+            if let Err(e) = update_message_kind(&c, row_id, "media_error", &payload) {
+                tracing::error!(
+                    "inbound media: failed to record media_error on message {row_id}: {e}"
+                );
+            }
             drop(c);
             bot.send_message(msg.chat.id, format!("media download failed: {err}"))
                 .await?;
         }
     }
     Ok(())
+}
+
+/// Update a message row's `kind` + structured payload, refusing any UPDATE that
+/// would set the privileged `kind='system'` (#320).
+///
+/// `system` may only be *originated* by a `system:*` source at insert time (see
+/// `is_privileged_kind` / `store::send_dm_kind`); no UPDATE has a legitimate
+/// reason to mutate a row *to* it. Routing every `kind`-mutating UPDATE through
+/// here guards the invariant on the UPDATE path, not insert-time only. Today's
+/// callers only pass `image` / `file` / `media_error`; a future `system` is
+/// refused (Err, no SQL run) rather than silently forging a lifecycle signal.
+fn update_message_kind(conn: &Connection, id: i64, kind: &str, payload: &str) -> Result<usize> {
+    if team_core::mailbox::is_privileged_kind(kind) {
+        bail!(
+            "refusing UPDATE that would set privileged kind='{kind}' on message {id} \
+             (#320): the privileged kind is insert-time only"
+        );
+    }
+    conn.execute(
+        "UPDATE messages SET kind = ?1, structured_payload = ?2 WHERE id = ?3",
+        params![kind, payload, id],
+    )
+    .with_context(|| format!("update message {id} kind to '{kind}'"))
 }
 
 /// Render a small markdown subset to Telegram HTML so agent messages reach
@@ -3831,6 +3854,98 @@ mod tests {
             .unwrap();
         assert_eq!(kind.as_deref(), Some("media_error"));
         assert!(sp.unwrap().contains("502 bad gateway"));
+    }
+
+    // ── #320 privileged-kind UPDATE guard ──────────────────────
+
+    /// Seed a `media_pending` placeholder row (the two-phase pattern the
+    /// bot uses before a download resolves) and return its rowid. Mirrors
+    /// the INSERT in `placeholder_then_success_update_round_trip` so the
+    /// guard tests exercise the exact shape `update_message_kind` runs on.
+    fn seed_media_pending(conn: &Connection) -> i64 {
+        seed(conn);
+        conn.execute(
+            "INSERT INTO messages
+                (project_id, sender, recipient, text, sent_at, kind, structured_payload)
+             VALUES ('p', 'user:telegram', 'p:eng_lead', 'cap',
+                     strftime('%s','now'), 'media_pending', '{}')",
+            [],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    fn current_kind(conn: &Connection, id: i64) -> Option<String> {
+        conn.query_row(
+            "SELECT kind FROM messages WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn update_message_kind_refuses_system_and_leaves_row_untouched() {
+        // The #320 tripwire: the privileged kind is insert-time only, so an
+        // UPDATE that would set kind='system' must be refused. Crucially the
+        // refusal is a true no-op — the row stays `media_pending`, never
+        // half-mutated — because the guard bails *before* the UPDATE runs.
+        // If a future change lets the UPDATE through, this test fails, which
+        // is exactly the regression we want surfaced.
+        let conn = Connection::open_in_memory().unwrap();
+        let id = seed_media_pending(&conn);
+
+        let result = update_message_kind(&conn, id, "system", "{}");
+
+        assert!(result.is_err(), "setting privileged kind must be refused");
+        assert_eq!(
+            current_kind(&conn, id).as_deref(),
+            Some("media_pending"),
+            "refused UPDATE must not mutate the row"
+        );
+    }
+
+    #[test]
+    fn update_message_kind_writes_legitimate_media_kinds() {
+        // Happy path / no-behavior-change: the guard waves through every
+        // kind a download legitimately resolves to (image / file / the
+        // media_error fallback), updating both `kind` and the structured
+        // payload. Each runs against its own placeholder row so the
+        // assertions don't leak across cases.
+        let success = media_success_payload(
+            std::path::Path::new("/srv/.team/state/inbound-media/p/3.jpg"),
+            "cap",
+            "image/jpeg",
+            128,
+        );
+        let error = media_error_payload("cap", "download_file: 502 bad gateway");
+        let cases: [(&str, &str, &str); 3] = [
+            ("image", success.as_str(), "image/jpeg"),
+            ("file", success.as_str(), "image/jpeg"),
+            ("media_error", error.as_str(), "502 bad gateway"),
+        ];
+
+        for (kind, payload, marker) in cases {
+            let conn = Connection::open_in_memory().unwrap();
+            let id = seed_media_pending(&conn);
+
+            let changed = update_message_kind(&conn, id, kind, payload)
+                .unwrap_or_else(|e| panic!("kind {kind:?} should be allowed: {e}"));
+            assert_eq!(changed, 1, "kind {kind:?} should update exactly one row");
+
+            let (stored_kind, sp): (Option<String>, Option<String>) = conn
+                .query_row(
+                    "SELECT kind, structured_payload FROM messages WHERE id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(stored_kind.as_deref(), Some(kind));
+            assert!(
+                sp.as_deref().unwrap().contains(marker),
+                "kind {kind:?} payload should carry {marker:?}, got {sp:?}"
+            );
+        }
     }
 
     // ── T-101 voice STT mapping ────────────────────────────────
