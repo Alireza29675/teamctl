@@ -48,8 +48,8 @@ managers:
     # The pm's discovery stack: ground the goal in what exists, then
     # turn findings into a crisp requirements doc.
     subagents:
-      - agents/product-researcher.md
-      - agents/prd-drafter.md
+      - subagents/product-researcher.md
+      - subagents/prd-drafter.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm: [em]
@@ -76,8 +76,8 @@ managers:
     # The em's stack: read the codebase to scope work, and turn a ready
     # PR into a plain-language approve/merge summary for you.
     subagents:
-      - agents/code-investigator.md
-      - agents/pr-summarizer.md
+      - subagents/code-investigator.md
+      - subagents/pr-summarizer.md
     permission_mode: auto
     autonomy: low_risk_only
     can_dm: [pm, eng-claude, eng-codex]
@@ -102,12 +102,12 @@ workers:
       - roles/_engineer.md
       - roles/eng.md
     subagents:
-      - agents/code-investigator.md
-      - agents/implementer.md
-      - agents/test-author.md
-      - agents/qa-tester.md
-      - agents/pr-narrator.md
-      - agents/code-roaster.md
+      - subagents/code-investigator.md
+      - subagents/implementer.md
+      - subagents/test-author.md
+      - subagents/qa-tester.md
+      - subagents/pr-narrator.md
+      - subagents/code-roaster.md
     # A PreToolUse hook: every Edit/Write is gated through fmt+lint, so
     # malformed code never even lands on disk. Hooks are a claude-code
     # capability (see eng-codex below for the parity note).

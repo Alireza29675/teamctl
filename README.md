@@ -97,8 +97,8 @@ managers:
       - roles/_base.md
       - roles/pm.md
     subagents:                # 🧩 give an agent its own sub-agents (claude-code)
-      - agents/product-researcher.md
-      - agents/prd-drafter.md
+      - subagents/product-researcher.md
+      - subagents/prd-drafter.md
     interfaces:
       telegram:               # 📱 tap to talk to your team from your phone
         bot_token_env: TEAMCTL_TG_PM_TOKEN
@@ -129,8 +129,8 @@ workers:
       - roles/eng.md
     reports_to: em
     subagents:
-      - agents/implementer.md
-      - agents/test-author.md
+      - subagents/implementer.md
+      - subagents/test-author.md
     hooks:                    # 🪝 fmt+lint gate on every Edit/Write (claude-code)
       - event: PreToolUse
         matcher: "Edit|Write"
