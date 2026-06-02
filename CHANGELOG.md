@@ -12,7 +12,11 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   `url` → `idna`) need Rust 1.86 — so 1.86 is the true floor. The CI MSRV job is
   also fixed to actually run on the matrix toolchain: the repo's
   `rust-toolchain.toml` (channel `stable`) had been silently shadowing it back to
-  `stable`, so the old `1.78` leg never tested the MSRV at all. (#397)
+  `stable`, so the old `1.78` leg never tested the MSRV at all. The opt-in
+  `teamctl-ui` TUI crate (installed separately via `cargo install teamctl-ui`)
+  declares its own higher MSRV of **1.88** — its ratatui 0.29 dep tree pulls
+  `instability`/`darling`, which need 1.88 — independent of the CLI's 1.86 floor.
+  (#397)
 - `teamctl bot setup` now leads with **manual token** as option 1 (the default
   on a bare Enter) and **managed bots** as option 2 — the managed Telegram-side
   bot creation is rougher, so new users aren't led down it first. (#366)
