@@ -69,6 +69,8 @@ Branches:
 
 A flow may show multiple gates if it mutates state in multiple beats (e.g. `/teamctl:init` Stage 4 scaffold-and-validate, Stage 5 bring-up). Each gate is independent.
 
+**The three branches are semantic, not the literal labels.** A flow may use labels that read naturally for its context as long as the three branches map cleanly: *advance-and-execute* / *loop-back-to-refine* / *discard*. The init Stage-3 setup-approval gate uses **Looks good / Refine it / Start over**; the universal default is **Apply / Modify / Reject**. When a gate relabels, its headless prose (§5) mirrors *its own* labels, not the default ones.
+
 ## 5. Headless-pane fallback
 
 A `teamctl` agent invoked from inside a supervised tmux pane has no human at its keyboard. Issue [#189](https://github.com/Alireza29675/teamctl/issues/189) lands a `PreToolUse` deny rule for `AskUserQuestion` / `EnterPlanMode` / `ExitPlanMode` in wrapper-managed `.claude/settings.json` — synchronous interactive prompts strand the pane and freeze the team's `request_approval` loop.
@@ -104,7 +106,7 @@ The Apply/Modify/Reject gate becomes:
 Apply this change? Reply `apply`, `modify` (and say what to adjust), or `reject`.
 ```
 
-Same questions, same options, same branches — just prose instead of the picker.
+Same questions, same options, same branches — just prose instead of the picker. A gate that relabels its branches (§4) prose-falls-back to *its own* labels — e.g. the init setup gate becomes *"Happy with this setup? Reply `looks good`, `refine` (and say what to adjust), or `start over`."*
 
 **Belt-and-braces.** If detection misses (env var unset by some future variant) and `AskUserQuestion` is denied at runtime, treat the deny as the headless signal: switch the rest of the invocation to plain-text and don't retry the picker.
 
@@ -133,8 +135,8 @@ Don't quote a wall; quote the line that's load-bearing for *this* proposal. If n
 When proposing a team shape (init Stage 3, or adjust's `Hire a new agent` branch), the proposal must reason about three things, in this order:
 
 1. **Where the cut lives.** Why is this agent its own role and not a sub-agent? Reference the two-gate criteria — Gate (a) entry conditions (ownership / time management / persistent memory) and Gate (b) at least one situational trigger (domain separation, focus separation, multiple opinions, synergy). Apply the **ship-alone test**: can this agent ship its artifact alone? If no, the cut is function-shaped — call that out and propose a domain-shaped alternative.
-2. **What sub-agents this agent will spawn.** Persistent agents own domains; sub-agents handle the fire-and-forget specialised work inside them (research passes, large refactors, parallel reads). For each proposed agent, suggest 1–3 sub-agent shapes it would call (e.g. *"`maintainer` would spawn `repo-cartographer` for new tickets and `regression-scanner` on each PR"*). Don't enumerate every conceivable sub-agent — name the obvious ones.
-3. **What workflows / skills / channels this agent participates in.** Which channels they're on (`can_dm` / `can_broadcast`), which workflows they trigger or respond to, whether they're Telegram-bound (manager-only). Tie this back to the operator's discovered domains.
+2. **The capability stack.** Persistent agents own domains; their **capabilities** handle the fire-and-forget specialised work inside them. For each proposed agent, name its stack from [`capability-catalog.md`](./capability-catalog.md): **(i) sub-agents** (1–3 shapes — research passes, large refactors, parallel reads; e.g. *"`maintainer` would spawn `repo-cartographer` for new tickets and `regression-scanner` on each PR"*), **(ii) skills** (repeatable routines like `ship-it` / `tdd` / `shape-idea`), **(iii) whether it runs a `/loop`** (builder-shaped, autonomous goal→ship drive) or stays event-driven, and **(iv) the one earned hook** (`fmt-lint`, iff it writes code). The lean default is **capabilities-over-seats**: more work for an existing agent is a sub-agent/skill on it, not a new seat. The generated team carries **no cron and no extra MCP** — `/loop` is the heartbeat.
+3. **What channels this agent participates in.** Which channels they're on (`can_dm` / `can_broadcast`), whether they're Telegram-bound (manager-only). Tie this back to the operator's discovered domains.
 
 The propose beat is comprehensive on all three. The gate stays tight.
 
