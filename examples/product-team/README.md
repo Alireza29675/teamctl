@@ -113,29 +113,16 @@ reads and builds it via `cwd: ../habit-tracker` in
 set -a; . ./.team/.env; set +a
 
 teamctl validate
-teamctl up
+teamctl up      # also starts the PM + EM Telegram bots
 teamctl status
 ```
 
-Then start the two manager bots (each in its own shell, or backgrounded).
-The mailbox lives at `.team/state/mailbox.db` — its path is relative to the
-compose file, not your shell:
-
-```bash
-# Product Manager bot — the product conversation
-team-bot \
-  --mailbox ./.team/state/mailbox.db \
-  --token   "$TEAMCTL_TG_PM_TOKEN" \
-  --authorized-chat-ids "$TEAMCTL_TG_PM_CHATS" \
-  --manager product-team:pm
-
-# Engineering Manager bot — the delivery conversation
-team-bot \
-  --mailbox ./.team/state/mailbox.db \
-  --token   "$TEAMCTL_TG_EM_TOKEN" \
-  --authorized-chat-ids "$TEAMCTL_TG_EM_CHATS" \
-  --manager product-team:em
-```
+`teamctl up` already started both manager bots — one poller per manager
+with a `telegram:` block (the Product Manager and the Engineering Manager).
+Watch the `up · bot … →` lines in its output to confirm both came up. Don't
+launch `team-bot` yourself: a second poller on the same token triggers a
+Telegram **409 conflict**. (A `skip · bot … unset` line instead means that
+token isn't in `.env` yet — fill it and rerun `teamctl up`.)
 
 DM the **Product Manager** the goal ("build a habit tracker — I want streaks"). It runs
 discovery, writes `requirements.md`, and hands off to the Engineering Manager. Delivery

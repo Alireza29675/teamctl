@@ -54,19 +54,16 @@ mkdir -p workspace
 set -a; . ./.team/.env; set +a
 
 teamctl validate
-teamctl up
+teamctl up      # also starts the maintainer Telegram bot
 teamctl status
 ```
 
-Now start the maintainer bot:
-
-```bash
-team-bot \
-  --mailbox ./state/mailbox.db \
-  --token   "$TEAMCTL_TG_MAINTAINER_TOKEN" \
-  --authorized-chat-ids "$TEAMCTL_TG_MAINTAINER_CHATS" \
-  --manager oss:maintainer
-```
+`teamctl up` already started the maintainer's Telegram bot — it's the one
+manager with a `telegram:` block. Watch for the `up · bot … → oss:maintainer`
+line in its output to confirm it came up. Don't run `team-bot` yourself: a
+second poller on the same token triggers a Telegram **409 conflict**. (A
+`skip · bot … unset` line instead means that token isn't in `.env` yet —
+fill it and rerun `teamctl up`.)
 
 DM the maintainer bot when an issue lands: paste the URL and let
 `triage` route it. The release plan will arrive in the same chat as a
