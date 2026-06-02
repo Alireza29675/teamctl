@@ -94,7 +94,7 @@ It is **not** a file wipe: durable on-disk state (`task.md`, `memory/`, `ways-of
 
 | Command | Effect |
 |---|---|
-| `teamctl attach <project>:<agent> [--rw]` | Attach to an agent's tmux session, read-only by default. `--rw` allows keyboard input and prompts before attaching. |
+| `teamctl attach <project>:<agent> [--ro]` | Attach to an agent's tmux session, read-write by default (keystrokes reach the live agent). Pass `--ro` to attach read-only. (`--rw` is still accepted for back-compat but is now a no-op.) |
 | `teamctl exec <project>:<agent> -- <argv...>` | Run a command in the agent's CWD with its env loaded. Use `--` to pass through hyphenated arguments. |
 | `teamctl shell <project>:<agent>` | Open an interactive shell in the agent's CWD with its env loaded. |
 

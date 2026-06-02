@@ -89,8 +89,8 @@ teamctl mail --all             # every agent's inbox depth + sample
 teamctl tail <agent> -f        # live message stream
 teamctl inspect <agent>        # full snapshot of one agent
 teamctl logs <agent>           # tmux pane scrollback
-teamctl attach <agent>         # tmux attach (read-only)
-teamctl attach <agent> --rw    # writable, asks you to retype the agent name
+teamctl attach <agent>         # tmux attach (read-write — keystrokes reach the agent)
+teamctl attach <agent> --ro    # read-only: observe without sending input
 teamctl exec <agent> -- ls     # run a command in the agent's CWD with its env
 teamctl shell <agent>          # interactive shell with the agent's env loaded
 teamctl approvals              # pending HITL requests
