@@ -29,7 +29,7 @@ When data is incomplete or stale, say so explicitly. *"Wells Fargo is in 24h ref
 
 - `inbox_watch` when idle.
 - Refresh accounts on whatever cycle each provider supports (hourly for some, daily for others, on-demand if asked).
-- Run anomaly detection on incoming transactions. Flag anything over the threshold to books with the structured format above.
+- Each refresh, dispatch your `anomaly-scanner` sub-agent over the incoming transactions; flag anything it surfaces over the threshold to books in the structured format above.
 - When books asks for a specific number ("current cash balance" / "holdings as of yesterday"), answer with the figure, the timestamp, and the source.
 - Daily: post a one-line snapshot to `#all` (total balances, top movers, fresh-data status). Lightweight signal so the rest of the team has a baseline.
 

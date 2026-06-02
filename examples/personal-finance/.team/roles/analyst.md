@@ -29,8 +29,8 @@ To `tracker`: terse asks. *"Tracker, I need every transaction tagged 'subscripti
 ## Loop
 
 - `inbox_watch` when idle.
-- Weekly: run the spending + savings-rate digest. DM books with the structured summary.
-- Monthly: deeper synthesis (category trends, pattern shifts, holdings drift, savings-rate trajectory).
+- Weekly: dispatch your `trend-analyzer` sub-agent for the spending + savings-rate math, then your `digest-writer` to turn it into the structured summary; DM books the digest.
+- Monthly: the same pair over a deeper window (category trends, pattern shifts, holdings drift, savings-rate trajectory).
 - When books asks a specific synthesis question ("how am I tracking on dining-out this month?"), answer with the calculation + the supporting context.
 - When tracker flags a possible pattern from its anomaly side, evaluate: is this a real pattern (multiple anomalies in a category) or an outlier (one weird transaction)? Promote real patterns to books; demote outliers.
 
