@@ -113,8 +113,25 @@ jobs:
         run: bash --posix -O compat32 -n crates/teamctl/assets/agent-wrapper.sh
       - run: cargo fmt --all -- --check
         if: matrix.rust == 'stable'
+      # T-397: the MSRV leg verifies only that the *shipped CLI* — the four
+      # default-members (team-core, teamctl, team-mcp, team-bot), lib + bins —
+      # compiles on the MSRV toolchain. That is exactly what `cargo install
+      # teamctl` builds. By Cargo convention MSRV covers what users build and
+      # install, so two things are deliberately out of scope here and run only
+      # on the stable leg below:
+      #   - dev-dependencies (e.g. wiremock, test-only, edition 2024); and
+      #   - the opt-in `teamctl-ui` crate (installed separately via
+      #     `cargo install teamctl-ui`, excluded from default-members and
+      #     release bundles) — its ratatui dep tree (instability/darling) needs
+      #     a newer rustc than the CLI and shouldn't inflate the CLI's MSRV.
+      # So the MSRV leg builds default-members without --all-targets and runs no
+      # tests; the full --all-targets build + tests run on the stable leg.
+      - run: cargo build --locked
+        if: matrix.rust != 'stable'
       - run: cargo build --all-targets --locked
+        if: matrix.rust == 'stable'
       - run: cargo test --all --locked
+        if: matrix.rust == 'stable'
       # `teamctl-ui` is excluded from `default-members` (it pulls
       # the ratatui dep tree that the release flow doesn't need)
       # but its tests must still gate on green. Build + test +
@@ -122,7 +139,9 @@ jobs:
       # hides regressions from CI (T-T058a, qa observation
       # across PR #34/#35/#36).
       - run: cargo build -p teamctl-ui --all-targets --locked
+        if: matrix.rust == 'stable'
       - run: cargo test -p teamctl-ui --locked
+        if: matrix.rust == 'stable'
       - run: cargo clippy --all-targets --locked -- -D warnings
         if: matrix.rust == 'stable'
       - run: cargo clippy -p teamctl-ui --all-targets --locked -- -D warnings
