@@ -1,35 +1,87 @@
 ---
-// Landing page with README parity. Hero + lede + intro + demo + install
-// + quickstart + examples table + what-you-get + learn-more. Linear-tier
-// layout, Vercel-tier code container, no animation. Strict accent rule:
-// YAML keys + Copy hover only.
+// Landing page with README parity (README is the source of truth). Hero +
+// lede + intro + install + start-a-team + extras + examples + what-a-team +
+// teamctl ui + learn-more. Linear-tier layout, Vercel-tier code container,
+// no animation. Strict accent rule: YAML keys + Copy hover only.
 
-import { Picture } from 'astro:assets';
+import { Picture, Image } from 'astro:assets';
 import heroPng from '../../assets/hero.png';
+import uiSplash from '../../assets/ui/splash.png';
+import uiControlRoom from '../../assets/ui/control-room.png';
+import uiAgentDetail from '../../assets/ui/agent-detail.png';
+import uiTypeIntoPane from '../../assets/ui/type-into-pane.png';
 
 const installCmd = 'curl -fsSL https://teamctl.run/install | sh';
-const upCmd = 'teamctl up';
+const initCmd = 'teamctl init';
 
 // Sample team YAML for the demo. Mirrors the README's "What a team looks
-// like" section: side-project + manager + dev + researcher.
+// like" section verbatim: product-team with a service-desk manager, two
+// executors (Claude + Codex) in a review loop, and a research worker.
 const yaml = [
+  'version: 2',
+  '',
   'project:',
   '  id: product-team',
   '',
-  'managers:',
-  '  manager:',
-  '    runtime: claude-code',
-  '    model: claude-opus-4-8',
+  '# 📡 Slack-like channels: agents in a channel can post messages and receive notifications',
+  'channels:',
+  '  - name: all',
+  '    members: "*"',
   '',
-  'workers:',
-  '  dev:',
-  '    runtime: codex',
-  '    model: gpt-5-codex',
-  '    reports_to: manager',
-  '  researcher:',
+  '  - name: code_review         # 🔀 so the executors can ask each other to review each other\'s PRs',
+  '    members: [claude_exec, codex_exec]',
+  '',
+  'managers:',
+  '  # 🛎️ your one manager: you chat with it on Telegram, it runs the show',
+  '  service_desk:',
+  '    display_name: "Service Desk"',
   '    runtime: claude-code',
   '    model: claude-sonnet-4-6',
-  '    reports_to: manager',
+  '    role_prompt:               # 🧬 cascading roles: _base.md layers into every agent',
+  '      - roles/_base.md',
+  '      - roles/service_desk.md',
+  '    interfaces:',
+  '      telegram:               # 📱 tap to talk to your team from your phone',
+  '        bot_token_env: TEAMCTL_TG_TOKEN',
+  '        chat_ids_env: TEAMCTL_TG_CHATS',
+  '',
+  'workers:',
+  '  # 🤖 a Claude executor: ships work and reviews the Codex executor\'s PRs',
+  '  claude_exec:',
+  '    display_name: "Executor (Claude)"',
+  '    runtime: claude-code',
+  '    model: claude-opus-4-8',
+  '    role_prompt:',
+  '      - roles/_base.md',
+  '      - roles/_engineer.md     # 🧬 group layer shared by the engineers',
+  '      - roles/executor.md',
+  '    reports_to: service_desk',
+  '    subagents:                # 🧩 give an agent its own sub-agents (claude-code)',
+  '      - agents/researcher.md',
+  '',
+  '  # 🤖 a Codex executor: the other half of the review loop',
+  '  codex_exec:',
+  '    display_name: "Executor (Codex)"',
+  '    runtime: codex',
+  '    model: gpt-5-codex',
+  '    role_prompt:',
+  '      - roles/_base.md',
+  '      - roles/_engineer.md',
+  '      - roles/executor.md',
+  '    reports_to: service_desk',
+  '',
+  '  # 🔭 autonomous discovery: keeps finding and prototyping ideas',
+  '  research:',
+  '    display_name: "Research and Discovery"',
+  '    runtime: claude-code',
+  '    model: claude-opus-4-8',
+  '    role_prompt:',
+  '      - roles/_base.md',
+  '      - roles/research.md',
+  '    reports_to: service_desk',
+  '    subagents:',
+  '      - agents/researcher.md',
+  '      - agents/code_search.md',
 ];
 
 // Render each YAML line server-side as muted-2-tone HTML. Keys carry
@@ -46,107 +98,110 @@ const yamlHtml = yaml
   })
   .join('\n');
 
+// Examples mirror the README table: same set, same order, same descriptions.
 const examples = [
   {
-    emoji: '🌱',
-    title: 'Personal research',
-    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/personal-research',
-    agents: '2 (buddy + curator)',
-    what:
-      'The buddy holds your reading list and the compounding mental model of what you actually care about. The curator runs on a loop following the news on your declared interests and surfaces what matters.',
-  },
-  {
-    emoji: '💼',
-    title: 'Job finder',
-    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/job-finder',
-    agents: '3 (lead + scout + matcher)',
-    what:
-      'Scout watches job boards. Matcher does the deep CV-to-posting alignment. Lead handles your applications domain and talks to you on Telegram. Drafts cover letters in your voice; you tap to send.',
-  },
-  {
-    emoji: '💰',
-    title: 'Personal finance',
-    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/personal-finance',
-    agents: '3 (books + tracker + analyst)',
-    what:
-      'Books talks to you on Telegram. Tracker watches your accounts and surfaces anomalies. Analyst builds the long-arc patterns. Read-only by design; nothing moves money without your tap.',
-  },
-  {
-    emoji: '🛠️',
-    title: 'Solo founder ops',
-    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/solo-founder-ops',
-    agents: '4 (hub + research + inbox + analytics)',
-    what:
-      'Hub holds the day picture. Research chases context. Inbox drafts replies and keeps the journal. Analytics watches your product metrics. The everything-that-is-not-building team.',
-  },
-  {
-    emoji: '📬',
-    title: 'Customer support',
-    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/customer-support',
-    agents: '2 (triage + drafter)',
-    what:
-      'Triage reads everything coming in and decides what gets your eyes. Drafter writes the reply in your voice; you tap to send. HITL on every external send.',
+    emoji: '🏗️',
+    title: 'product-team',
+    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/product-team',
+    what: 'A product squad: a PM and engineers coordinating around what to build and ship.',
   },
   {
     emoji: '🛰️',
-    title: 'OSS maintainer',
+    title: 'oss-maintainer',
     href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/oss-maintainer',
-    agents: '5 (maintainer + triage + bug_fix + docs + release_manager)',
-    what:
-      'Triage labels new issues. Bug-fix opens PRs. Docs keeps the manual honest. Release-manager runs in plan-mode and proposes releases for your approval. You stay in the work only you can do.',
+    what: 'Runs a one-person open-source project: triage, bug-fix PRs, docs, and release proposals you approve.',
+  },
+  {
+    emoji: '🧪',
+    title: 'autonomous-prototyper',
+    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/autonomous-prototyper',
+    what: 'Comes up with ideas and prototypes them end to end.',
+  },
+  {
+    emoji: '🌱',
+    title: 'personal-research',
+    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/personal-research',
+    what: 'A reading buddy that holds your interests, plus a curator that follows the news and surfaces what matters.',
+  },
+  {
+    emoji: '📈',
+    title: 'market-analysts',
+    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/market-analysts',
+    what: 'A read-only research desk that backs financial decisions, with one analyst whose only job is to dissent.',
+  },
+  {
+    emoji: '💼',
+    title: 'job-finder',
+    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/job-finder',
+    what: 'Runs your job search: watches boards, aligns your CV to postings, and drafts cover letters you approve.',
   },
 ];
 
-const features = [
+// "Extras on top" mirrors the README: same six, same framing, same links.
+const extras = [
   {
-    title: 'Persistent agents.',
-    body:
-      'Each one has identity, memory, and a domain it owns. Conversation state survives crashes and restarts.',
+    emoji: '🔀',
+    title: 'Orchestration and a shared mailbox',
+    href: '/concepts/channels/',
+    body: 'agents coordinate and message each other through durable channels you can audit.',
   },
   {
-    title: 'A messaging backbone.',
-    body:
-      'Agents DM and broadcast through Slack-like channels; you can audit every line.',
+    emoji: '⚙️',
+    title: 'Per-agent settings',
+    href: '/reference/team-compose-yaml/',
+    body: 'give each agent its own runtime, model, role, and tools.',
   },
   {
-    title: 'Human-in-the-loop (HITL) when it matters.',
-    body:
-      '`publish`, `release`, `deploy`, `external_email`. Every sensitive action pauses for your tap on Telegram before it ships.',
+    emoji: '🧬',
+    title: 'Cascading role prompts',
+    href: '/reference/team-compose-yaml/',
+    body: 'layer a shared `_base.md` and group files like `_engineer.md` under each agent\'s own role, so the rules they share live in one place.',
   },
   {
-    title: 'Multi-runtime.',
-    body:
-      'Mix Claude Code, Codex, and Gemini in the same team, each agent with its own keys. Claude Code has the most complete feature set today.',
+    emoji: '🖥️',
+    title: 'One terminal UI for the whole team',
+    href: '/reference/teamctl/',
+    body: 'watch every agent in one place with `teamctl ui`.',
   },
   {
-    title: 'Project isolation.',
-    body:
-      'Run unrelated teams side-by-side without cross-talk. Bridge two projects only when you mean to.',
+    emoji: '📱',
+    title: 'Easy Telegram hookup',
+    href: '/guides/telegram-bot/',
+    body: 'steer your team from your phone (more interfaces on the way).',
   },
   {
-    title: 'Telegram, today.',
-    body:
-      'Discord, email, and more on the way.',
+    emoji: '⏳',
+    title: '(soon) Auto-recovery from rate limits',
+    href: null,
+    body: 'teamctl can let your session know when its rate limit has cleared so it picks the work back up.',
   },
 ];
 
-// Render feature body with backticks → <code>.
-const featureBody = (s: string) =>
+const uiShots = [
+  { src: uiSplash, caption: 'Splash screen' },
+  { src: uiControlRoom, caption: 'You can view all your teams, their actual sessions, their mailbox' },
+  { src: uiAgentDetail, caption: 'You can inspect each message exchanged between agents' },
+  { src: uiTypeIntoPane, caption: 'You can also connect to the actual tmux sessions by pressing Ctrl+E and take control of the session' },
+];
+
+// Render inline `code` spans in body text.
+const withCode = (s: string) =>
   s.replace(/`([^`]+)`/g, '<code>$1</code>');
 ---
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>teamctl: declare a team of AI agents in YAML, run it anywhere</title>
+    <title>teamctl: bottle your agent setup and run it like a recipe</title>
     <meta
       name="description"
-      content="Stop rebuilding your AI agent setup every time. Define it in YAML, run it with one command, and share it like a recipe."
+      content="You configure the perfect Claude Code or Codex session, then it dies with the session. teamctl lets you bottle your whole agent setup as something you can run, share, and remix like a recipe."
     />
-    <meta property="og:title" content="teamctl: declare a team of AI agents in YAML, run it anywhere" />
+    <meta property="og:title" content="teamctl: bottle your agent setup and run it like a recipe" />
     <meta
       property="og:description"
-      content="Stop rebuilding your AI agent setup every time. Define it in YAML, run it with one command, and share it like a recipe."
+      content="You configure the perfect Claude Code or Codex session, then it dies with the session. teamctl lets you bottle your whole agent setup as something you can run, share, and remix like a recipe."
     />
   </head>
   <body>
@@ -164,8 +219,8 @@ const featureBody = (s: string) =>
       </figure>
 
       <header class="lede">
-        <h1>Stop rebuilding your AI agent setup every time.</h1>
-        <p class="subline">Define your team in YAML, run it with one command, and share it like a recipe.</p>
+        <h1>Bottle your agent setup. Run it, share it, remix it like a recipe.</h1>
+        <p class="subline">You configure the perfect Claude Code or Codex session setup, then it dies with the session. You can't run it again, can't hand it to a teammate, can't pass it on.</p>
       </header>
 
       <p class="intro">
@@ -173,8 +228,7 @@ const featureBody = (s: string) =>
       </p>
 
       <p class="intro">
-        I built this for myself. Experiments worth sharing, so here we are.
-        <a href="/concepts/teams/">Read the methodology</a>, or skip to the examples below.
+        I built this for myself. Experiments worth sharing, so here we are :)
       </p>
 
       <section class="install-section">
@@ -186,22 +240,40 @@ const featureBody = (s: string) =>
           </button>
         </div>
         <p class="install-note">
-          Installs <code>teamctl</code> in your command line, plus the Claude Code plugin if <code>claude</code> is detected.
+          Installs <code>teamctl</code> in your command line.
         </p>
       </section>
 
       <section class="start-team">
         <h2>Start a team</h2>
         <p>
-          Inside your project directory, with Claude Code installed:
+          Then, inside your project directory:
         </p>
         <pre class="up"><code><span class="prompt">$ </span>cd /path/to/your/project</code></pre>
-        <pre class="up"><code><span class="prompt">$ </span>claude /teamctl:init</code></pre>
+        <pre class="up"><code><span class="prompt">$ </span>{initCmd}</code></pre>
         <p>
-          The plugin walks you through a real conversation (not a template menu) that surfaces the <em>domains</em> in your work and proposes a team shape around them. By the time you're done, <code>.team/team-compose.yaml</code> is on disk and the team is running in <code>tmux</code>.
+          <code>init</code> opens a short conversation that surfaces the <em>domains</em> in your work and proposes a team shape. You can let it design the team with you (guided), start from a small essentials scaffold, or take an empty tree and hand-wire it yourself. By the time you're done, <code>.team/team-compose.yaml</code> is on disk and the team is running in <code>tmux</code>.
         </p>
+      </section>
+
+      <section class="extras">
+        <h2>Extras on top</h2>
         <p>
-          If you'd rather hand-author the team yourself, read the <a href="/concepts/teams/">handbook</a> first. It's the cognitive frame the guided flow would have walked you through.
+          Because teamctl runs your sessions, it can hand them tools they would not have on their own. A session can call <code>compact_self</code> to compact its own context and keep going, and that is just the start:
+        </p>
+        <ol class="extras-list">
+          {extras.map((x) => (
+            <li>
+              <span class="extra-emoji" aria-hidden="true">{x.emoji}</span>{' '}
+              {x.href
+                ? <a href={x.href}><strong>{x.title}:</strong></a>
+                : <strong>{x.title}:</strong>}{' '}
+              <span set:html={withCode(x.body)} />
+            </li>
+          ))}
+        </ol>
+        <p class="extras-note">
+          <em>These extras are optional. They are here to help fill the gaps as you design different agent setups.</em>
         </p>
       </section>
 
@@ -217,7 +289,6 @@ const featureBody = (s: string) =>
                 <div class="example-head">
                   <span class="example-emoji" aria-hidden="true">{ex.emoji}</span>
                   <span class="example-title">{ex.title}</span>
-                  <span class="example-agents">{ex.agents}</span>
                 </div>
                 <p class="example-what">{ex.what}</p>
               </a>
@@ -225,31 +296,40 @@ const featureBody = (s: string) =>
           ))}
         </ul>
         <p class="examples-more">
-          More examples (and a few legacy shapes) live in <a href="https://github.com/Alireza29675/teamctl/tree/main/examples"><code>examples/</code></a>.
+          More under <a href="https://github.com/Alireza29675/teamctl/tree/main/examples"><code>examples/</code></a>.
         </p>
       </section>
 
       <section class="demo-section">
         <h2>What a team looks like</h2>
-        <p>A project YAML, with one manager and a couple of workers:</p>
-        <figure class="demo" aria-label="Example team.yaml and the command to start it">
+        <p>A project YAML with one manager and three workers (illustrative, not a full config):</p>
+        <figure class="demo" aria-label="Example team-compose.yaml and the commands to run it">
           <div class="code-card">
             <pre class="yaml"><code set:html={yamlHtml}></code></pre>
           </div>
-          <pre class="up"><code><span class="prompt">$ </span>{upCmd}</code></pre>
+          <pre class="up"><code><span class="prompt">$ </span>teamctl validate    <span class="cmt"># check the YAML</span></code></pre>
+          <pre class="up"><code><span class="prompt">$ </span>teamctl up          <span class="cmt"># bring the team up</span></code></pre>
+          <pre class="up"><code><span class="prompt">$ </span>teamctl ui          <span class="cmt"># watch them work</span></code></pre>
+          <pre class="up"><code><span class="prompt">$ </span>teamctl status      <span class="cmt"># is everyone alive?</span></code></pre>
         </figure>
+        <p class="demo-note">
+          <em>All of this lives in a <code>.team/</code> folder in your project, so you can read it, version it, and share it.</em>
+        </p>
       </section>
 
-      <section class="features">
-        <h2>What you get</h2>
-        <ul class="features-list">
-          {features.map((f) => (
-            <li>
-              <strong>{f.title}</strong>{' '}
-              <span set:html={featureBody(f.body)} />
-            </li>
+      <section class="ui-section">
+        <h2>Inspect your setup (<code>teamctl ui</code>)</h2>
+        <p>
+          A super lightweight UI, built in Rust, for inspecting your agents and their <em>actual</em> Claude Code sessions. See which agents you have, the messages they have exchanged, and work with a live session right from the UI. Each agent runs in a tmux session in the background, so when you close the UI the sessions keep working.
+        </p>
+        <div class="ui-shots">
+          {uiShots.map((shot) => (
+            <figure class="ui-shot">
+              <Image src={shot.src} alt={shot.caption} loading="lazy" decoding="async" quality={80} />
+              <figcaption>{shot.caption}</figcaption>
+            </figure>
           ))}
-        </ul>
+        </div>
       </section>
 
       <section class="learn-more">
@@ -259,10 +339,10 @@ const featureBody = (s: string) =>
             📖 <a href="/concepts/teams/">How to think about agent teams</a> for the methodology behind team design.
           </li>
           <li>
-            📚 <a href="/getting-started/">Documentation</a> for full docs, concepts, reference, and ADRs.
+            📚 <a href="/getting-started/">Documentation</a> for full docs, concepts, and reference.
           </li>
           <li>
-            🧪 <a href="/compare/">How teamctl compares</a> for the feature matrix vs neighboring tools. No put-downs.
+            🧪 <a href="/compare/">How teamctl compares</a> for the feature matrix against neighboring tools.
           </li>
         </ul>
       </section>
@@ -381,6 +461,13 @@ const featureBody = (s: string) =>
         margin: 0 0 0.6rem;
         letter-spacing: -0.005em;
       }
+      h2 code {
+        font-family: var(--mono);
+        font-size: 0.8em;
+        background: rgba(214, 161, 90, 0.08);
+        padding: 0.05em 0.3em;
+        border-radius: 4px;
+      }
 
       section p {
         margin: 0 0 0.9rem;
@@ -447,6 +534,27 @@ const featureBody = (s: string) =>
         outline: none;
       }
 
+      /* Extras */
+      .extras-list {
+        margin: 0.6rem 0 0.9rem;
+        padding-left: 1.4rem;
+        display: grid;
+        gap: 0.6rem;
+      }
+      .extras-list li {
+        color: var(--fg);
+        font-size: 1rem;
+        line-height: 1.55;
+      }
+      .extras-list strong { color: var(--fg); }
+      .extras-list a { border-bottom: none; }
+      .extra-emoji { margin-right: 0.15rem; }
+      .extras-note {
+        margin: 0;
+        color: var(--fg-mute);
+        font-size: 0.95rem;
+      }
+
       /* Examples list */
       .examples-list {
         list-style: none;
@@ -482,11 +590,8 @@ const featureBody = (s: string) =>
       .example-title {
         font-weight: 600;
         color: var(--fg);
-      }
-      .example-agents {
-        color: var(--fg-mute);
-        font-size: 0.9rem;
         font-family: var(--mono);
+        font-size: 0.96rem;
       }
       .example-what {
         margin: 0;
@@ -500,8 +605,9 @@ const featureBody = (s: string) =>
         font-size: 0.95rem;
       }
 
-      /* Demo: code card + $ teamctl up */
-      .demo { margin: 0.6rem 0 0; display: grid; gap: 1rem; }
+      /* Demo: code card + $ teamctl ... */
+      .demo { margin: 0.6rem 0 0; display: grid; gap: 0.35rem; }
+      .demo .code-card { margin-bottom: 0.65rem; }
 
       .code-card {
         position: relative;
@@ -536,22 +642,33 @@ const featureBody = (s: string) =>
       }
       .up .prompt { color: var(--fg-mute); user-select: none; }
       .up code { color: var(--fg); }
+      .up .cmt { color: var(--fg-mute); }
+      .demo-note {
+        margin: 0.6rem 0 0;
+        color: var(--fg-mute);
+        font-size: 0.95rem;
+      }
 
-      /* Features */
-      .features-list {
-        list-style: none;
-        padding: 0;
-        margin: 0.4rem 0 0;
+      /* teamctl ui shots */
+      .ui-shots {
         display: grid;
-        gap: 0.6rem;
+        gap: 1.5rem;
+        margin: 0.6rem 0 0;
       }
-      .features-list li {
-        color: var(--fg);
-        font-size: 1rem;
-        line-height: 1.55;
+      .ui-shot { margin: 0; }
+      .ui-shot img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border: 1px solid var(--hairline);
+        border-radius: 8px;
+        background: var(--bg-soft);
       }
-      .features-list strong {
-        color: var(--fg);
+      .ui-shot figcaption {
+        margin-top: 0.5rem;
+        color: var(--fg-mute);
+        font-size: 0.92rem;
+        font-style: italic;
       }
 
       /* Learn more */
