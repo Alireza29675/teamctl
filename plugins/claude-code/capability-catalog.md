@@ -32,7 +32,7 @@ Two shapes drive which capabilities (and whether a `/loop`) an agent earns:
 - **Builder-shaped** — an autonomous goal→ship drive. Handed a goal, it builds → tests → fixes → opens a PR. Builders earn the **build-side sub-agents** (`code-investigator`, `implementer`, `test-author`, `qa-tester`, `pr-narrator`, `code-roaster`), the **`ship-it`** + **`tdd`** skills, the **`fmt-lint`** hook (iff it writes code), and a **`/loop`** as their heartbeat (see [`role-prompt-style.md`](./role-prompt-style.md) §5).
 - **Compass-shaped** — conversational / event-driven: ideation, research, triage, coordination. No autonomous build drive, **no `/loop`**. Earns the **research / ideation sub-agents** (`product-researcher`, `feasibility-analyst`, `deep-research`, `memory-writer`, `ideator`) and the **`shape-idea`** skill; a manager who forwards work earns **`pr-summarizer`**.
 
-Most teams are one or two builders plus a compass-shaped manager. Keep it lean (RULES: capabilities-over-seats).
+Most teams are one or two builders plus a compass-shaped manager. Keep it lean (RULES: capabilities over new sessions).
 
 ---
 

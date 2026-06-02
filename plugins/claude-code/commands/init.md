@@ -265,11 +265,11 @@ For each refined candidate, run **one** stress test. Don't run all three on the 
 
   Domains have positions (the auth domain "wants" sessions short-lived; the docs domain "wants" examples runnable). If the user can name two or three opinions for the candidate, it's domain-shaped. If they can't, it's probably a substrate or a task.
 
-- **The hiring test** — when the candidate is ambiguous between function and domain:
+- **The function-vs-domain test** — when the candidate is ambiguous between function and domain:
 
-  > If you hired a human for this, would their title be a function (PM, QA, engineer) or a domain (auth, search, docs)?
+  > If this got its own agent session, would you name it for a *function* (PM, QA, engineer) or a *domain* (auth, search, docs)?
 
-  Function title = the cut is wrong; the candidate is shaped around what someone *does*, not what they *own*. Reflect that back: "Sounds like that's a function-shaped role. The work itself probably lives in one of the domains we've named — or it's a sub-agent." Then revisit the candidate at the domain altitude.
+  Function name = the cut is wrong; the candidate is shaped around what someone *does*, not what it *owns*. Reflect that back: "Sounds like that's a function-shaped role. The work itself probably lives in one of the domains we've named — or it's a sub-agent." Then revisit the candidate at the domain altitude.
 
 ### 2d. Validate against the two gates
 
@@ -392,7 +392,7 @@ Per [INTERACTIVE.md §7](../INTERACTIVE.md), the synthesis proposal carries reas
    - **(iii) does it run a `/loop`?** — a *builder*-shaped agent (autonomous goal→ship drive) runs a `/loop` as its heartbeat; a *compass*-shaped agent (conversational / event-driven) does not. Name which, per agent, and why.
    - **(iv) the one earned hook** — `fmt-lint` (`PreToolUse` on `Edit|Write`) **iff the agent writes code**. No other hooks in v1; don't sprinkle them.
 
-   **Capabilities-not-seats (the lean default).** When discovery surfaced something that's really *more work for an existing agent*, the proposal says so: *"that's a sub-agent/skill on `<agent>`, not a new seat."* A new persistent agent is earned only by a new **domain** (the two-gate test); fire-and-forget work is a capability, not a seat.
+   **Capabilities over new sessions (the lean default).** A persistent agent is a **parallel agent session for separate focus** — earned by a domain, not a headcount seat. When discovery surfaced something that's really *more work for an existing agent session*, the proposal says so: *"that's a sub-agent/skill on `<agent>`, not a new session."* A new session is earned only by separate focus — a new **domain** (the two-gate test); fire-and-forget work is a capability, not a parallel session.
 
    **Guard the generated team's output (RULES).** The capability menu deliberately excludes **cron** and **extra MCP servers**. `/loop` is the cron-free heartbeat; the built-in `team` mailbox MCP is all an agent needs. Never propose a cron block or an `mcps:` server for the team being generated.
 3. **What channels / workflows the agent participates in.** `can_dm` and `can_broadcast` from the synthesised reports-to relationships, plus the `all` channel by default. Manager is Telegram-bound; workers aren't. Cite [teams.md](../../../docs/src/content/docs/concepts/teams.md) and [channels.md](../../../docs/src/content/docs/concepts/channels.md) once each in the proposal prose.
@@ -450,7 +450,7 @@ On `Refine it`, enter the **refine loop** below. On `Start over`, step back to S
 Owner direction: *suggest basics, then iterate until the setup is right.* Between propose and scaffold, loop on the user's adjustments until they approve — nothing is written to disk until then:
 
 1. Take the user's adjustment in free text (it's an open description, not a finite set — *"drop the test-author sub-agent on `eng`," "give `builder` the `tdd` skill," "make `researcher` run a loop too," "merge these two agents"*).
-2. Apply it to the in-memory setup. If the change touches the capability stack, re-pick from [capability-catalog.md](../capability-catalog.md) and keep the capabilities-not-seats + cron/MCP guards.
+2. Apply it to the in-memory setup. If the change touches the capability stack, re-pick from [capability-catalog.md](../capability-catalog.md) and keep the capabilities-over-new-sessions + cron/MCP guards.
 3. **Re-present** the full setup blocks + the small tree + the closing line.
 4. Fire the setup-approval gate again. `Looks good` → Stage 4; `Refine it` → loop; `Start over` → Stage 2.
 

@@ -1,11 +1,11 @@
 ---
-description: Open-ended "talk to it" command for evolving an existing teamctl team — hire or retire an agent, modify its behaviour or capability stack (sub-agents / skills / `/loop` / hook), scope a channel, set up Telegram, add a project, or open a bridge.
+description: Open-ended "talk to it" command for evolving an existing teamctl team — add or remove an agent session, modify its behaviour or capability stack (sub-agents / skills / `/loop` / hook), scope a channel, set up Telegram, add a project, or open a bridge.
 allowed-tools: Bash, Read, Write, Edit, AskUserQuestion
 ---
 
 `/teamctl:adjust` is the command you reach for after onboarding ends. Describe the change in plain English — *"add a docs worker reporting to maintainer"*, *"retire the bug_fix worker"*, *"open a bridge to the ops project"* — and `/teamctl:adjust` walks you through the picks, proposes the YAML diff, applies it on confirmation, validates, and offers to reload.
 
-Read [RULES.md](../RULES.md), [INTERACTIVE.md](../INTERACTIVE.md), and [capability-catalog.md](../capability-catalog.md) before each invocation. RULES carries the architecture invariants (including the capability invariants — capabilities-over-seats, no-cron/no-extra-MCP in the team); INTERACTIVE carries the UI invariants (when to reach for `AskUserQuestion`, the Apply/Modify/Reject gate, the headless-pane fallback, docs-as-ground-truth, voice control); the catalog is the palette for the capability stack a hired agent earns and Verb 8 evolves. Substrate constraint #4 is the non-negotiable: every action this command takes is reproducible with `vim .team/team-compose.yaml`. The mindset has to survive *evolution*, not just init — a hired agent gets its capability stack, and the stack is a first-class thing to adjust.
+Read [RULES.md](../RULES.md), [INTERACTIVE.md](../INTERACTIVE.md), and [capability-catalog.md](../capability-catalog.md) before each invocation. RULES carries the architecture invariants (including the capability invariants — capabilities over new sessions, no-cron/no-extra-MCP in the team); INTERACTIVE carries the UI invariants (when to reach for `AskUserQuestion`, the Apply/Modify/Reject gate, the headless-pane fallback, docs-as-ground-truth, voice control); the catalog is the palette for the capability stack a new agent session earns and Verb 8 evolves. Substrate constraint #4 is the non-negotiable: every action this command takes is reproducible with `vim .team/team-compose.yaml`. The mindset has to survive *evolution*, not just init — a new agent session is a parallel session for separate focus, defined by its capabilities and connections; it gets its capability stack on creation, and the stack is a first-class thing to adjust.
 
 ## Preamble — detect interactive vs headless
 
@@ -23,14 +23,14 @@ fi
 
 ## Action picker — at the top of every invocation
 
-If the user opens with a clear intent (*"add a docs worker"*, *"retire the bug_fix role"*, *"wire telegram on maintainer"*, *"open a bridge to ops"*), skip the picker and jump straight to the matching verb section below. If the intent is ambiguous or the user wants help deciding, open with:
+If the user opens with a clear intent (*"add a docs worker"*, *"remove the bug_fix session"*, *"wire telegram on maintainer"*, *"open a bridge to ops"*), skip the picker and jump straight to the matching verb section below. If the intent is ambiguous or the user wants help deciding, open with:
 
 ```text
 question: "What do you want to adjust?"
 header: "Adjust"
 options:
   - label: "Add or remove an agent"
-    description: "Hire a manager / worker, retire one, or move where they report."
+    description: "Add a manager / worker session, remove one, or move where it reports."
   - label: "Modify an agent"
     description: "Change behaviour (role prompt, model, autonomy) — or its capability stack (sub-agents, skills, `/loop`, hook)."
   - label: "Adjust a channel or bridge"
@@ -67,9 +67,9 @@ The propose step is the load-bearing surface. The user reads it, screenshots it,
 
 ### Multi-hunk narration
 
-When a verb's diff touches more than one non-adjacent section, name the sections before showing the diff. Example for Verb 4 (retire `bug_fix`):
+When a verb's diff touches more than one non-adjacent section, name the sections before showing the diff. Example for Verb 4 (remove `bug_fix`):
 
-> Retiring `bug_fix` touches three places — the `workers:` entry, the `dev` channel's `members:` list, and `maintainer`'s `can_dm`. Here's the diff:
+> Removing `bug_fix`'s session touches three places — the `workers:` entry, the `dev` channel's `members:` list, and `maintainer`'s `can_dm`. Here's the diff:
 
 A teammate tells you what's coming; the diff is the receipt.
 
@@ -77,9 +77,9 @@ A teammate tells you what's coming; the diff is the receipt.
 
 Each verb gathers its inputs via `AskUserQuestion` (in interactive mode) or numbered plain-text prompts (in headless), proposes the change with cited reasoning, then fires the Apply/Modify/Reject gate.
 
-### Verb 1 — Hire an agent (manager or worker)
+### Verb 1 — Add an agent session (manager or worker)
 
-User says: *"add a release_manager"*, *"add a docs worker"*, *"give me a manager that handles partner emails"*. If the user's intent is ambiguous between manager and worker, fire `AskUserQuestion`:
+A new agent is a **parallel agent session for separate focus** — spawned when the work has its own domain, defined by its capabilities and connections (not a headcount seat). User says: *"add a release_manager"*, *"add a docs worker"*, *"spawn a session that handles partner emails"*. If the user's intent is ambiguous between manager and worker, fire `AskUserQuestion`:
 
 ```text
 question: "Manager or worker?"
@@ -122,19 +122,19 @@ Then fire the Apply/Modify/Reject gate.
 
 User says: *"add a docs worker"*, *"add a researcher reporting to the editor"*.
 
-**Capabilities-not-seats — check before proposing a seat.** If the ask reads like *more capability for an existing agent* rather than a new domain (*"add a QA worker"* when an engineer already owns the code, *"add someone to write release notes"* when a maintainer ships releases), surface the leaner path first. Resolve which existing agent it lands on from the ask (ask in one line if it's not obvious), then fire `AskUserQuestion` with `<agent>` filled in:
+**Capabilities over new sessions — check before spawning one.** If the ask reads like *more capability for an existing agent session* rather than separate focus (*"add a QA worker"* when an engineer already owns the code, *"add someone to write release notes"* when a maintainer ships releases), surface the leaner path first. Resolve which existing session it lands on from the ask (ask in one line if it's not obvious), then fire `AskUserQuestion` with `<agent>` filled in:
 
 ```text
-question: "That sounds like a capability on `<agent>`, not a new agent — leaner. Which?"
-header: "Seat?"
+question: "That sounds like a capability on `<agent>`, not a new session — leaner. Which?"
+header: "Session?"
 options:
   - label: "Capability on `<agent>`"
-    description: "Add it as a sub-agent/skill on the existing agent (Verb 8). No new seat."
-  - label: "New worker"
-    description: "It's a real new domain that earns its own agent — proceed with the hire."
+    description: "Add it as a sub-agent/skill on the existing session (Verb 8). No new session."
+  - label: "New session"
+    description: "It's a real new domain / separate focus that earns its own parallel session — go ahead and add it."
 ```
 
-On `Capability on <agent>`, route to **Verb 8**. On `New worker`, continue. A new agent is earned only by a new **domain** (RULES: capabilities-over-seats) — proceed only once it clears that bar.
+On `Capability on <agent>`, route to **Verb 8**. On `New session`, continue. A new agent session is earned only by separate focus — a new **domain** (RULES: capabilities over new sessions) — proceed only once it clears that bar.
 
 Touches:
 - A new entry under `workers:` — `runtime: claude-code`, `model: claude-sonnet-4-6` (cost-tier-appropriate default), `permission_mode: auto`, `reports_to: <manager>`, `can_dm: [<manager>]`, `can_broadcast: []`.
@@ -178,22 +178,22 @@ Propose voice example:
 
 If `interfaces.telegram` already exists on the manager and the user is asking for a re-wire (or running `bot setup --force`), surface the side-effect in the propose beat — *"Re-wiring overwrites the `interfaces.telegram` block; any inline comments inside it will be lost (comments around it survive)."* — then fire the Apply/Modify/Reject gate. No second confirmation: the gate is enough.
 
-### Verb 4 — Retire an agent
+### Verb 4 — Remove an agent session
 
-User says: *"retire the bug_fix worker"*, *"remove ops_lead"*, *"drop the docs role"*.
+User says: *"remove the bug_fix worker session"*, *"close ops_lead"*, *"drop the docs session"*. Removing an agent session retires that parallel focus — its entry, role file, and connections come out of the team.
 
 Touches:
 - The agent's entry under `managers:` or `workers:` — removed wholesale.
 - The agent's name removed from any channel's `members:` list.
-- Any `reports_to: <retired>` references on other workers — fire `AskUserQuestion` to pick a re-route target (one option per remaining manager, plus a `Leave unowned` option) before proposing.
-- Any `can_dm: [<retired>]` references on other agents — removed.
-- The `roles/<retired>.md` file — pick with `AskUserQuestion`: `Keep` (default, repurpose later) or `Delete`.
+- Any `reports_to: <removed>` references on other workers — fire `AskUserQuestion` to pick a re-route target (one option per remaining manager, plus a `Leave unowned` option) before proposing.
+- Any `can_dm: [<removed>]` references on other agents — removed.
+- The `roles/<removed>.md` file — pick with `AskUserQuestion`: `Keep` (default, reuse later) or `Delete`.
 
 This is a multi-hunk verb. Narrate the sections first:
 
-> Retiring `bug_fix` touches three places — the `workers:` entry, the `dev` channel's `members:` list (`bug_fix` shares it with `maintainer`), and `maintainer`'s `can_dm`. The `roles/bug_fix.md` file stays unless you want it gone. Here's the diff:
+> Removing `bug_fix`'s session touches three places — the `workers:` entry, the `dev` channel's `members:` list (`bug_fix` shares it with `maintainer`), and `maintainer`'s `can_dm`. The `roles/bug_fix.md` file stays unless you want it gone. Here's the diff:
 
-#### Heads-up — comments inside the retired section go with it
+#### Heads-up — comments inside the removed section go with it
 
 Surface in the propose beat — *"Removing `bug_fix`'s section drops any inline comments you wrote inside it. Surrounding comments are safe."* — then the Apply/Modify/Reject gate carries the decision.
 
@@ -261,7 +261,7 @@ Touches — by capability kind:
 
 Propose voice example:
 
-> Adding a `qa-tester` sub-agent to `builder`. I'll write `subagents/qa-tester.md` adapted to your stack, then add it to `builder`'s `subagents:` list. Per the capability mindset, this is a capability on an agent you already have — leaner than a new QA seat. Reload picks it up.
+> Adding a `qa-tester` sub-agent to `builder`. I'll write `subagents/qa-tester.md` adapted to your stack, then add it to `builder`'s `subagents:` list. Per the capability mindset, this is a capability on a session you already have — leaner than spawning a new QA session. Reload picks it up.
 
 Then fire the Apply/Modify/Reject gate, validate, and offer reload like every other verb.
 
@@ -296,7 +296,7 @@ Wait for confirmation. `teamctl reload` restarts only the agents whose config ac
 
 ## Out of scope (v1)
 
-- **Verbs beyond the eight named.** *Rename an agent*, *split a project into two*, *merge two projects* — surface as: *"v1 of `/teamctl:adjust` covers hire / scope / Telegram / retire / modify / bridge / add-project / adjust-capabilities. For \<what they asked for\>, the cleanest path is `vim .team/team-compose.yaml` — happy to walk you through the change you want to make."*
+- **Verbs beyond the eight named.** *Rename an agent*, *split a project into two*, *merge two projects* — surface as: *"v1 of `/teamctl:adjust` covers add / scope / Telegram / remove / modify / bridge / add-project / adjust-capabilities. For \<what they asked for\>, the cleanest path is `vim .team/team-compose.yaml` — happy to walk you through the change you want to make."*
 - **Multi-project edits in one go.** v1 handles one project at a time. If the team has multiple `projects/<id>.yaml`, pick which with `AskUserQuestion`.
 - **Bulk operations.** *"Add 3 workers"* works (handled in sequence with one gate each); *"bulk swap all workers from sonnet to opus"* is out of v1.
 - **Undo / replay history.** v1 is forward-only. Point at `git diff` for the receipt; `Reject` at the gate never writes anything in the first place.
