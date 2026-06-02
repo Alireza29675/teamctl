@@ -1,0 +1,6 @@
+# Runtime work area — the team fills these at run time. Only `seed.md`
+# (the shipped rough ideas) is tracked; everything the hunt produces is
+# local to your machine.
+direction.md
+ideas/
+prototypes/

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  autonomous-prototyper — the never-sleeps heartbeat (macOS launchd).
+
+  The launchd equivalent of the crontab: every StartInterval seconds it
+  pokes the ideator to run one hunt cycle. Same honest story as the
+  crontab — teamctl owns no timer; launchd is the clock. The poke is a
+  no-op until you've settled `direction.md` (Phase i).
+
+  ── Install ──
+    1. Edit the /path/to/autonomous-prototyper path below to where you
+       copied the example. launchd runs with a minimal PATH, so the
+       command exports one covering the usual teamctl install spots
+       (~/.local/bin, /usr/local/bin, /opt/homebrew/bin) — if
+       `which teamctl` shows somewhere else, add it there.
+    2. Copy to ~/Library/LaunchAgents/ and load it:
+         cp cron/com.example.autonomous-prototyper.plist ~/Library/LaunchAgents/
+         launchctl load ~/Library/LaunchAgents/com.example.autonomous-prototyper.plist
+    3. Watch it:  tail -f /tmp/ap-cron.log
+    Unload with:  launchctl unload ~/Library/LaunchAgents/com.example.autonomous-prototyper.plist
+
+  Cost & pile-up: see the cadence / budget notes in crontab.example —
+  the same `budget.daily_usd_limit` and `budget.message_ttl_hours` caps
+  in team-compose.yaml apply.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.autonomous-prototyper</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"; cd /path/to/autonomous-prototyper &amp;&amp; teamctl send autonomous-prototyper:ideator "run a cycle"</string>
+  </array>
+
+  <!-- Poke every 3 hours (10800 seconds). Match it to your cadence. -->
+  <key>StartInterval</key>
+  <integer>10800</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/ap-cron.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/ap-cron.log</string>
+</dict>
+</plist>

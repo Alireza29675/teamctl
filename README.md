@@ -60,7 +60,7 @@ Real teams running on teamctl. Copy any of them as a starting point.
 |---|---|
 | 🏗️ **[product-team](examples/product-team/)** | A product squad: a Product Manager and engineers coordinating around what to build and ship. |
 | 🛰️ **[oss-maintainer](examples/oss-maintainer/)** | Runs a one-person open-source project: triage, bug-fix PRs, docs, and release proposals you approve. |
-| 🧪 **[autonomous-prototyper](examples/autonomous-prototyper/)** | Comes up with ideas and prototypes them end to end. |
+| 🧪 **[autonomous-prototyper](examples/autonomous-prototyper/)** | Hunts startup ideas, kills the weak ones, and builds throwaway prototypes of the survivors. |
 | 🌱 **[personal-research](examples/personal-research/)** | A reading buddy that holds your interests, plus a curator that follows the news and surfaces what matters. |
 | 💼 **[job-finder](examples/job-finder/)** | Runs your job search: watches boards, aligns your CV to postings, and drafts cover letters you approve. |
 

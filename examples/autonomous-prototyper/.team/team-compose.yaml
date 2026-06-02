@@ -1,0 +1,54 @@
+# autonomous-prototyper — an idea hunt that never sleeps.
+#
+# A three-agent ideation cell. You talk to ONE agent on Telegram — the
+# ideator. First you settle a direction together (Phase i); then it goes
+# autonomous (Phase ii): it hunts startup ideas, runs each past a
+# pessimist whose whole job is to kill it, and surfaces only the
+# survivors for you to approve. Approved ideas go to a Codex prototyper
+# that builds a throwaway proof of the bet.
+#
+# "Never sleeps" is honest about its clock: teamctl is event-driven and
+# owns NO timer. An OS scheduler (cron / launchd) is the heartbeat — it
+# pokes the ideator on a cadence to run a cycle. See cron/ and the README.
+#
+# Move or rename this file and `teamctl up` stops finding the team.
+
+version: "2.0.0"
+
+# SQLite mailbox at `state/mailbox.db` (relative to this file).
+# `state/` is gitignored — runtime state never leaves the host.
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+# Tmux supervisor — one detached session per agent. `ap-` (autonomous
+# prototyper) scopes session names so they read cleanly in `tmux ls`.
+# Change it if you want to run two teams on the same host.
+supervisor:
+  type: tmux
+  tmux_prefix: ap-
+
+# Guardrails for a team that runs around the clock. A never-sleeps
+# generate→vet loop costs tokens, so cap the daily spend. And because the
+# cron heartbeat (cron/) inserts a mailbox row every cycle with no
+# liveness check, a down or slow team can accrue a backlog of pokes —
+# `message_ttl_hours` expires stale ones instead of replaying a pile-up
+# when it wakes. Tune both to your cadence and budget.
+budget:
+  daily_usd_limit: 15.0
+  message_ttl_hours: 12
+
+# Actions that always pause for your explicit approval, no matter what.
+# The prototyper honours these as hard gates: a throwaway that would
+# publish, deploy, or hit an external write API stops for your tap. (The
+# approve/reject gate on each surfaced idea is a separate, runtime
+# `request_approval` the ideator makes — it's the product loop, not a
+# safety rail, so it isn't listed here.)
+hitl:
+  globally_sensitive_actions:
+    - publish
+    - deploy
+    - external_api_post
+
+projects:
+  - file: projects/autonomous-prototyper.yaml

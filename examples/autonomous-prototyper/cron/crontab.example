@@ -1,0 +1,29 @@
+# autonomous-prototyper — the never-sleeps heartbeat (Linux / macOS cron).
+#
+# teamctl is event-driven and owns NO timer. THIS is the heartbeat: an OS
+# cron job pokes the ideator on a cadence so it runs one hunt cycle. The
+# poke is an ordinary mailbox message (`teamctl send` inserts a row); the
+# team-mcp channel watcher sees it and wakes the ideator, exactly as a
+# teammate's message would. No teamctl process needs to be "running on a
+# schedule" — only the team (`teamctl up`) and this cron entry.
+#
+# Each poke means: run ONE generate→vet cycle. The ideator IGNORES pokes
+# until you've settled `direction.md` with it (Phase i), so a poke before
+# then is a harmless no-op — you can install this from day one.
+#
+# ── Install ──
+# From the dir you copied the example to (the one containing `.team/`):
+#   crontab cron/crontab.example
+# or paste the line below into `crontab -e`. Edit the path + cadence first.
+# Watch it work:  tail -f /tmp/ap-cron.log
+#
+# ── Cost & pile-up ──
+# A 24/7 loop costs tokens — keep the cadence modest (hours, not minutes)
+# and cap spend with `budget.daily_usd_limit` in the team-compose.yaml.
+# Pokes that land while the team is down queue in the mailbox; the
+# `budget.message_ttl_hours` cap (also in team-compose.yaml) expires a
+# stale backlog so it doesn't replay all at once when the team comes back.
+
+# Every 3 hours, on the hour. Point the path at where YOU copied the
+# example (the dir that contains `.team/`). `teamctl` must be on PATH.
+0 */3 * * * cd /path/to/autonomous-prototyper && teamctl send autonomous-prototyper:ideator "run a cycle" >> /tmp/ap-cron.log 2>&1
