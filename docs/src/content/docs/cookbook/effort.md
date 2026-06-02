@@ -51,4 +51,3 @@ Skip it when the team is uniform — a workspace `.env` setting reads cleaner th
 ## See also
 
 - [`oss-maintainer` example](https://github.com/Alireza29675/teamctl/tree/main/examples/oss-maintainer) — `release_manager` runs at `effort: max`.
-- [`indie-game-studio` example](https://github.com/Alireza29675/teamctl/tree/main/examples/indie-game-studio) — pattern fits its `playtest_critic` role too.

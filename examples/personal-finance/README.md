@@ -92,5 +92,4 @@ rm -rf state/
 ## Related
 
 - [How to think about agent teams](https://teamctl.run/concepts/teams/). The methodology this example is built on.
-- [Solo founder ops](../solo-founder-ops/). Hub-and-spoke team for the everything-that-is-not-building side of solo work.
 - [Personal research](../personal-research/). Two-agent personal-information loop with a similar tracker-plus-synthesiser pattern.

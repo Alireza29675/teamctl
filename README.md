@@ -62,7 +62,6 @@ Real teams running on teamctl. Copy any of them as a starting point.
 | 🛰️ **[oss-maintainer](examples/oss-maintainer/)** | Runs a one-person open-source project: triage, bug-fix PRs, docs, and release proposals you approve. |
 | 🧪 **[autonomous-prototyper](examples/autonomous-prototyper/)** | Comes up with ideas and prototypes them end to end. |
 | 🌱 **[personal-research](examples/personal-research/)** | A reading buddy that holds your interests, plus a curator that follows the news and surfaces what matters. |
-| 📈 **[market-analysts](examples/market-analysts/)** | A read-only research desk that backs financial decisions, with one analyst whose only job is to dissent. |
 | 💼 **[job-finder](examples/job-finder/)** | Runs your job search: watches boards, aligns your CV to postings, and drafts cover letters you approve. |
 
 More under [`examples/`](examples/).

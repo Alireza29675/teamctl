@@ -41,7 +41,7 @@ Cross-project DMs are blocked by default. The only legal way for one project's a
 
 ## Where broadcast is bounded
 
-- **One channel per project, by default.** In the hello-team example, the only channel is `all`. You can declare more: `#leads`, `#engineering`, `#publishing`: but each one is an explicit list of members.
+- **One channel per project, by default.** In the personal-research example, the only channel is `all`. You can declare more: `#leads`, `#engineering`, `#publishing`: but each one is an explicit list of members.
 - **Membership is declared, not discovered.** No agent can join a channel by writing to it. The compose file is the source of truth.
 - **Managers see broadcasts on their channels. Workers see broadcasts on theirs.** The org chart shapes the broadcast graph, not the agents themselves.
 - **`teamctl gc` is the floor on mailbox volume.** Acked messages older than `message_ttl_hours` are removed; the working set stays bounded regardless of how chatty the channel got.

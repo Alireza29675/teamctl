@@ -36,7 +36,7 @@
 - `cargo-dist` 0.25.1 release pipeline, four targets (Linux x86_64 / aarch64, macOS x86_64 / aarch64), curl-pipe `install.sh`.
 - Crates published to crates.io via a sibling `publish-crates.yml` workflow.
 - Astro Starlight docs site under `docs/`, deployed to Cloudflare Pages.
-- Examples: `hello-team`, `multi-agent`, `multi-runtime`, `two-projects`, `newsletter-office`, `startup-team`, `market-analysts`.
+- Examples: `multi-agent`, `multi-runtime`, `two-projects`, `newsletter-office`, `oss-maintainer`, `market-analysis`.
 
 ## Near-term
 
