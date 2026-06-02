@@ -1,0 +1,44 @@
+# product-team — product discovery while an engineering team builds.
+#
+# A four-agent showcase. You talk to two managers on Telegram (two
+# separate bots): the PM owns the *what*, the EM owns the *how*. Behind
+# them, two engineers build the product and review each other's PRs
+# across model families — one on Claude, one on Codex. Everything
+# between a settled requirement and a shipped increment runs
+# autonomously; you only get pinged at a product fork or a hard gate.
+#
+# The team builds toward `requirements.md` — the PM writes and maintains
+# it, the EM delivers against it. Point the team at the bundled
+# `habit-tracker/` seed app (the default), or repoint `cwd` in
+# projects/product-team.yaml at your own repo to grow your own product.
+#
+# Move or rename this file and `teamctl up` stops finding the team.
+
+version: "2.0.0"
+
+# SQLite mailbox at `state/mailbox.db` (relative to this file).
+# `state/` is gitignored — runtime state never leaves the host.
+broker:
+  type: sqlite
+  path: state/mailbox.db
+
+# Tmux supervisor — one detached session per agent. `pt-` (product
+# team) scopes session names so they read cleanly in `tmux ls`. Change
+# it if you want to run two teams on the same host.
+supervisor:
+  type: tmux
+  tmux_prefix: pt-
+
+# Actions that always pause for your explicit approval, no matter what.
+# The EM and the engineers honour these as hard gates: nothing merges,
+# ships, or reaches the outside world without your tap.
+hitl:
+  globally_sensitive_actions:
+    - merge_to_main
+    - release
+    - deploy
+    - publish
+    - external_api_post
+
+projects:
+  - file: projects/product-team.yaml

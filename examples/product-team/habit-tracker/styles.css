@@ -1,0 +1,39 @@
+/* Habit Tracker — base styles (seed skeleton; the team grows these). */
+:root {
+  --fg: #1a1a1a;
+  --muted: #6b7280;
+  --accent: #2563eb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--fg);
+  line-height: 1.5;
+}
+
+main {
+  max-width: 32rem;
+  margin: 4rem auto;
+  padding: 0 1.5rem;
+}
+
+h1 {
+  font-size: 1.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.seed-note {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.seed-note code {
+  background: #f3f4f6;
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.25rem;
+}
