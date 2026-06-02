@@ -33,11 +33,11 @@ cargo install --path crates/team-bot    # only if you want the Telegram adapter
 
 ## Your first team
 
-The fastest path is the guided one: `/teamctl:init` runs a discovery conversation that surfaces the *domains* in your work and proposes a team shape around them:
+The fastest path is the guided one. `teamctl init` runs a discovery conversation that surfaces the *domains* in your work and proposes a team shape around them:
 
 ```bash
 cd /path/to/your/project
-claude /teamctl:init
+teamctl init
 ```
 
 Read [How to think about agent teams](/concepts/teams/) first if you want the cognitive frame the guided flow is built on.
@@ -47,15 +47,17 @@ Read [How to think about agent teams](/concepts/teams/) first if you want the co
 If you'd rather skip the wizard, start from a real example. Pick the shape closest to your work:
 
 ```bash
+# grab the examples once (the curl install doesn't bundle them)
+git clone git@github.com:Alireza29675/teamctl.git
+
 cp -r teamctl/examples/personal-research ~/my-team   # 2 agents
-cp -r teamctl/examples/market-analysis   ~/my-team   # 4 agents
+cp -r teamctl/examples/job-finder        ~/my-team   # 3 agents
 cp -r teamctl/examples/oss-maintainer    ~/my-team   # 5 agents
-cp -r teamctl/examples/newsletter-office ~/my-team   # 7 agents
 cd ~/my-team
 teamctl validate
 teamctl up
 teamctl status
-teamctl ui                                          # watch them work
+teamctl ui                                           # watch them work
 ```
 
 Send the manager a message:
