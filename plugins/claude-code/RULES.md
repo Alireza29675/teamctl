@@ -34,3 +34,10 @@ These are positioning *invariants* — every command implements **with** them, n
 The legacy template-pick stage and the four named defaults (OSS maintainer, Editorial room, Indie studio, Solo triage) live on only as **inspirations**: shape-references the user can compare against after they've named their own domains. Never as pickable starts for the *team shape*.
 
 The canonical companion is [`docs/src/content/docs/concepts/teams.md`](../../docs/src/content/docs/concepts/teams.md) — the methodology there is the source of truth. If anything in `/teamctl:init` drifts from that page, the page wins.
+
+## Capability invariants — what the generated team carries
+
+Both commands emit the per-agent capability stack from [`capability-catalog.md`](./capability-catalog.md). Two invariants govern that emit. They scope the *generated team's output*, not the plugin itself.
+
+1. **Capabilities over new sessions.** A persistent agent is a **parallel agent session for separate focus**, defined by its capabilities and connections — not a headcount seat. The default for new work is a **sub-agent or skill on an existing session**, not a new session. A new session is earned only by a new **domain** (the two-gate test): state and history compound in a session; fire-and-forget work is a capability. When discovery surfaces "more work for `<agent>`," the generator proposes a capability on that session before it proposes a new one.
+2. **No cron, no extra MCP in the emitted team.** The generated team uses **`/loop` as its heartbeat** (builders self-pace goal→ship work in `/loop` dynamic mode — see [`role-prompt-style.md`](./role-prompt-style.md) §5) and the built-in **`team` mailbox MCP** as its only MCP. The generator never emits a cron block or an `mcps:` server. (This is the owner's *"don't create a mess"* — scoped to the output. A user is free to add either by hand later; the generator doesn't reach for them.)
