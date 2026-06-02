@@ -41,6 +41,19 @@ workers:
     runtime: claude-code
     model: claude-sonnet-4-6
     role_prompt: roles/triage.md
+    # Triage's stack. The GitHub MCP (runtime-agnostic) to read and label
+    # real issues, and a triage subagent that classifies an incoming issue
+    # (bug / feature / question / dupe), rates severity + effort, and
+    # proposes the route. GitHub's official MCP ships as a container — swap
+    # the image/command for any GitHub MCP server you prefer.
+    mcps:
+      github:
+        command: docker
+        args: ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"]
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+    subagents:
+      - subagents/triage.md
     permission_mode: auto
     reports_to: maintainer
     can_dm: [maintainer]
@@ -50,6 +63,19 @@ workers:
     runtime: codex
     model: gpt-5-codex
     role_prompt: roles/bug_fix.md
+    # bug_fix is the other model family — a Codex agent. It gets its role +
+    # native Codex tooling + a per-agent MCP, which IS runtime-agnostic:
+    # the same GitHub MCP, to read the issue it's fixing and open the PR.
+    # But NOT the subagent / skill / hook stack — those are claude-only in
+    # v1, so a `subagents:` block here would be silently ignored. That's the
+    # cross-model parity gap: give a non-claude worker its capability through
+    # `mcps:`, not subagents.
+    mcps:
+      github:
+        command: docker
+        args: ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"]
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
     reports_to: maintainer
     can_dm: [maintainer]
     can_broadcast: [dev]
@@ -58,6 +84,11 @@ workers:
     runtime: claude-code
     model: claude-sonnet-4-6
     role_prompt: roles/docs.md
+    # Docs' stack: a doc-auditor subagent that reads the project's README +
+    # docs with fresh eyes after a merge and returns a prioritized friction
+    # list — so the docs worker fixes what actually trips readers.
+    subagents:
+      - subagents/doc-auditor.md
     permission_mode: auto
     reports_to: maintainer
     can_dm: [maintainer]
@@ -70,6 +101,12 @@ workers:
     runtime: claude-code
     model: claude-opus-4-8
     role_prompt: roles/release_manager.md
+    # Release manager's stack: a pr-summarizer subagent that turns each
+    # merged PR into a plain-language line for the release plan — so the
+    # changelog reads for humans, not as a commit dump. Read-only, like the
+    # agent itself: plan mode means it proposes, the maintainer approves.
+    subagents:
+      - subagents/pr-summarizer.md
     permission_mode: plan
     effort: max
     reports_to: maintainer

@@ -16,6 +16,17 @@ maintainer (Claude Opus)              ← Telegram: maintainer bot
                       plan-mode)                   (read-only)
 ```
 
+## The per-agent stacks
+
+Each worker carries a real capability stack sized to its job:
+
+- **triage** runs the **GitHub MCP** (read, label, and route real issues) plus a `triage` subagent that classifies each new issue — bug / feature / question / duplicate — and proposes severity, effort, and where it goes.
+- **bug_fix** is a Codex agent, so it's where the cross-model parity gap shows: it gets the same **GitHub MCP** (MCPs are runtime-agnostic) to read the issue and open the PR, but **not** the subagent/skill/hook stack (claude-only in v1). You give a non-claude worker its capability through `mcps:`.
+- **docs** runs a `doc-auditor` subagent that reads the README + docs with fresh eyes after a merge and returns a prioritized friction list — so the docs worker fixes what actually trips readers.
+- **release_manager** runs a `pr-summarizer` subagent that turns each merged PR into a plain-language changelog line, and stays in plan-mode: it proposes, the maintainer approves.
+
+Subagents live in `.team/subagents/` and are claude-only; the GitHub MCP is runtime-agnostic and runs as a container (`ghcr.io/github/github-mcp-server` — swap it for any GitHub MCP you prefer). The wiring is in `.team/projects/oss.yaml`.
+
 `triage` and `bug_fix` are insulated from each other's channels: the
 labelling chatter never bleeds into the patch flow, and vice versa.
 The `release_manager` lives in `permission_mode: plan`: it can read
@@ -30,19 +41,24 @@ Telegram approval prompt.
 curl -sSf https://teamctl.run/install | sh
 npm i -g @anthropic-ai/claude-code
 # codex: see OpenAI's install docs (used by bug_fix)
+# Docker: required for the GitHub MCP — triage + bug_fix run
+#   ghcr.io/github/github-mcp-server as a container.
 
 # 2. Create one Telegram bot via @BotFather.
 #    Get your chat id from @userinfobot.
 
-# 3. Copy this example somewhere writable.
+# 3. A GitHub personal access token for the GitHub MCP (triage + bug_fix).
+#    Create one at https://github.com/settings/tokens (repo + issues scope).
+
+# 4. Copy this example somewhere writable.
 cp -r /path/to/teamctl/examples/oss-maintainer ~/oss
 cd ~/oss
 
-# 4. Fill in token + chat id.
+# 5. Fill in the Telegram token + chat id + GitHub token.
 cp .team/.env.example .team/.env
 $EDITOR .team/.env
 
-# 5. Workspace dir (where the agents read your project from).
+# 6. Workspace dir (where the agents read your project from).
 mkdir -p workspace
 # Tip: symlink your repo into ./workspace/ so the agents can read it,
 # or clone it there.
@@ -110,5 +126,5 @@ it gives the agent a concrete artifact to produce.
 
 ```bash
 teamctl down
-rm -rf state/
+rm -rf .team/state/
 ```
