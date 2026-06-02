@@ -230,11 +230,14 @@ enum Command {
     Gc,
 
     // ── Attach / exec ────────────────────────────────────────────────
-    /// Attach to an agent's tmux session (read-only by default).
+    /// Attach to an agent's tmux session (read-write by default).
     Attach {
         target: String,
-        /// Allow keyboard input. Dangerous — confirms before attaching.
+        /// Attach read-only — observe the session without sending keystrokes.
         #[arg(long)]
+        ro: bool,
+        /// Accepted for back-compat; read-write is now the default (no-op).
+        #[arg(long, hide = true)]
         rw: bool,
     },
     /// Run a command in an agent's CWD with its env loaded.
@@ -498,7 +501,7 @@ fn main() -> Result<()> {
             BridgeAction::Ls => cmd::bridge::list(&root),
             BridgeAction::Log { id } => cmd::bridge::log(&root, id),
         },
-        Command::Attach { target, rw } => cmd::attach::run(&root, &target, rw),
+        Command::Attach { target, ro, rw: _ } => cmd::attach::run(&root, &target, ro),
         Command::Exec { target, argv } => cmd::exec::run(&root, &target, &argv),
         Command::Shell { target } => cmd::exec::shell(&root, &target),
         Command::Env { doctor } => cmd::env::run(&root, doctor),

@@ -74,7 +74,7 @@ fn validate_passes_on_clean_compose() {
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("1 project"), "got: {stdout}");
-    assert!(stdout.contains("2 agents"), "got: {stdout}");
+    assert!(stdout.contains("2 agent sessions"), "got: {stdout}");
 }
 
 // ── T-325: init Stage 4 emits cascading role_prompt list form ───────────
@@ -151,7 +151,7 @@ workers:
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("1 project"), "got: {stdout}");
-    assert!(stdout.contains("2 agents"), "got: {stdout}");
+    assert!(stdout.contains("2 agent sessions"), "got: {stdout}");
 }
 
 #[test]

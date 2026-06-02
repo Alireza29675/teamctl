@@ -43,6 +43,11 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// How often the team snapshot + detail-pane capture get refreshed.
 /// PR-UI-2 polls; PR-UI-3 may upgrade to event subscriptions.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+/// How often the *focused* agent's pane is re-captured on its own. The
+/// full 1s refresh is too slow for the detail view to feel live, so we
+/// re-capture just the one focused pane this often between refreshes —
+/// a single `tmux capture-pane`, cheap enough to run ~10×/s.
+const PANE_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
@@ -117,6 +122,9 @@ pub struct App {
     /// Last time the snapshot + pane capture were refreshed. Used by
     /// `tick()` to gate the next refresh.
     pub last_refresh: Instant,
+    /// Last time the focused agent's pane was re-captured on the fast
+    /// `PANE_REFRESH_INTERVAL` cadence (between full refreshes).
+    pub last_pane_refresh: Instant,
     pub running: bool,
     /// First-launch detection — when the marker file exists, future
     /// stacked-PRs (PR-UI-7) skip the tutorial after splash. PR-UI-1
@@ -289,6 +297,7 @@ impl App {
             capabilities: detect_capabilities(),
             splash_started: Instant::now(),
             last_refresh: Instant::now() - REFRESH_INTERVAL,
+            last_pane_refresh: Instant::now(),
             running: true,
             tutorial_completed: tutorial::is_completed(),
             mailbox_tab: MailboxTab::Inbox,
@@ -1061,6 +1070,7 @@ pub fn refresh<P: PaneSource, M: MailboxSource, A: ApprovalSource>(
     refresh_mailbox(app, mailbox_source);
     refresh_approvals(app, approval_source);
     app.last_refresh = Instant::now();
+    app.last_pane_refresh = Instant::now();
 }
 
 /// Approvals-only refresh. Extracted on the same shape as
@@ -1164,9 +1174,26 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
             if app.team.root != prior_root {
                 watch = Watch::try_new(&app.team.root.join("state"));
             }
+        } else if app.last_pane_refresh.elapsed() >= PANE_REFRESH_INTERVAL {
+            // Between full refreshes, keep the detail view live by
+            // re-capturing just the focused agent's pane.
+            recapture_focused_pane(&mut app, &pane_source);
         }
     }
     Ok(())
+}
+
+/// Fast-cadence re-capture of only the focused agent's tmux pane, so
+/// the detail view tracks the live session between the heavier 1s full
+/// refreshes. A single `capture-pane` subprocess — no team / mailbox /
+/// approval / sysinfo work. No-op when no agent is focused.
+fn recapture_focused_pane<P: PaneSource>(app: &mut App, pane_source: &P) {
+    if let Some(session) = app.focused_session().map(|s| s.to_string()) {
+        if let Ok(lines) = pane_source.capture(&session) {
+            app.set_detail_buffer(lines);
+        }
+    }
+    app.last_pane_refresh = Instant::now();
 }
 
 /// T-199: push the focused agent's inner tmux pane to match the
@@ -1199,7 +1226,18 @@ pub fn sync_focused_pane_size_to<R: crate::pane_resize::PaneResizer>(
     let Some(session) = app.focused_session().map(|s| s.to_string()) else {
         return;
     };
-    let target = (detail.width, detail.height);
+    // `render_detail` wraps the captured pane in a bordered block with a
+    // top title (Borders::ALL + `.title(...)`), so it draws into an inner
+    // rect 2 cols and 2 rows smaller than `detail`. Size the tmux pane to
+    // that INNER area — sizing to the outer rect makes the agent reflow to
+    // N rows while we only render N-2, leaving an empty gap at the bottom
+    // and nudging the first line down a row.
+    let inner_w = detail.width.saturating_sub(2);
+    let inner_h = detail.height.saturating_sub(2);
+    if inner_w == 0 || inner_h == 0 {
+        return;
+    }
+    let target = (inner_w, inner_h);
     if !crate::pane_resize::should_sync(&app.last_synced_pane_sizes, &session, target) {
         return;
     }
@@ -1235,6 +1273,7 @@ fn refresh_with_default_sources<P: PaneSource>(app: &mut App, pane_source: &P) {
     app.sysinfo.refresh_cpu_usage();
     app.sysinfo.refresh_memory();
     app.last_refresh = Instant::now();
+    app.last_pane_refresh = Instant::now();
 }
 
 pub fn draw(f: &mut Frame<'_>, app: &App) {
@@ -2074,10 +2113,22 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
             // sends SIGINT to the agent rather than bailing out of
             // the mode they just entered.
             Stage::StreamKeys => {
-                if matches!(k.code, KeyCode::Char('e') | KeyCode::Char('E'))
-                    && k.modifiers.contains(KeyModifiers::CONTROL)
-                {
+                let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+                let ctrl_shift = k
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+                if ctrl && matches!(k.code, KeyCode::Char('e') | KeyCode::Char('E')) {
                     app.exit_stream_keys();
+                } else if ctrl_shift && matches!(k.code, KeyCode::Up) {
+                    // Ctrl+Shift+↑/↓ switches which agent receives
+                    // keystrokes without leaving stream-keys mode. The
+                    // banner, the detail pane, and the stream target all
+                    // follow the new selection, so the next key lands on
+                    // it. (Ctrl+↑/↓ alone is reserved by macOS Mission
+                    // Control, so the switch chord adds Shift.)
+                    app.select_prev();
+                } else if ctrl_shift && matches!(k.code, KeyCode::Down) {
+                    app.select_next();
                 } else if let Some(session) = app.stream_target_session() {
                     if let Some(encoded) = encode_key(k) {
                         // Best-effort: a tmux failure (session
@@ -3760,8 +3811,8 @@ mod tests {
         // session (mgr) at the typical 120×40 Triptych Detail rect.
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "t-hello-mgr");
-        assert_eq!(calls[0].1, 92); // Detail width = 120 - 28 sidebar
-        assert_eq!(calls[0].2, 24); // Detail height = 3/5 of 40
+        assert_eq!(calls[0].1, 90); // inner = (120 - 28 sidebar) - 2 border
+        assert_eq!(calls[0].2, 22); // inner = (3/5 of 40) - 2 border
     }
 
     #[test]
@@ -3799,11 +3850,11 @@ mod tests {
         );
         let calls = resizer.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].1, 92);
-        assert_eq!(calls[0].2, 24);
-        assert_eq!(calls[1].1, 172); // 200 - 28
-                                     // Height = 3/5 of 60 = 36.
-        assert_eq!(calls[1].2, 36);
+        assert_eq!(calls[0].1, 90); // (120 - 28) - 2 border
+        assert_eq!(calls[0].2, 22); // (3/5 of 40) - 2 border
+        assert_eq!(calls[1].1, 170); // (200 - 28) - 2 border
+                                     // Height = (3/5 of 60) - 2 border = 34.
+        assert_eq!(calls[1].2, 34);
     }
 
     #[test]
@@ -3885,9 +3936,10 @@ mod tests {
             &resizer,
         );
         let calls = resizer.calls.lock().unwrap();
-        // Stripe consumes one row → Detail height is 3/5 of 39 = 23.
+        // Stripe consumes one row → Detail height 3/5 of 39 = 23 outer,
+        // minus 2 border = 21 inner.
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].2, 23);
+        assert_eq!(calls[0].2, 21);
     }
 
     // T-131 PR-2: mailbox filter/search input-mode integration tests.

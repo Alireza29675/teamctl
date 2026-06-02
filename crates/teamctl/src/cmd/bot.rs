@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -40,6 +40,17 @@ pub enum BotAction {
 
 // ── Setup wizard ────────────────────────────────────────────────────
 
+/// Wrap `s` in an ANSI SGR code when stdout is a terminal; plain text
+/// otherwise (piped/redirected stays clean). House convention — raw codes
+/// gated on `is_terminal()`, same as warn.rs / init.rs.
+fn styled(code: &str, s: &str) -> String {
+    if io::stdout().is_terminal() {
+        format!("\x1b[{code}m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
+}
+
 fn setup(root: &Path, force: bool, only_manager: Option<String>) -> Result<()> {
     source_env_files(root);
     let compose = super::load(root)?;
@@ -50,8 +61,15 @@ fn setup(root: &Path, force: bool, only_manager: Option<String>) -> Result<()> {
         return Ok(());
     }
 
-    println!("teamctl bot setup");
-    println!("─────────────────");
+    // No redundant "teamctl bot setup" heading (the operator just typed it).
+    // A grey italic note on scope instead.
+    println!(
+        "{}",
+        styled(
+            "3;90",
+            "Only Telegram is supported in this version — more interfaces are on the way."
+        )
+    );
 
     // Fork at the top: managed bots (one manager bot spawns the per-agent
     // child bots) vs manual token (the original BotFather-per-manager
@@ -80,10 +98,20 @@ fn choose_setup_mode(forced_manual: bool) -> Result<SetupMode> {
         return Ok(SetupMode::Manual);
     }
     println!("\nHow do you want to set up Telegram bots?");
-    println!("  1) Manual token — paste a BotFather token for each manager (the original flow)");
-    println!("  2) Managed bots — one manager bot spawns a child bot per agent (needs a manager bot with Managed Bots enabled; the Telegram-side bot creation is rougher)");
+    println!(
+        "  1) Manual token — paste a BotFather token for each manager {}",
+        styled("90", "(the original flow)")
+    );
+    println!(
+        "  2) Managed bots — one manager bot spawns a child bot per agent {}",
+        styled(
+            "90",
+            "(needs a manager bot with Managed Bots enabled; the Telegram-side bot creation is rougher)"
+        )
+    );
     loop {
-        match prompt("Choose [1/2]: ")?.trim() {
+        // Empty input (just Enter) defaults to 1, the manual flow.
+        match prompt("Choose [1/2] (default 1): ")?.trim() {
             "1" | "" => return Ok(SetupMode::Manual),
             "2" => return Ok(SetupMode::Managed),
             other => println!("  `{other}` — please enter 1 or 2."),
@@ -402,7 +430,10 @@ enum WizardOutcome {
 /// **resumable**: if `interfaces.telegram` is already in the YAML we
 /// reuse those env-var names; if either env value is already in `.env`
 /// we keep it (re-validating the token via `getMe`) and only prompt
-/// for what's still missing. `--force` re-asks for everything.
+/// for what's still missing. The confirm wording keys on whether
+/// `.env` actually holds values — declaring the env-var names in the
+/// template alone reads as a first-time setup, not a re-run.
+/// `--force` re-asks for everything.
 fn wizard_one(root: &Path, compose: &Compose, manager: &str, force: bool) -> Result<WizardOutcome> {
     let existing = manager_telegram(compose, manager);
     let (token_env, chats_env, env_names_chosen_by_user) = match &existing {
@@ -422,19 +453,21 @@ fn wizard_one(root: &Path, compose: &Compose, manager: &str, force: bool) -> Res
     }
 
     println!("\n── {manager} ──");
-    let prompt_msg = match (existing.is_some(), token_set, chats_set) {
-        (true, true, false) => format!(
+    let prompt_msg = match (token_set, chats_set) {
+        (true, false) => format!(
             "Resume Telegram setup for {manager}? Token already in {token_env}; \
              we'll just collect the chat id. [Y/n] "
         ),
-        (true, false, true) => format!(
+        (false, true) => format!(
             "Resume Telegram setup for {manager}? Chat id already in {chats_env}; \
              we'll just collect the token. [Y/n] "
         ),
-        (true, _, _) => format!(
+        // Only reachable under `--force`: the no-force fully-wired case
+        // early-returns above.
+        (true, true) => format!(
             "Re-run Telegram setup for {manager}? Existing env-var names will be reused. [Y/n] "
         ),
-        _ => format!("Set up Telegram bot for {manager}? [Y/n] "),
+        (false, false) => format!("Set up Telegram bot for {manager}? [Y/n] "),
     };
     if !confirm(&prompt_msg, true)? {
         println!("  skipped");
@@ -648,16 +681,18 @@ fn capture_line<R: BufRead>(mut reader: R) -> io::Result<String> {
 }
 
 /// Prompt for a secret (the Telegram bot token). On an interactive
-/// unix terminal the input is read with echo disabled — typed *and*
-/// pasted characters never appear in the terminal, scrollback, a
-/// screen-share, or a recording (T-314). The captured value is
-/// unaffected: echo is a display concern only.
+/// unix terminal the input is masked: each typed *or* pasted character
+/// echoes a single `*`, so the real token never appears in the
+/// terminal, scrollback, a screen-share, or a recording (T-314). The
+/// captured value is unaffected — masking is a display concern only.
+/// Backspace clears the whole entry (the token is pasted as a blob;
+/// re-pasting beats editing a hidden secret).
 ///
 /// Non-interactive stdin (pipe/redirect — tests, automation) has no
-/// terminal echo to suppress and `tcgetattr` would fail on a non-tty,
-/// so it falls back to a plain read. Non-unix also falls back; the CI
-/// matrix and supported install targets are POSIX, where the masking
-/// is effective.
+/// terminal to mask and `tcgetattr` would fail on a non-tty, so it
+/// falls back to a plain read. Non-unix also falls back; the CI matrix
+/// and supported install targets are POSIX, where the masking is
+/// effective.
 fn prompt_secret(msg: &str) -> Result<String> {
     print!("{msg}");
     io::stdout().flush().ok();
@@ -694,19 +729,55 @@ fn prompt_secret(msg: &str) -> Result<String> {
                 return Err(io::Error::last_os_error()).context("tcgetattr (mask token input)");
             }
             let _restore = RestoreEcho { fd, original: term };
-            // Clear ECHO only — keep ICANON (line editing + Enter) and
-            // ISIG (Ctrl-C) so it behaves like a normal password
-            // prompt, just silent.
-            term.c_lflag &= !libc::ECHO;
+            // Clear ECHO (we draw our own `*`) and ICANON (read
+            // byte-by-byte instead of line-buffered) while keeping ISIG
+            // so Ctrl-C still interrupts. The drop-guard restores every
+            // original flag on exit.
+            term.c_lflag &= !(libc::ECHO | libc::ICANON);
             if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &term) } != 0 {
-                return Err(io::Error::last_os_error())
-                    .context("tcsetattr disable echo (mask token input)");
+                return Err(io::Error::last_os_error()).context("tcsetattr mask token input");
             }
 
-            let value = capture_line(io::stdin().lock()).context("read stdin")?;
+            // Read raw bytes, echoing one `*` per printable byte.
+            // Backspace clears the whole entry (see fn docs). Enter
+            // finishes. We buffer the bytes verbatim and decode once at
+            // the end so a pasted token survives byte-for-byte, exactly
+            // as `capture_line` would have returned it.
+            use io::Read;
+            let mut stdin = io::stdin().lock();
+            let mut stdout = io::stdout();
+            let mut buf: Vec<u8> = Vec::new();
+            let mut byte = [0u8; 1];
+            loop {
+                if stdin.read(&mut byte).context("read stdin")? == 0 {
+                    break; // EOF — treat like Enter.
+                }
+                match byte[0] {
+                    // Enter (CR or LF): done.
+                    b'\r' | b'\n' => break,
+                    // Backspace / Delete: wipe the buffer and the
+                    // asterisks already drawn, then redraw the prompt.
+                    0x7f | 0x08 => {
+                        let drawn = buf.len();
+                        buf.clear();
+                        write!(stdout, "\r{msg}{}\r{msg}", " ".repeat(drawn)).ok();
+                        stdout.flush().ok();
+                    }
+                    // Printable: keep the byte, show a `*`.
+                    b if b >= 0x20 && b != 0x7f => {
+                        buf.push(b);
+                        write!(stdout, "*").ok();
+                        stdout.flush().ok();
+                    }
+                    // Other control bytes: ignore.
+                    _ => {}
+                }
+            }
             // The user's Enter wasn't echoed — advance the line so the
             // next output doesn't run onto the prompt text.
             println!();
+            let value =
+                String::from_utf8(buf).map_err(|e| anyhow!("token contains invalid UTF-8: {e}"))?;
             return Ok(value);
         }
     }

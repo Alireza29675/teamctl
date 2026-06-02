@@ -7,7 +7,7 @@ pub fn run(root: &Path) -> Result<()> {
     let errs = team_core::validate::validate(&compose);
     if errs.is_empty() {
         println!(
-            "ok · {} project{} · {} agent{}",
+            "ok · {} project{} · {} agent session{}",
             compose.projects.len(),
             if compose.projects.len() == 1 { "" } else { "s" },
             compose.agents().count(),

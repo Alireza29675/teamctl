@@ -1,16 +1,15 @@
 //! `teamctl attach <agent>` — attach to the agent's tmux session.
 //!
-//! Read-only by default. `--rw` allows input but requires retyping the
-//! agent name to confirm.
+//! Read-write by default: keystrokes go to the live agent. Pass `--ro`
+//! to attach read-only (observe without sending input).
 
-use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Result};
 use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
-pub fn run(root: &Path, target: &str, rw: bool) -> Result<()> {
+pub fn run(root: &Path, target: &str, ro: bool) -> Result<()> {
     let compose = super::load(root)?;
     let Some(handle) = compose.agents().find(|h| h.id() == target) else {
         bail!("no such agent: {target}");
@@ -26,27 +25,12 @@ pub fn run(root: &Path, target: &str, rw: bool) -> Result<()> {
             spec.tmux_session
         );
     }
-    if rw {
-        eprint!(
-            "⚠️  Attaching read/write to {target}. Keystrokes will be sent to the live agent.\n\
-             Type the agent id (`{target}`) to confirm: "
-        );
-        io::stderr().flush().ok();
-        let mut line = String::new();
-        io::stdin().lock().read_line(&mut line)?;
-        if line.trim() != target {
-            bail!("aborted — confirmation did not match");
-        }
-        let st = Command::new("tmux")
-            .args(["attach-session", "-t", &spec.tmux_session])
-            .status()?;
-        anyhow::ensure!(st.success(), "tmux attach exited {st}");
-    } else {
-        // Read-only attach — tmux supports it via `-r`.
-        let st = Command::new("tmux")
-            .args(["attach-session", "-r", "-t", &spec.tmux_session])
-            .status()?;
-        anyhow::ensure!(st.success(), "tmux attach exited {st}");
+    // `-r` makes tmux attach read-only; without it, keystrokes reach the agent.
+    let mut args = vec!["attach-session", "-t", spec.tmux_session.as_str()];
+    if ro {
+        args.insert(1, "-r");
     }
+    let st = Command::new("tmux").args(&args).status()?;
+    anyhow::ensure!(st.success(), "tmux attach exited {st}");
     Ok(())
 }
