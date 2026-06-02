@@ -1,0 +1,116 @@
+# projects/autonomous-prototyper.yaml — the ideation cell.
+#
+# Three agents. The human touches exactly one: the ideator. The
+# pessimist is the adversarial gate (it tries to kill every idea); the
+# prototyper (Codex) builds throwaways of approved ones. Two channels:
+# `ideation` (ideator ↔ pessimist) and `build` (ideator ↔ prototyper).
+#
+# The team works in `../workspace` — it reads the shipped `seed.md`,
+# writes the settled `direction.md`, queues vetted specs under `ideas/`,
+# and builds throwaway prototypes under `prototypes/`.
+
+version: 2
+
+project:
+  id: autonomous-prototyper
+  name: Autonomous Prototyper
+  # The team's work area. `seed.md` (shipped rough ideas) lives here; the
+  # ideator writes `direction.md` here in Phase (i); `ideas/` and
+  # `prototypes/` fill in at runtime. Nothing else has to change to
+  # repoint the hunt — just edit `seed.md`.
+  cwd: ../workspace
+
+channels:
+  # The vetting room. The ideator posts a candidate idea; the pessimist
+  # throws its kill-stack at it and posts back a killed/survived verdict.
+  - name: ideation
+    members: [ideator, pessimist]
+  # The build handoff. The ideator hands an approved idea's spec here;
+  # the prototyper builds a throwaway and reports what it proved.
+  - name: build
+    members: [ideator, prototyper]
+
+managers:
+  # The one human-facing agent. Phase (i): settles the hunt direction
+  # WITH you on Telegram and writes `direction.md`. Phase (ii): runs the
+  # never-sleeps hunt — research → generate → vet via the pessimist →
+  # surface survivors for your approval → spec approved ideas to the
+  # prototyper. It's a real worker agent (its own inbox), so the OS-cron
+  # cycle-poke (cron/) can wake it.
+  ideator:
+    display_name: "Ideator"
+    runtime: claude-code
+    model: claude-opus-4-8
+    role_prompt:
+      - roles/_base.md
+      - roles/_telegram.md
+      - roles/ideator.md
+    # The ideator's stack: research the market for real gaps, sanity-check
+    # that an idea isn't already everywhere, and turn an approved idea
+    # into a tight prototype spec.
+    subagents:
+      - subagents/product-researcher.md
+      - subagents/prior-art-checker.md
+      - subagents/prd-drafter.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    can_dm: [pessimist, prototyper]
+    can_broadcast: [ideation, build]
+    # Your 1:1 Telegram bot — the whole human surface for this team.
+    # `teamctl bot setup` fills these env vars in.
+    interfaces:
+      telegram:
+        bot_token_env: TEAMCTL_TG_IDEATOR_TOKEN
+        chat_ids_env: TEAMCTL_TG_IDEATOR_CHATS
+
+workers:
+  # The one worker, and the reason this isn't a brainstorm bot. Its
+  # default verdict on every idea is "this fails"; an idea passes only
+  # when it CAN'T find a credible kill. It runs in plan mode — read-only,
+  # it researches and judges but never builds — and carries the full
+  # kill-stack as per-agent sub-agents.
+  pessimist:
+    display_name: "Pessimist"
+    runtime: claude-code
+    model: claude-opus-4-8
+    role_prompt:
+      - roles/_base.md
+      - roles/pessimist.md
+    subagents:
+      - subagents/prior-art-checker.md
+      - subagents/feasibility-analyst.md
+      - subagents/product-researcher.md
+      - subagents/code-investigator.md
+    # Plan mode: the dissent posture. The pessimist can read and research
+    # the whole workspace but cannot write or build — its only output is a
+    # verdict. This is what keeps it a gate, not a second builder.
+    permission_mode: plan
+    autonomy: low_risk_only
+    reports_to: ideator
+    can_dm: [ideator]
+    can_broadcast: [ideation]
+
+  # The builder — and the other model family. It turns an approved idea's
+  # spec into a throwaway prototype, fast. By design it runs lighter-
+  # stacked: a Codex agent gets its role + native Codex tooling, but NOT
+  # the sub-agent / skill / hook stack (those are claude-only in v1 — see
+  # this example's README, "The cross-model parity gap"). It can still
+  # take a per-agent MCP server, which IS runtime-agnostic — e.g. to give
+  # it a tool the Claude side doesn't have:
+  #
+  #   mcps:
+  #     fetch:
+  #       command: uvx
+  #       args: [mcp-server-fetch]
+  prototyper:
+    display_name: "Prototyper"
+    runtime: codex
+    model: gpt-5-codex
+    role_prompt:
+      - roles/_base.md
+      - roles/prototyper.md
+    permission_mode: auto
+    autonomy: low_risk_only
+    reports_to: ideator
+    can_dm: [ideator]
+    can_broadcast: [build]
