@@ -1,6 +1,6 @@
 {
   "name": "teamctl",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Persistent AI agent teams, declared in YAML and launched from a chat with Claude. Walks you from no-teamctl-installed to a running team in one conversation, then stays useful for evolving the org afterwards.",
   "author": {
     "name": "teamctl",
