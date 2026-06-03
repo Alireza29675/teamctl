@@ -4,6 +4,31 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-03
+
+### Added
+
+- **Per-agent capability stacks.** Each agent can now declare its own
+  sub-agents, skills, hooks, and MCP servers directly in compose —
+  `subagents:` (rendered into Claude Code's `--agents`), `skills:` (mounted via
+  `--add-dir`), `hooks:` (merged into the agent's `settings.json`), and `mcps:`
+  (merged alongside the built-in `team` mailbox server). All additive, on top of
+  project- and user-level config; claude-only for hooks/sub-agents/skills,
+  runtime-agnostic for MCP. (#387, #388, #389, #391)
+- **The guided plugin reshaped around goals and capabilities.** `/teamctl:init`
+  now opens on your goal with pickable starters, presents the team as a
+  capability setup (each session's model, sub-agents, skills, hooks, and whether
+  it runs a `/loop`) rather than an org chart, iterates until you approve, and
+  emits the full per-agent capability stack on the fly. `/teamctl:adjust` gained
+  a verb for evolving that stack, so the mindset survives the first adjustment.
+  The plugin ships a capability catalog of dogfood-proven archetypes. (#418, #419)
+- **Ideate & Build template** for `teamctl init` — a compass + executor +
+  engineers shape for the idea→ship workflow, sub-agent-heavy. (#382)
+- **`teamctl init` previews the team shape and file tree** before scaffolding,
+  with refreshed next-steps. (#405)
+- **Richer `teamctl ui`** — a live detail pane and stream-keys agent switching.
+  (#407)
+
 ### Changed
 
 - Minimum supported Rust version raised from 1.78 to **1.86**. The locked
@@ -17,9 +42,8 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   declares its own higher MSRV of **1.88** — its ratatui 0.29 dep tree pulls
   `instability`/`darling`, which need 1.88 — independent of the CLI's 1.86 floor.
   (#397)
-- `teamctl bot setup` now leads with **manual token** as option 1 (the default
-  on a bare Enter) and **managed bots** as option 2 — the managed Telegram-side
-  bot creation is rougher, so new users aren't led down it first. (#366)
+- **`teamctl attach` defaults to read-write** and drops the confirm gate — attach
+  lands you straight in. (#408)
 - `teamctl up` now prints a short notice when it pre-accepts Claude Code's
   workspace trust for an agent's folder: it names the folders, the config file
   (`~/.claude.json`), and how to undo. `teamctl` no longer edits your Claude
@@ -28,16 +52,36 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
   this project" prompt (Enter enables the discovered servers), so a project
   `.mcp.json` no longer strands an unattended pane. A general fix for the whole
   startup-prompt class is tracked in #421.
+- `teamctl bot setup` now leads with **manual token** as option 1 (the default
+  on a bare Enter) and **managed bots** as option 2 — the managed Telegram-side
+  bot creation is rougher, so new users aren't led down it first. (#366)
+- **Templates are embedded via `include_dir`** instead of a hand-listed
+  `include_str!` set, so new template files can't be silently dropped from the
+  binary. (#396)
+- Telegram first-connect message simplified to a one-line greeting. (#381)
+- **Examples showcase curated and revamped** — trimmed to 7 examples, each
+  rebuilt around per-agent capability stacks, plus a cross-model product-team
+  example and an autonomous-prototyper showcase. (#406, #410, #412, #414, #415,
+  #416, #417)
+- README and docs site revamped around reproducibility and the hero path.
+  (#390, #392, #393, #401, #403, #404)
 
 ### Fixed
 
-- Headless `claude-code` agents no longer stall at startup on Claude's
+- **Headless `claude-code` agents no longer stall at startup** on Claude's
   "Quick safety check" / trust-folder dialog. The agent wrapper's auto-confirm
   watcher now dismisses it (accepting first-run trust for the agent's own
   working directory) so an unattended pane keeps running instead of waiting for
   a keystroke no one is there to press. The match is gated on a two-string
   co-occurrence so an agent that merely prints the phrase can't trigger a stray
   Enter. (#369 follow-up)
+- **Mailbox: privileged `kind='system'` is guarded on UPDATE paths**, so a
+  message can't be silently elevated to system after insert. (#409)
+- `teamctl ui` stream-keys forwards Esc to the pane; Ctrl+E exits. (#378)
+- The splash-screen snapshot redacts the version token, so version bumps no
+  longer break CI. (#379)
+- Examples no longer instruct a manual `team-bot` launch that duplicates
+  `teamctl up` (a second poller caused a Telegram 409). (#413)
 
 ## [0.8.7] - 2026-06-01
 
