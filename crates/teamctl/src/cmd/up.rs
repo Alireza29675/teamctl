@@ -351,9 +351,27 @@ fn ensure_claude_trust_inner(compose: &Compose, project_id: Option<&str>) -> Res
     fs::write(&tmp, serde_json::to_string_pretty(&config)?)?;
     fs::rename(&tmp, &config_path)?;
 
-    for path in newly_trusted {
-        eprintln!("trust · auto-accepted Claude Code workspace trust for {path}");
+    // Transparency: editing the user's Claude Code config on their behalf is
+    // not something we do silently. Tell them — at `up`, where a human is at
+    // the terminal — exactly which folders we marked trusted and where, and
+    // why. (This is a notice, not a prompt: agent panes stay non-interactive.)
+    // User-facing copy: no em-dash (owner house style); singular/plural agree.
+    // Wording is neda's polish pass (msg 1634).
+    let n = newly_trusted.len();
+    let folder_word = if n == 1 { "folder" } else { "folders" };
+    let delete_phrase = if n == 1 { "that key" } else { "those keys" };
+    eprintln!();
+    eprintln!("trust · marked {n} {folder_word} trusted in your Claude Code config");
+    eprintln!("        so agents don't stall on Claude's \"trust this folder\" prompt:");
+    for path in &newly_trusted {
+        eprintln!("          • {path}");
     }
+    eprintln!(
+        "        config: {} (key: hasTrustDialogAccepted)",
+        config_path.display()
+    );
+    eprintln!("        running `teamctl up` granted this trust; delete {delete_phrase} to undo.");
+    eprintln!();
     Ok(())
 }
 
@@ -579,12 +597,28 @@ mod tests {
         );
     }
 
+    /// The auto-confirm watcher dismisses the one-shot dialogs that would
+    /// otherwise strand a headless pane. `Quick safety check:` is the
+    /// first-run trust-folder prompt that `--permission-mode auto` (the
+    /// headless default since 0.8.7) raises — the watcher didn't match it,
+    /// so an auto session froze at boot whenever the pre-trust missed. It
+    /// is a one-time trust gate, not `auto`'s risky-action classifier, so
+    /// accepting it keeps the safety gate intact; the watcher must never
+    /// match `auto`'s risky-action prompts. Because the header is ordinary
+    /// prose, the watcher requires it to co-occur with the menu line
+    /// `trust this folder` before sending Enter — pin both so a future edit
+    /// can't drop the co-occurrence guard and reintroduce stray Enters. The
+    /// MCP-enable dialog is auto-accepted the same way (Enter enables the
+    /// discovered project MCP servers), gated on its own two-string
+    /// co-occurrence so prose can't trip it.
     #[test]
     fn wrapper_auto_confirm_patterns_present() {
         for marker in [
             "Loading development channels",
             "Bypass Permissions mode",
             "Stop and wait for limit to reset",
+            "Quick safety check:",
+            "MCP servers may execute code",
             "auto_confirm_known_dialogs",
         ] {
             assert!(
@@ -592,6 +626,20 @@ mod tests {
                 "DEFAULT_WRAPPER missing marker: {marker}",
             );
         }
+        // The trust-folder and MCP-enable dialogs must each be gated on a
+        // two-string co-occurrence, not a bare match: both greps per dialog
+        // must be present in the watcher.
+        assert!(
+            DEFAULT_WRAPPER.contains("grep -q 'Quick safety check:'")
+                && DEFAULT_WRAPPER.contains("grep -q 'trust this folder'"),
+            "watcher must require 'Quick safety check:' AND 'trust this folder' to co-occur",
+        );
+        assert!(
+            DEFAULT_WRAPPER.contains("grep -q 'MCP servers may execute code'")
+                && DEFAULT_WRAPPER.contains("grep -q 'Enter to confirm · Esc'"),
+            "watcher must require 'MCP servers may execute code' AND the 'Enter to confirm · Esc' \
+             footer chrome to co-occur",
+        );
     }
 
     /// #383 Phase 3a: the wrapper threads per-agent sub-agents via
@@ -795,5 +843,104 @@ mod tests {
         render_project_public(&compose, "p").expect("render_project_public re-run");
         let got = std::fs::read_to_string(&concat).unwrap();
         assert_eq!(got, "BASE-v2\n\n—\n\nMGR");
+    }
+
+    /// Serializes the HOME-mutating test(s) in this binary; `$HOME` is
+    /// process-global, so a concurrent reader/writer would race.
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Point `$HOME` at `home` for the guard's lifetime, then restore it, so
+    /// the trust write lands in a throwaway `.claude.json`, never the real one.
+    struct HomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl HomeGuard {
+        fn set(home: &Path) -> Self {
+            let lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("HOME");
+            // SAFETY: HOME_LOCK serializes every HOME mutation in this binary,
+            // matching the `unsafe { set_var }` convention elsewhere in up.rs.
+            unsafe { std::env::set_var("HOME", home) };
+            Self { _lock: lock, prev }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: still holding HOME_LOCK (see `set`).
+            match &self.prev {
+                Some(v) => unsafe { std::env::set_var("HOME", v) },
+                None => unsafe { std::env::remove_var("HOME") },
+            }
+        }
+    }
+
+    /// `ensure_claude_trust` pre-accepts Claude's workspace-trust dialog by
+    /// writing `hasTrustDialogAccepted: true` under each claude-code agent's
+    /// cwd, and is a no-op on a second run (trust already on disk) so the `up`
+    /// notice doesn't nag on every restart.
+    #[test]
+    fn ensure_claude_trust_writes_key_then_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".team");
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        std::fs::write(
+            root.join("team-compose.yaml"),
+            r#"
+version: 2
+broker:
+  type: sqlite
+  path: state/mailbox.db
+supervisor:
+  type: tmux
+  tmux_prefix: a-
+projects:
+  - file: projects/hello.yaml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("projects/hello.yaml"),
+            r#"
+version: 2
+project:
+  id: hello
+  name: Hello
+  cwd: .
+managers:
+  manager:
+    runtime: claude-code
+    model: claude-opus-4-8
+"#,
+        )
+        .unwrap();
+        let compose = Compose::load(&root).expect("compose loads");
+
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let config_path = home.join(".claude.json");
+        let _guard = HomeGuard::set(&home);
+
+        // First run writes the trust key for the agent's (canonicalized) cwd.
+        ensure_claude_trust(&compose).expect("first ensure_claude_trust");
+        let cfg: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&config_path).expect("wrote .claude.json"),
+        )
+        .expect("config is valid json");
+        let key = root.canonicalize().unwrap().display().to_string();
+        assert_eq!(
+            cfg["projects"][&key]["hasTrustDialogAccepted"],
+            serde_json::Value::Bool(true),
+            "trust key must be written for the agent cwd; config: {cfg}",
+        );
+
+        // Second run is a no-op: trust is on disk, so nothing is rewritten
+        // (and the operator notice does not re-fire).
+        let before = std::fs::read_to_string(&config_path).unwrap();
+        ensure_claude_trust(&compose).expect("second ensure_claude_trust");
+        let after = std::fs::read_to_string(&config_path).unwrap();
+        assert_eq!(before, after, "second run must not rewrite the config");
     }
 }

@@ -20,6 +20,24 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 - `teamctl bot setup` now leads with **manual token** as option 1 (the default
   on a bare Enter) and **managed bots** as option 2 — the managed Telegram-side
   bot creation is rougher, so new users aren't led down it first. (#366)
+- `teamctl up` now prints a short notice when it pre-accepts Claude Code's
+  workspace trust for an agent's folder: it names the folders, the config file
+  (`~/.claude.json`), and how to undo. `teamctl` no longer edits your Claude
+  config silently.
+- Headless `claude-code` agents auto-accept Claude's "new MCP server(s) found in
+  this project" prompt (Enter enables the discovered servers), so a project
+  `.mcp.json` no longer strands an unattended pane. A general fix for the whole
+  startup-prompt class is tracked in #421.
+
+### Fixed
+
+- Headless `claude-code` agents no longer stall at startup on Claude's
+  "Quick safety check" / trust-folder dialog. The agent wrapper's auto-confirm
+  watcher now dismisses it (accepting first-run trust for the agent's own
+  working directory) so an unattended pane keeps running instead of waiting for
+  a keystroke no one is there to press. The match is gated on a two-string
+  co-occurrence so an agent that merely prints the phrase can't trigger a stray
+  Enter. (#369 follow-up)
 
 ## [0.8.7] - 2026-06-01
 
