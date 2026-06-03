@@ -89,13 +89,38 @@ log() {
 #     to extra usage, or upgrade. Default-highlighted option is
 #     "wait", which is the right choice for a supervised headless
 #     agent (operator can intervene manually for a different choice).
+#   - "Quick safety check:" (trust-folder) — fires on first launch in a
+#     directory claude hasn't trusted yet, under any permission mode that
+#     doesn't bypass permissions outright (e.g. `permission_mode: auto`,
+#     the headless default since 0.8.7). `teamctl up` normally pre-accepts
+#     this via ~/.claude.json, but that can miss when the launch cwd and
+#     the recorded key differ (symlinked paths). Default-highlighted
+#     option is "Yes, I trust this folder" and Enter confirms, so one
+#     Enter accepts it. This is a ONE-TIME trust gate for the agent's own
+#     working dir — NOT `auto`'s per-action safety classifier. We accept
+#     only this dialog; we deliberately never auto-Enter `auto`'s
+#     risky-action prompts, since doing so would approve risky actions
+#     unattended and defeat the very classifier `auto` exists to provide.
+#   - "New MCP server(s) found in this project" — fires when claude
+#     discovers project-scoped MCP servers (a `.mcp.json`) it hasn't been
+#     told to enable. Two shapes: a single-server radio menu (default
+#     option "Use this MCP server") and a multi-server checkbox list (all
+#     boxes pre-checked); in BOTH, Enter enables the server(s) — verified
+#     against claude 2.1.161. The owner opted to auto-accept this one
+#     silently for headless agents (no operator notice) so panes don't
+#     stall; the general fix for the whole prompt class is #421.
 #
 # The watcher polls our own tmux pane for any of these headers and
 # sends one Enter when matched, then sleeps 1s so the dialog clears
 # from the captured frame before the next poll (otherwise the same
-# match would re-fire). Patterns are anchored on text that only
-# appears inside these specific dialogs, so accidental matches
-# against legitimate operator prompts are unlikely.
+# match would re-fire). The first three patterns are claude chrome
+# strings that don't occur in normal output. The trust and MCP dialogs
+# are matched on a two-string co-occurrence rather than a single header,
+# so an agent that merely *prints* one of the phrases can't trigger a
+# stray Enter: trust needs "Quick safety check:" AND "trust this folder";
+# MCP needs "MCP servers may execute code" AND the footer chrome
+# "Enter to confirm · Esc" (the interpunct footer doesn't occur in prose,
+# so an agent discussing MCP security can't collide with it).
 #
 # The watcher runs for the full lifetime of the runtime (the limit
 # prompt can fire at any point, not only at boot) and is reaped by
@@ -106,8 +131,13 @@ auto_confirm_known_dialogs() {
     [ -z "$pane" ] && return 0
     command -v tmux >/dev/null 2>&1 || return 0
     while :; do
-        if tmux capture-pane -t "$pane" -p 2>/dev/null \
-            | grep -qE 'Loading development channels|Bypass Permissions mode|Stop and wait for limit to reset'; then
+        frame=$(tmux capture-pane -t "$pane" -p 2>/dev/null)
+        if printf '%s\n' "$frame" \
+            | grep -qE 'Loading development channels|Bypass Permissions mode|Stop and wait for limit to reset' \
+            || { printf '%s\n' "$frame" | grep -q 'Quick safety check:' \
+                 && printf '%s\n' "$frame" | grep -q 'trust this folder'; } \
+            || { printf '%s\n' "$frame" | grep -q 'MCP servers may execute code' \
+                 && printf '%s\n' "$frame" | grep -q 'Enter to confirm · Esc'; }; then
             tmux send-keys -t "$pane" Enter
             sleep 1
             continue
