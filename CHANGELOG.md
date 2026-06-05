@@ -4,6 +4,18 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+### Fixed
+
+- **Headless agents no longer freeze on Claude's "New MCP server found in this
+  project" prompt.** The rendered settings now pre-trust every project-scoped
+  MCP server (`enableAllProjectMcpServers`), so discovering a `.mcp.json` server
+  on a fresh session, or after `update` introduces a new one, no longer strands
+  an unattended pane waiting on a confirmation no one can give. Attended sessions
+  skip the rendered settings, so a human at the terminal still sees and answers
+  the prompt. Existing frozen agents need a `reload` (or `down`/`up`) to pick up
+  the setting, since `update` swaps the binary without restarting live panes.
+  (#421)
+
 ## [0.9.0] - 2026-06-03
 
 ### Added
