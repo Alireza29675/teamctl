@@ -19,6 +19,7 @@
 //! ask for them by name with `teamctl whatsnew <ver>`, but the raw
 //! fallback kicks in since their markdown shape isn't the convention.
 
+use std::io::IsTerminal;
 use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -40,9 +41,75 @@ const FLOOR_VERSION: &str = "0.8.0";
 /// #169 / T-169 alongside this PR).
 const CHANGELOG_URL: &str = "https://teamctl.run/changelog";
 
-/// ANSI escape opening italic + dim. Pairs with [`STYLE_RESET`].
-const STYLE_DIM_ITALIC: &str = "\x1b[2;3m";
+/// ANSI SGR codes for the styled "what's new" output. Emitted only when
+/// [`use_color`] is true (stdout is a TTY and `NO_COLOR` is unset);
+/// otherwise the markdown is printed plain with span punctuation stripped.
+const STYLE_BOLD: &str = "\x1b[1m";
+/// Cyan — restrained accent for inline `code` spans.
+const STYLE_CODE: &str = "\x1b[36m";
 const STYLE_RESET: &str = "\x1b[0m";
+
+/// Render one line of the curated markdown subset for the terminal:
+/// `**bold**` and `` `code` `` inline spans. With `color` on, spans get
+/// ANSI (bold / cyan); a `` `code` `` span nested inside `**bold**` —
+/// the common release-body shape, e.g. ``**`teamctl init` is out.**`` —
+/// renders bold+cyan, and the bold resumes after it. With `color` off the
+/// `**`/backtick punctuation is stripped so plain output carries no
+/// markdown noise. Unterminated markers are left verbatim — there's no
+/// span to close.
+fn style_inline(line: &str, color: bool) -> String {
+    style_runs(line, color, "")
+}
+
+/// Inner worker for [`style_inline`]. `base` is the SGR of the enclosing
+/// span (`STYLE_BOLD` when recursing into a `**bold**` body), re-emitted
+/// after each nested span's `STYLE_RESET` so the outer style resumes; it is
+/// empty at the top level. A bold span's body is processed recursively so a
+/// `` `code` `` nested inside it is styled rather than leaked verbatim.
+fn style_runs(line: &str, color: bool, base: &str) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while !rest.is_empty() {
+        // **bold** — body may itself contain `code` spans.
+        if let Some(after) = rest.strip_prefix("**") {
+            if let Some(end) = after.find("**") {
+                let (inner, tail) = after.split_at(end);
+                if color {
+                    out.push_str(STYLE_BOLD);
+                    out.push_str(&style_runs(inner, color, STYLE_BOLD));
+                    out.push_str(STYLE_RESET);
+                    out.push_str(base);
+                } else {
+                    out.push_str(&style_runs(inner, color, base));
+                }
+                rest = &tail[2..]; // skip the closing `**`
+                continue;
+            }
+        }
+        // `code` — content is literal; never recurse into it.
+        if let Some(after) = rest.strip_prefix('`') {
+            if let Some(end) = after.find('`') {
+                let (inner, tail) = after.split_at(end);
+                if color {
+                    out.push_str(STYLE_CODE);
+                    out.push_str(inner);
+                    out.push_str(STYLE_RESET);
+                    out.push_str(base); // resume the enclosing style (e.g. bold)
+                } else {
+                    out.push_str(inner);
+                }
+                rest = &tail[1..]; // skip the closing backtick
+                continue;
+            }
+        }
+        // Default: copy one char and advance (markers are ASCII, so the
+        // byte arithmetic above always lands on a char boundary).
+        let ch = rest.chars().next().unwrap();
+        out.push(ch);
+        rest = &rest[ch.len_utf8()..];
+    }
+    out
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Entry {
@@ -278,7 +345,7 @@ fn is_three_part_semver(s: &str) -> bool {
 /// aggregate. The body is pre-truncated at the first cargo-dist
 /// install heading so install tables / sha256 hex don't bury the
 /// curated voice piece (see #197).
-fn render_body(body: &str) -> String {
+fn render_body(body: &str, color: bool) -> String {
     let body = truncate_at_cargo_dist(body);
     let entries = parse_release_body(body);
     if entries.is_empty() {
@@ -286,9 +353,26 @@ fn render_body(body: &str) -> String {
         if trimmed.is_empty() {
             return String::new();
         }
+        // Two flavors of "no `# ` entries":
+        //  - Non-convention markdown (`##` sub-headings or code fences —
+        //    most often a cargo-dist auto-body): emit verbatim, never
+        //    styled. It may carry fences, install hex, richer markdown we
+        //    must not touch.
+        //  - Flat curated prose (emoji + inline `**bold**` / `` `code` ``,
+        //    no headings — the shape recent release bodies actually use):
+        //    style the inline spans per line so the markdown never shows
+        //    raw. This is the common owner-facing path.
+        if has_non_convention_markdown(trimmed) {
+            let mut out = String::new();
+            out.push_str(trimmed);
+            out.push('\n');
+            return out;
+        }
         let mut out = String::new();
-        out.push_str(trimmed);
-        out.push('\n');
+        for line in trimmed.lines() {
+            out.push_str(&style_inline(line, color));
+            out.push('\n');
+        }
         return out;
     }
     let mut out = String::new();
@@ -296,13 +380,20 @@ fn render_body(body: &str) -> String {
         if i > 0 {
             out.push('\n');
         }
-        out.push_str(&e.headline);
+        // Headline — bold, with any inline markdown punctuation stripped
+        // from the text so it never shows literally.
+        if color {
+            out.push_str(STYLE_BOLD);
+            out.push_str(&style_inline(&e.headline, false));
+            out.push_str(STYLE_RESET);
+        } else {
+            out.push_str(&style_inline(&e.headline, false));
+        }
         out.push('\n');
+        // Description lines — inline `**bold**` / `` `code` `` spans styled.
         for line in e.description.lines() {
             out.push_str("  ");
-            out.push_str(STYLE_DIM_ITALIC);
-            out.push_str(line);
-            out.push_str(STYLE_RESET);
+            out.push_str(&style_inline(line, color));
             out.push('\n');
         }
     }
@@ -337,9 +428,9 @@ fn footer_line() -> String {
 /// Empty body (or body truncated to empty by cargo-dist stripping)
 /// elides the body+blank-line so the output is `frame + footer` with
 /// exactly one blank line between, not two.
-pub fn render(version: &str, body: &str) -> String {
+pub fn render(version: &str, body: &str, color: bool) -> String {
     let mut out = frame_single(version);
-    let body_rendered = render_body(body);
+    let body_rendered = render_body(body, color);
     if !body_rendered.is_empty() {
         out.push_str(&body_rendered);
         out.push('\n');
@@ -354,14 +445,14 @@ pub fn render(version: &str, body: &str) -> String {
 /// the bottom. Entries should be ordered oldest-first. Empty per-entry
 /// bodies (post-truncation) elide their blank-line so we don't ship
 /// double-blank gaps between subheaders.
-pub(crate) fn render_range(from: &str, to: &str, entries: &[ReleaseEntry]) -> String {
+pub(crate) fn render_range(from: &str, to: &str, entries: &[ReleaseEntry], color: bool) -> String {
     let mut out = frame_range(from, to);
     for (i, e) in entries.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
         out.push_str(&format!("v{}\n", e.version.trim_start_matches('v')));
-        let body_rendered = render_body(&e.body);
+        let body_rendered = render_body(&e.body, color);
         if !body_rendered.is_empty() {
             out.push_str(&body_rendered);
         }
@@ -386,8 +477,9 @@ pub fn fallback_link(version: &str) -> String {
 /// Callers that want a leading blank line (post-install visual gap)
 /// should emit it themselves; this function prints the block as-is.
 pub fn print_for(version: &str) {
+    let color = crate::term::use_color(std::io::stdout().is_terminal());
     match fetch_release_body(version) {
-        Ok(body) => print!("{}", render(version, &body)),
+        Ok(body) => print!("{}", render(version, &body, color)),
         Err(_) => println!("{}", fallback_link(version)),
     }
 }
@@ -445,15 +537,17 @@ pub fn print_since(from: &str, to: &str) {
         print_target_inline(&entries[0].version);
         return;
     }
-    print!("{}", render_range(&display_from, to, &entries));
+    let color = crate::term::use_color(std::io::stdout().is_terminal());
+    print!("{}", render_range(&display_from, to, &entries, color));
 }
 
 /// Helper used by `print_since` when the list-endpoint path can't
 /// produce a range — fetches and prints just the target's body, or
 /// the quiet fallback line if even that fails.
 fn print_target_inline(version: &str) {
+    let color = crate::term::use_color(std::io::stdout().is_terminal());
     match fetch_release_body(version) {
-        Ok(body) => print!("{}", render(version, &body)),
+        Ok(body) => print!("{}", render(version, &body, color)),
         Err(_) => println!("{}", fallback_link(version)),
     }
 }
@@ -601,19 +695,231 @@ mod tests {
     }
 
     #[test]
-    fn render_frames_version_and_styles_descriptions() {
-        let body = "# Headline\nLine one.\nLine two.\n";
-        let rendered = render("0.8.0", body);
+    fn render_styles_headline_and_inline_spans_when_color() {
+        let body = "# Headline\nUse **bold** and `code` here.\n";
+        let rendered = render("0.8.0", body, true);
         assert!(rendered.starts_with("✨ What's new in v0.8.0\n\n"));
+        // Headline rendered bold.
+        assert!(
+            rendered.contains("\x1b[1mHeadline\x1b[0m\n"),
+            "headline should be bold: {rendered:?}"
+        );
+        // Inline spans styled, with the markdown punctuation consumed.
+        assert!(rendered.contains("\x1b[1mbold\x1b[0m"), "got: {rendered:?}");
+        assert!(
+            rendered.contains("\x1b[36mcode\x1b[0m"),
+            "got: {rendered:?}"
+        );
+        assert!(!rendered.contains("**bold**"));
+        assert!(!rendered.contains("`code`"));
+        // Description indented two spaces, as before.
+        assert!(rendered.contains("  Use \x1b[1mbold\x1b[0m"));
+    }
+
+    #[test]
+    fn render_plain_when_no_color_strips_markdown_punctuation() {
+        let body = "# Headline\nUse **bold** and `code` here.\n";
+        let rendered = render("0.8.0", body, false);
+        assert!(rendered.starts_with("✨ What's new in v0.8.0\n\n"));
+        // No ANSI anywhere on the plain path.
+        assert!(
+            !rendered.contains('\x1b'),
+            "no escapes when plain: {rendered:?}"
+        );
+        // Headline present, plain.
         assert!(rendered.contains("Headline\n"));
-        assert!(rendered.contains("  \x1b[2;3mLine one.\x1b[0m"));
-        assert!(rendered.contains("  \x1b[2;3mLine two.\x1b[0m"));
+        // Span text survives; the `**`/backtick punctuation does not.
+        assert!(rendered.contains("  Use bold and code here.\n"));
+        assert!(!rendered.contains("**"));
+        assert!(!rendered.contains('`'));
+    }
+
+    // ── Flat curated prose (no `# ` headings) — the real release shape ──
+
+    #[test]
+    fn render_styles_flat_prose_inline_spans_when_color() {
+        // The shape recent release bodies (e.g. 0.9.0) actually use:
+        // emoji-led paragraphs with inline `**bold**` leads and `` `code` ``
+        // spans, NO `# ` headings. This is the owner's reported bug.
+        let body = "🎁 **Per-agent capabilities.** Files live in `.team/` now.\n";
+        let rendered = render("0.9.0", body, true);
+        assert!(rendered.starts_with("✨ What's new in v0.9.0\n\n"));
+        assert!(
+            rendered.contains("🎁 \x1b[1mPer-agent capabilities.\x1b[0m"),
+            "bold lead-in should be styled: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("\x1b[36m.team/\x1b[0m"),
+            "got: {rendered:?}"
+        );
+        // The raw markdown punctuation must be gone.
+        assert!(!rendered.contains("**Per-agent"));
+        assert!(!rendered.contains("`.team/`"));
+    }
+
+    #[test]
+    fn render_flat_prose_plain_strips_punctuation_no_escapes() {
+        let body = "🎁 **Per-agent capabilities.** Files live in `.team/` now.\n";
+        let rendered = render("0.9.0", body, false);
+        // Body content, punctuation stripped, no ANSI.
+        assert!(rendered.contains("🎁 Per-agent capabilities. Files live in .team/ now."));
+        assert!(
+            !rendered.contains('\x1b'),
+            "plain path must have no escapes: {rendered:?}"
+        );
+        assert!(!rendered.contains("**"));
+        assert!(!rendered.contains('`'));
+    }
+
+    #[test]
+    fn render_non_convention_body_stays_verbatim() {
+        // A body with `##` sub-headings or code fences is NOT curated prose
+        // (cargo-dist / richer markdown). Even with `**`/backticks present,
+        // it must be emitted verbatim — never inline-styled or stripped.
+        let body = "## Subsection\nUse **bold** and `code` literally here.\n";
+        let rendered = render("0.8.0", body, true);
+        assert!(rendered.contains("## Subsection"));
+        assert!(
+            rendered.contains("**bold** and `code`"),
+            "non-convention body must stay verbatim: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains('\x1b'),
+            "no styling on the verbatim path: {rendered:?}"
+        );
+    }
+
+    // ── style_inline: the markdown→ANSI pass ───────────────────────
+
+    #[test]
+    fn style_inline_bold_span_when_color() {
+        assert_eq!(style_inline("a **b** c", true), "a \x1b[1mb\x1b[0m c");
+    }
+
+    #[test]
+    fn style_inline_code_span_when_color() {
+        assert_eq!(
+            style_inline("run `cmd` now", true),
+            "run \x1b[36mcmd\x1b[0m now"
+        );
+    }
+
+    #[test]
+    fn style_inline_strips_punctuation_when_plain() {
+        assert_eq!(style_inline("a **b** and `c`", false), "a b and c");
+    }
+
+    #[test]
+    fn style_inline_handles_multiple_and_mixed_spans() {
+        assert_eq!(
+            style_inline("**x** y `z` **w**", true),
+            "\x1b[1mx\x1b[0m y \x1b[36mz\x1b[0m \x1b[1mw\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn style_inline_leaves_unterminated_bold_verbatim() {
+        // No closing `**` → not a span; the marker stays literal.
+        assert_eq!(
+            style_inline("see **important note", true),
+            "see **important note"
+        );
+        assert_eq!(
+            style_inline("see **important note", false),
+            "see **important note"
+        );
+    }
+
+    #[test]
+    fn style_inline_leaves_unterminated_code_verbatim() {
+        assert_eq!(style_inline("a `b c", true), "a `b c");
+    }
+
+    #[test]
+    fn style_inline_single_asterisk_is_not_bold() {
+        // A lone `*` (e.g. a bullet or "2 * 3") is never a bold marker.
+        assert_eq!(style_inline("* item one", true), "* item one");
+        assert_eq!(style_inline("2 * 3 = 6", true), "2 * 3 = 6");
+    }
+
+    #[test]
+    fn style_inline_preserves_unicode_and_emoji() {
+        assert_eq!(
+            style_inline("✨ éclat **bold**", true),
+            "✨ éclat \x1b[1mbold\x1b[0m"
+        );
+        // Plain path keeps the unicode, drops the markers.
+        assert_eq!(style_inline("✨ éclat **bold**", false), "✨ éclat bold");
+    }
+
+    #[test]
+    fn style_inline_empty_bold_span_is_noop_text() {
+        // `****` → an empty bold span; emits the open/reset around nothing
+        // when colored, nothing when plain. Neither leaves stray markers.
+        assert_eq!(style_inline("****", true), "\x1b[1m\x1b[0m");
+        assert_eq!(style_inline("****", false), "");
+    }
+
+    #[test]
+    fn style_inline_plain_text_unchanged() {
+        assert_eq!(style_inline("just words here", true), "just words here");
+        assert_eq!(style_inline("", true), "");
+    }
+
+    #[test]
+    fn style_inline_code_nested_in_bold_when_color() {
+        // The dominant real release-body shape: a `code` span inside a
+        // **bold** lead. The code must be styled and NO raw backtick may
+        // reach the screen; the bold resumes after the code span.
+        let out = style_inline("**`teamctl init` is out**", true);
+        assert!(out.starts_with(STYLE_BOLD), "got: {out:?}");
+        assert!(
+            out.contains("\x1b[36mteamctl init\x1b[0m"),
+            "code styled: {out:?}"
+        );
+        assert!(
+            !out.contains('`'),
+            "no raw backtick on colored path: {out:?}"
+        );
+        assert!(
+            out.contains("\x1b[0m\x1b[1m is out"),
+            "bold resumes: {out:?}"
+        );
+    }
+
+    #[test]
+    fn style_inline_code_nested_in_bold_when_plain() {
+        // Plain path strips both the `**` and the inner backticks.
+        assert_eq!(
+            style_inline("**`teamctl init` is out**", false),
+            "teamctl init is out"
+        );
+    }
+
+    #[test]
+    fn style_inline_multiple_code_spans_in_one_bold() {
+        // 0.9.0's actual line shape: two code spans inside one bold lead.
+        let plain = style_inline("**`/teamctl:init` and `/teamctl:adjust`.**", false);
+        assert_eq!(plain, "/teamctl:init and /teamctl:adjust.");
+        let colored = style_inline("**`/teamctl:init` and `/teamctl:adjust`.**", true);
+        assert!(!colored.contains('`'), "no raw backtick: {colored:?}");
+        assert!(colored.contains("\x1b[36m/teamctl:init\x1b[0m"));
+        assert!(colored.contains("\x1b[36m/teamctl:adjust\x1b[0m"));
+    }
+
+    #[test]
+    fn style_inline_triple_asterisk_boundary_documented() {
+        // `***x***` is outside the curated convention (`**bold**` only).
+        // Pin the current behavior — the outer `**` matches and a stray
+        // inner `*` survives — so a future edit is intentional, not a
+        // surprise. Bold-italic isn't used in release bodies.
+        assert_eq!(style_inline("***x***", false), "*x*");
     }
 
     #[test]
     fn render_strips_v_prefix_in_header() {
         let body = "# H\nD.\n";
-        let rendered = render("v0.8.0", body);
+        let rendered = render("v0.8.0", body, false);
         assert!(rendered.starts_with("✨ What's new in v0.8.0\n\n"));
         assert!(!rendered.contains("vv0.8.0"));
     }
@@ -621,7 +927,7 @@ mod tests {
     #[test]
     fn render_falls_back_to_raw_for_non_conforming_body() {
         let body = "Older release with no structured convention.\nJust prose.\n";
-        let rendered = render("0.6.0", body);
+        let rendered = render("0.6.0", body, false);
         assert!(rendered.starts_with("✨ What's new in v0.6.0\n\n"));
         assert!(rendered.contains("Older release with no structured convention."));
         assert!(rendered.contains("Just prose."));
@@ -633,7 +939,7 @@ mod tests {
     #[test]
     fn render_separates_entries_with_blank_line() {
         let body = "# A\nDesc A.\n\n# B\nDesc B.\n";
-        let rendered = render("0.8.0", body);
+        let rendered = render("0.8.0", body, false);
         let a_idx = rendered.find("Desc A.").unwrap();
         let b_idx = rendered.find("B\n").unwrap();
         let between = &rendered[a_idx..b_idx];
@@ -646,7 +952,7 @@ mod tests {
 
     #[test]
     fn render_handles_empty_body() {
-        let rendered = render("0.8.0", "");
+        let rendered = render("0.8.0", "", false);
         assert!(rendered.starts_with("✨ What's new in v0.8.0\n\n"));
         assert!(rendered.contains("📖 Full changelog"));
     }
@@ -655,7 +961,7 @@ mod tests {
     fn render_empty_body_has_no_double_blank_before_footer() {
         // #201: empty body must produce `frame + blank + footer`,
         // never `frame + blank + blank + footer`.
-        let rendered = render("0.8.0", "");
+        let rendered = render("0.8.0", "", false);
         assert_eq!(
             rendered,
             "✨ What's new in v0.8.0\n\n📖 Full changelog: https://teamctl.run/changelog\n",
@@ -669,7 +975,7 @@ mod tests {
         // cargo-dist-only body down to empty, render() must not emit
         // a stray extra blank line.
         let body = "# teamctl 0.8.1\n## Install\n```sh\nnoise\n```\n";
-        let rendered = render("0.8.1", body);
+        let rendered = render("0.8.1", body, false);
         assert_eq!(
             rendered,
             "✨ What's new in v0.8.1\n\n📖 Full changelog: https://teamctl.run/changelog\n",
@@ -693,7 +999,7 @@ mod tests {
                 body: "# teamctl 0.8.2\n## Install\n".into(),
             },
         ];
-        let rendered = render_range("0.8.0", "0.8.2", &entries);
+        let rendered = render_range("0.8.0", "0.8.2", &entries, false);
         // Between the styled description of entry-1 and the v0.8.2
         // subheader, there must be exactly one blank line — i.e. the
         // pattern `\n\nv0.8.2\n`, and no `\n\n\nv0.8.2\n`.
@@ -709,7 +1015,7 @@ mod tests {
 
     #[test]
     fn render_appends_footer_line() {
-        let rendered = render("0.8.0", "# H\nD.\n");
+        let rendered = render("0.8.0", "# H\nD.\n", false);
         assert!(rendered.contains("📖 Full changelog: https://teamctl.run/changelog"));
         assert!(
             rendered.ends_with("https://teamctl.run/changelog\n"),
@@ -867,7 +1173,7 @@ mod tests {
                 body: "# H2\nD2.".into(),
             },
         ];
-        let rendered = render_range("0.8.0", "0.8.2", &entries);
+        let rendered = render_range("0.8.0", "0.8.2", &entries, false);
         assert!(rendered.starts_with("✨ What's new in v0.8.0 → v0.8.2\n\n"));
         assert!(rendered.contains("v0.8.1\nH1\n"));
         assert!(rendered.contains("v0.8.2\nH2\n"));
@@ -880,7 +1186,7 @@ mod tests {
             version: "v0.8.1".into(),
             body: "# H\nD.".into(),
         }];
-        let rendered = render_range("v0.8.0", "v0.8.1", &entries);
+        let rendered = render_range("v0.8.0", "v0.8.1", &entries, false);
         assert!(rendered.starts_with("✨ What's new in v0.8.0 → v0.8.1\n\n"));
         // No double-v leaking through anywhere.
         assert!(!rendered.contains("vv"));
@@ -900,7 +1206,7 @@ mod tests {
         ];
         // Frame uses v0.8.0 → v0.8.4 so the frame doesn't end in a
         // string that collides with our subheader search patterns.
-        let rendered = render_range("0.8.0", "0.8.4", &entries);
+        let rendered = render_range("0.8.0", "0.8.4", &entries, false);
         assert!(
             rendered.contains("\n\nv0.8.3\n"),
             "expected blank line before v0.8.3 subheader, got: {rendered:?}"
@@ -996,7 +1302,7 @@ mod tests {
     #[test]
     fn render_body_strips_cargo_dist_install_section() {
         let body = "# Curated headline\nDescription.\n\n# teamctl 0.8.1\n```sh\nnoise\n```\n";
-        let rendered = render_body(body);
+        let rendered = render_body(body, false);
         // The curated entry should render with style; the cargo-dist
         // tail must be gone.
         assert!(rendered.contains("Curated headline\n"));
@@ -1020,7 +1326,7 @@ mod tests {
                 body: "# B\nDesc B.".into(),
             },
         ];
-        let rendered = render_range("0.8.0", "0.8.2", &entries);
+        let rendered = render_range("0.8.0", "0.8.2", &entries, false);
         assert!(rendered.starts_with("✨ What's new in v0.8.0 → v0.8.2\n\n"));
         assert!(rendered.contains("\nv0.8.1\n"));
         assert!(rendered.contains("\n\nv0.8.2\n"));
