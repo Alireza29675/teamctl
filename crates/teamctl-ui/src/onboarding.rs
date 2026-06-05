@@ -26,7 +26,7 @@ pub const STEPS: &[Step] = &[
     },
     Step {
         heading: "Agents + state glyphs",
-        body: "Each agent shows a single-cell glyph: ● running · ✉ unread · ! approval pending · ✕ stopped · ? unknown. Tab to focus the Agents column, j/k to walk it.",
+        body: "Each agent shows a single-cell glyph: ● running · ! approval pending · ✕ stopped · ? unknown. Tab to focus the Agents column, j/k to walk it.",
     },
     Step {
         heading: "Detail pane",

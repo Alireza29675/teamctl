@@ -144,7 +144,8 @@ fn fixture_team(team_name: &str, agents: Vec<AgentInfo>) -> TeamSnapshot {
 #[test]
 fn agents_panel_renders_glyphs_at_120x30() {
     // The Agents sidebar pulls from `app.team.agents` with state-
-    // glyph mapping. Pin one of each glyph: running, working/unread,
+    // glyph mapping. Pin one of each glyph: running, running+unread
+    // (no longer a distinct glyph since #429 dropped `✉`),
     // pending-approval, stopped, unknown.
     let mut app = fresh_app();
     app.dismiss_splash();
