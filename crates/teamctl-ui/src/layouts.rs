@@ -98,7 +98,7 @@ fn render_tile(
     ascii: bool,
     app: &App,
 ) {
-    let glyph = state_glyph(info, ascii);
+    let glyph = state_glyph(info, ascii, app.now_secs);
     let label = crate::data::agent_label(&app.team, &info.id);
     let title = format!(" {glyph} {label} ");
     let border_style = if selected {

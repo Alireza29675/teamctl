@@ -3,8 +3,8 @@ source: crates/teamctl-ui/tests/snapshots.rs
 expression: buffer_to_string(&buf)
 ---
 ┌AGENTS────────────────────┐┌DETAIL · writing:manager──────────────────────────────────────────────────────────────────┐
-│ *  manager               ││[12:00] user: draft a release plan                                                        │
-│ *  worker-1              ││[12:01] assistant: Sure — I'll outline the cascade.                                       │
+│ o  manager               ││[12:00] user: draft a release plan                                                        │
+│ o  worker-1              ││[12:01] assistant: Sure — I'll outline the cascade.                                       │
 │                          ││[12:01] tool: teamctl validate                                                            │
 │                          ││                                                                                          │
 │                          ││                                                                                          │

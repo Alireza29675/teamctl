@@ -221,7 +221,7 @@ fn agent_line<'a>(
     ascii: bool,
     app: &App,
 ) -> Line<'a> {
-    let glyph = state_glyph(info, ascii);
+    let glyph = state_glyph(info, ascii, app.now_secs);
     // T-160: roster prefers the operator's display_name when set,
     // falling back to the YAML key (`info.agent`) — the canonical id
     // would over-prefix the project and is reserved for cross-project
@@ -414,7 +414,7 @@ fn render_split_cell(
         .agents
         .iter()
         .find(|a| a.id == agent_id)
-        .map(|info| crate::data::state_glyph(info, ascii))
+        .map(|info| crate::data::state_glyph(info, ascii, app.now_secs))
         .unwrap_or("?");
     let label = crate::data::agent_label(&app.team, agent_id);
     let title = format!(" {glyph} {label} ");

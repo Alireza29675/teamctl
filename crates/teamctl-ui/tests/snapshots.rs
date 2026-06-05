@@ -145,15 +145,19 @@ fn fixture_team(team_name: &str, agents: Vec<AgentInfo>) -> TeamSnapshot {
 #[test]
 fn agents_panel_renders_glyphs_at_120x30() {
     // The Agents sidebar pulls from `app.team.agents` with state-
-    // glyph mapping. Pin one of each glyph: running, running+unread
-    // (no longer a distinct glyph since #429 dropped `✉`),
-    // pending-approval, stopped, unknown.
+    // glyph mapping. Pin one of each glyph: #429 C2b working (fresh
+    // heartbeat → `●`/`*`), idle (no marker → `○`/`o`), pending-approval
+    // `!`, stopped `✕`/`x`, unknown `?`. `fresh_app()` leaves
+    // `now_secs = 0.0`, so a `last_activity_at` of `Some(-1.0)` is 1s
+    // "fresh" → working; `None` (synth_agent default) → idle.
     let mut app = fresh_app();
     app.dismiss_splash();
+    let mut manager = synth_agent("writing:manager", AgentState::Running, 0, 0);
+    manager.last_activity_at = Some(-1.0);
     app.replace_team(fixture_team(
         "writing-team",
         vec![
-            synth_agent("writing:manager", AgentState::Running, 0, 0),
+            manager,
             synth_agent("writing:worker-1", AgentState::Running, 3, 0),
             synth_agent("writing:worker-2", AgentState::Running, 0, 1),
             synth_agent("writing:critic", AgentState::Stopped, 0, 0),

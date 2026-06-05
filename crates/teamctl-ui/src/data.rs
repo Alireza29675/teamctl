@@ -568,10 +568,12 @@ pub fn is_working(last_activity_at: Option<f64>, now_unix: f64) -> bool {
 }
 
 /// Single-cell glyph for an agent's primary state — derived from
-/// (`state`, `pending_approvals`) in priority order: pending approval
-/// beats process state. Plain ASCII fallback when the caller signals a
+/// (`state`, `pending_approvals`, activity) in priority order: pending
+/// approval beats process state. A `Running` agent is further split by
+/// [`is_working`] against `now_unix` into working (filled `●`) vs idle
+/// (hollow `○`). Plain ASCII fallback when the caller signals a
 /// monochrome / no-symbol terminal.
-pub fn state_glyph(info: &AgentInfo, fallback_ascii: bool) -> &'static str {
+pub fn state_glyph(info: &AgentInfo, fallback_ascii: bool, now_unix: f64) -> &'static str {
     match info.state {
         AgentState::Stopped => {
             if fallback_ascii {
@@ -584,10 +586,16 @@ pub fn state_glyph(info: &AgentInfo, fallback_ascii: bool) -> &'static str {
         AgentState::Running => {
             if info.pending_approvals > 0 {
                 "!"
+            } else if is_working(info.last_activity_at, now_unix) {
+                if fallback_ascii {
+                    "*"
+                } else {
+                    "●"
+                }
             } else if fallback_ascii {
-                "*"
+                "o"
             } else {
-                "●"
+                "○"
             }
         }
     }
@@ -614,6 +622,15 @@ mod tests {
         }
     }
 
+    // #429 C2b: build a Running agent with an explicit activity marker
+    // so the working/idle split is exercised against a fixed `now`.
+    fn info_active(state: AgentState, last_activity_at: Option<f64>) -> AgentInfo {
+        AgentInfo {
+            last_activity_at,
+            ..info(state, 0, 0)
+        }
+    }
+
     #[test]
     fn is_working_classifies_at_the_15s_boundary() {
         // #428: strict `< 15s` => Working; absent or stale => Idle.
@@ -629,30 +646,75 @@ mod tests {
     }
 
     #[test]
-    fn state_glyph_priorities_pending_then_running() {
-        assert_eq!(state_glyph(&info(AgentState::Running, 0, 0), false), "●");
-        // #429: unread no longer surfaces a glyph — Running+unread
-        // renders the running glyph, not the dropped `✉`.
-        assert_eq!(state_glyph(&info(AgentState::Running, 3, 0), false), "●");
-        // pending approval still wins over process state.
-        assert_eq!(state_glyph(&info(AgentState::Running, 3, 1), false), "!");
+    fn state_glyph_priorities_pending_then_working_then_idle() {
+        let now = 1_000.0;
+        // #429 C2b: Running + fresh marker => working `●`.
+        assert_eq!(
+            state_glyph(&info_active(AgentState::Running, Some(now)), false, now),
+            "●"
+        );
+        // Running + absent or stale marker => idle `○`.
+        assert_eq!(
+            state_glyph(&info(AgentState::Running, 0, 0), false, now),
+            "○"
+        );
+        assert_eq!(
+            state_glyph(
+                &info_active(AgentState::Running, Some(now - 20.0)),
+                false,
+                now
+            ),
+            "○"
+        );
+        // Pending approval beats activity entirely (even when working).
+        let mut working_pending = info_active(AgentState::Running, Some(now));
+        working_pending.pending_approvals = 1;
+        assert_eq!(state_glyph(&working_pending, false, now), "!");
+        // #429 C2a regression: unread still surfaces no glyph — an idle
+        // agent with unread mail is still `○`, not the dropped `✉`.
+        assert_eq!(
+            state_glyph(&info(AgentState::Running, 3, 0), false, now),
+            "○"
+        );
     }
 
     #[test]
     fn state_glyph_stopped_and_unknown() {
-        assert_eq!(state_glyph(&info(AgentState::Stopped, 0, 0), false), "✕");
-        assert_eq!(state_glyph(&info(AgentState::Unknown, 0, 0), false), "?");
+        let now = 1_000.0;
+        assert_eq!(
+            state_glyph(&info(AgentState::Stopped, 0, 0), false, now),
+            "✕"
+        );
+        assert_eq!(
+            state_glyph(&info(AgentState::Unknown, 0, 0), false, now),
+            "?"
+        );
     }
 
     #[test]
     fn state_glyph_ascii_fallback() {
-        assert_eq!(state_glyph(&info(AgentState::Running, 0, 0), true), "*");
-        // #429: unread no longer surfaces a glyph in ASCII mode either.
-        assert_eq!(state_glyph(&info(AgentState::Running, 5, 0), true), "*");
-        assert_eq!(state_glyph(&info(AgentState::Stopped, 0, 0), true), "x");
+        let now = 1_000.0;
+        // working `*` / idle `o` pair under the Monochrome ASCII gate.
+        assert_eq!(
+            state_glyph(&info_active(AgentState::Running, Some(now)), true, now),
+            "*"
+        );
+        assert_eq!(
+            state_glyph(&info(AgentState::Running, 0, 0), true, now),
+            "o"
+        );
+        assert_eq!(
+            state_glyph(&info(AgentState::Stopped, 0, 0), true, now),
+            "x"
+        );
         // `!` and `?` are unchanged across the fallback boundary.
-        assert_eq!(state_glyph(&info(AgentState::Running, 0, 1), true), "!");
-        assert_eq!(state_glyph(&info(AgentState::Unknown, 0, 0), true), "?");
+        let mut working_pending = info_active(AgentState::Running, Some(now));
+        working_pending.pending_approvals = 1;
+        assert_eq!(state_glyph(&working_pending, true, now), "!");
+        assert_eq!(
+            state_glyph(&info(AgentState::Unknown, 0, 0), true, now),
+            "?"
+        );
     }
 
     // T-212: format_rate_limit_window covers the value-shape rules
