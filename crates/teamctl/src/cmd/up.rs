@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
 use team_core::render::{
-    claude_settings_path, env_path, mcp_path, render_agent, render_claude_settings,
-    write_agent_skills, write_role_prompt_concat, write_subagents_json,
+    boot_script_path, claude_settings_path, env_path, mcp_path, render_agent,
+    render_claude_settings, write_agent_skills, write_role_prompt_concat, write_subagents_json,
 };
 use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
@@ -509,38 +509,47 @@ pub fn register_all_public(compose: &Compose) -> Result<()> {
     Ok(())
 }
 
-/// Write `bin/agent-wrapper.sh` and create `state/` subdirs.
+/// Write `bin/agent-wrapper.sh`, `bin/boot.sh`, and create `state/` subdirs.
 ///
-/// The wrapper is teamctl-managed infrastructure: it gets rewritten on
-/// every `teamctl up` so upgrading the binary picks up wrapper fixes
-/// (pty handling, argv quoting, ...) without users having to rm and
-/// re-init their workspace. Customization happens through env vars in
-/// the generated `state/envs/<agent>.env`, not by editing the wrapper.
+/// Both scripts are teamctl-managed infrastructure: they get rewritten on
+/// every `teamctl up` so upgrading the binary picks up wrapper fixes (pty
+/// handling, argv quoting, ...) and boot-context fixes without users having
+/// to rm and re-init their workspace. Customization happens through env vars
+/// in the generated `state/envs/<agent>.env`, not by editing the scripts.
 pub fn ensure_wrapper_and_dirs(compose: &Compose) -> Result<()> {
-    let wrapper = super::agent_wrapper(&compose.root);
-    if let Some(parent) = wrapper.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let needs_write = match fs::read_to_string(&wrapper) {
-        Ok(existing) => existing != DEFAULT_WRAPPER,
-        Err(_) => true,
-    };
-    if needs_write {
-        fs::write(&wrapper, DEFAULT_WRAPPER)?;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&wrapper)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&wrapper, perms)?;
-    }
+    write_managed_executable(&super::agent_wrapper(&compose.root), DEFAULT_WRAPPER)?;
+    write_managed_executable(&boot_script_path(&compose.root), DEFAULT_BOOT_SCRIPT)?;
     fs::create_dir_all(compose.root.join("state/envs"))?;
     fs::create_dir_all(compose.root.join("state/mcp"))?;
     Ok(())
 }
 
+/// Write a teamctl-managed executable asset and make it `0o755` on unix.
+/// Idempotent: only rewrites when the on-disk copy has drifted from the
+/// embedded one, so a `teamctl up` that changes nothing leaves mtimes alone.
+fn write_managed_executable(path: &Path, content: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let needs_write = match fs::read_to_string(path) {
+        Ok(existing) => existing != content,
+        Err(_) => true,
+    };
+    if needs_write {
+        fs::write(path, content)?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms)?;
+    }
+    Ok(())
+}
+
 const DEFAULT_WRAPPER: &str = include_str!("../../assets/agent-wrapper.sh");
+const DEFAULT_BOOT_SCRIPT: &str = include_str!("../../assets/boot.sh");
 
 /// Pull `<root>/.env` (and `<root>/../.env`) into the process so the
 /// tmux session for `team-bot` inherits the bot token + chat-ids the
@@ -577,6 +586,7 @@ fn source_dotenv_into_process(root: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
+    use super::DEFAULT_BOOT_SCRIPT;
     use super::DEFAULT_WRAPPER;
     use super::*;
     use std::collections::BTreeMap;
@@ -959,5 +969,90 @@ managers:
         ensure_claude_trust(&compose).expect("second ensure_claude_trust");
         let after = std::fs::read_to_string(&config_path).unwrap();
         assert_eq!(before, after, "second run must not rewrite the config");
+    }
+
+    /// #430: the boot-context asset must carry the REQUIRED `hookEventName`
+    /// inside `hookSpecificOutput` — without it Claude Code silently drops
+    /// `additionalContext` and the hook injects nothing while still exiting 0
+    /// (the exact silent-no-op the de-risk pass caught). Pin that, plus the
+    /// `SessionStart` event name and the wake-aware verb mapping, so a future
+    /// edit can't quietly hollow the asset out.
+    #[test]
+    fn boot_script_emits_session_start_context() {
+        assert!(
+            DEFAULT_BOOT_SCRIPT.contains(r#""hookEventName":"SessionStart""#),
+            "boot.sh must emit the required hookEventName or CC drops additionalContext"
+        );
+        assert!(
+            DEFAULT_BOOT_SCRIPT.contains("additionalContext"),
+            "boot.sh must emit additionalContext"
+        );
+        for verb in ["resumed", "cleared context", "compacted", "booted"] {
+            assert!(
+                DEFAULT_BOOT_SCRIPT.contains(verb),
+                "boot.sh missing wake-aware verb: {verb}"
+            );
+        }
+        // POSIX `/bin/sh` shebang + `set -u`, matching the wrapper's contract
+        // (the command runs in the agent's shell, macOS bash 3.2 included).
+        assert!(DEFAULT_BOOT_SCRIPT.starts_with("#!/bin/sh"));
+        assert!(DEFAULT_BOOT_SCRIPT.contains("set -u"));
+    }
+
+    /// #430: `teamctl up` materializes `bin/boot.sh` next to the wrapper, with
+    /// the embedded content and a 0o755 mode, so Claude Code's SessionStart
+    /// hook can execute it. Mirrors the wrapper's managed-asset contract.
+    #[test]
+    fn ensure_wrapper_and_dirs_writes_executable_boot_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".team");
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        std::fs::write(
+            root.join("team-compose.yaml"),
+            r#"
+version: 2
+broker:
+  type: sqlite
+  path: state/mailbox.db
+supervisor:
+  type: tmux
+  tmux_prefix: a-
+projects:
+  - file: projects/hello.yaml
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("projects/hello.yaml"),
+            r#"
+version: 2
+project:
+  id: hello
+  name: Hello
+  cwd: .
+managers:
+  manager:
+    runtime: claude-code
+    model: claude-opus-4-8
+"#,
+        )
+        .unwrap();
+        let compose = Compose::load(&root).expect("compose loads");
+
+        ensure_wrapper_and_dirs(&compose).expect("ensure_wrapper_and_dirs");
+
+        let boot = team_core::render::boot_script_path(&compose.root);
+        assert!(boot.is_file(), "bin/boot.sh must be written");
+        assert_eq!(
+            std::fs::read_to_string(&boot).unwrap(),
+            DEFAULT_BOOT_SCRIPT,
+            "on-disk boot.sh must match the embedded asset"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&boot).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755, "boot.sh must be chmod 0o755");
+        }
     }
 }
