@@ -37,11 +37,13 @@ pub struct AgentInfo {
     /// supervisor trait. Drives the primary glyph in the roster.
     pub state: AgentState,
     /// Count of mailbox messages addressed to this agent that haven't
-    /// been ack'd yet. Surfaces the `✉` glyph when nonzero.
+    /// been ack'd yet. Sourced from the mailbox DB. No longer drives a
+    /// roster glyph (the `✉` unread glyph was dropped in #429); retained
+    /// for future unread surfacing.
     pub unread_mail: u32,
     /// Count of `request_approval` rows still in `pending` state for
     /// this agent. Surfaces the `!` glyph when nonzero (highest
-    /// priority — overrides the unread-mail glyph).
+    /// priority — overrides the process-state glyph).
     pub pending_approvals: u32,
     /// `true` for managers (`is_manager: true` in compose), used when
     /// the roster wants to draw a tier separator. Read but unused in
@@ -528,11 +530,10 @@ pub fn format_rate_limit_window(resets_at: Option<f64>, now_unix: f64) -> Option
     }
 }
 
-/// Single-cell glyph for an agent's primary state — derived from the
-/// triplet (`state`, `pending_approvals`, `unread_mail`) in priority
-/// order: pending approval beats unread mail beats process state.
-/// Plain ASCII fallback when the caller signals a monochrome /
-/// no-symbol terminal.
+/// Single-cell glyph for an agent's primary state — derived from
+/// (`state`, `pending_approvals`) in priority order: pending approval
+/// beats process state. Plain ASCII fallback when the caller signals a
+/// monochrome / no-symbol terminal.
 pub fn state_glyph(info: &AgentInfo, fallback_ascii: bool) -> &'static str {
     match info.state {
         AgentState::Stopped => {
@@ -546,12 +547,6 @@ pub fn state_glyph(info: &AgentInfo, fallback_ascii: bool) -> &'static str {
         AgentState::Running => {
             if info.pending_approvals > 0 {
                 "!"
-            } else if info.unread_mail > 0 {
-                if fallback_ascii {
-                    "@"
-                } else {
-                    "✉"
-                }
             } else if fallback_ascii {
                 "*"
             } else {
@@ -582,9 +577,12 @@ mod tests {
     }
 
     #[test]
-    fn state_glyph_priorities_pending_then_unread_then_running() {
+    fn state_glyph_priorities_pending_then_running() {
         assert_eq!(state_glyph(&info(AgentState::Running, 0, 0), false), "●");
-        assert_eq!(state_glyph(&info(AgentState::Running, 3, 0), false), "✉");
+        // #429: unread no longer surfaces a glyph — Running+unread
+        // renders the running glyph, not the dropped `✉`.
+        assert_eq!(state_glyph(&info(AgentState::Running, 3, 0), false), "●");
+        // pending approval still wins over process state.
         assert_eq!(state_glyph(&info(AgentState::Running, 3, 1), false), "!");
     }
 
@@ -597,7 +595,8 @@ mod tests {
     #[test]
     fn state_glyph_ascii_fallback() {
         assert_eq!(state_glyph(&info(AgentState::Running, 0, 0), true), "*");
-        assert_eq!(state_glyph(&info(AgentState::Running, 5, 0), true), "@");
+        // #429: unread no longer surfaces a glyph in ASCII mode either.
+        assert_eq!(state_glyph(&info(AgentState::Running, 5, 0), true), "*");
         assert_eq!(state_glyph(&info(AgentState::Stopped, 0, 0), true), "x");
         // `!` and `?` are unchanged across the fallback boundary.
         assert_eq!(state_glyph(&info(AgentState::Running, 0, 1), true), "!");
