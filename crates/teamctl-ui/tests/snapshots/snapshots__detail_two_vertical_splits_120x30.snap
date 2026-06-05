@@ -3,8 +3,8 @@ source: crates/teamctl-ui/tests/snapshots.rs
 expression: s
 ---
 ┌AGENTS────────────────────┐┌DETAIL · writing:manager──────────────────────────────────────────────────────────────────┐
-│ *  manager               ││┌ * writing:manager ────────────────────────┐┌ * writing:dev1 ───────────────────────────┐│
-│ *  dev1                  │││       (focus this split to stream)        ││       (focus this split to stream)        ││
+│ o  manager               ││┌ o writing:manager ────────────────────────┐┌ o writing:dev1 ───────────────────────────┐│
+│ o  dev1                  │││       (focus this split to stream)        ││       (focus this split to stream)        ││
 │                          │││                                           ││                                           ││
 │                          │││                                           ││                                           ││
 │                          │││                                           ││                                           ││

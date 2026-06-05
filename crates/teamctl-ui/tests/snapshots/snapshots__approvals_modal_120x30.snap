@@ -4,7 +4,7 @@ expression: s
 ---
 ⚠  approvals: 1 pending — `a` to review                                                                                 
 ┌AGENTS────────────────────┐┌DETAIL · writing:manager──────────────────────────────────────────────────────────────────┐
-│ *  manager               ││                      (no scrollback yet — agent may be starting up)                      │
+│ o  manager               ││                      (no scrollback yet — agent may be starting up)                      │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │

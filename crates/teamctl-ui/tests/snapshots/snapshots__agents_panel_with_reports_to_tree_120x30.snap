@@ -3,11 +3,11 @@ source: crates/teamctl-ui/tests/snapshots.rs
 expression: buffer_to_string(&buf)
 ---
 ┌AGENTS────────────────────┐┌DETAIL · writing:mgr-a────────────────────────────────────────────────────────────────────┐
-│ *  mgr-a                 ││                      (no scrollback yet — agent may be starting up)                      │
-│ |- *  scribe             ││                                                                                          │
+│ o  mgr-a                 ││                      (no scrollback yet — agent may be starting up)                      │
+│ |- o  scribe             ││                                                                                          │
 │ |- x  critic             ││                                                                                          │
 │ `- ?  scout              ││                                                                                          │
-│ *  mgr-b                 ││                                                                                          │
+│ o  mgr-b                 ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │

@@ -3,7 +3,7 @@ source: crates/teamctl-ui/tests/snapshots.rs
 expression: s
 ---
 ┌AGENTS────────────────────┐┌DETAIL · writing:manager──────────────────────────────────────────────────────────────────┐
-│ *  manager               ││                      (no scrollback yet — agent may be starting up)                      │
+│ o  manager               ││                      (no scrollback yet — agent may be starting up)                      │
 │                          ││                                                                                          │
 │                   ┌MESSAGE · id 42 · Esc/q to close──────────────────────────────────────────────┐                   │
 │                   │from:      user:telegram                                                      │                   │

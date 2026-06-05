@@ -4,7 +4,7 @@ expression: buffer_to_string(&buf)
 ---
 ┌AGENTS────────────────────┐┌DETAIL · writing:manager──────────────────────────────────────────────────────────────────┐
 │ *  manager               ││                      (no scrollback yet — agent may be starting up)                      │
-│ *  worker-1              ││                                                                                          │
+│ o  worker-1              ││                                                                                          │
 │ !  worker-2              ││                                                                                          │
 │ x  critic                ││                                                                                          │
 │ ?  scout                 ││                                                                                          │

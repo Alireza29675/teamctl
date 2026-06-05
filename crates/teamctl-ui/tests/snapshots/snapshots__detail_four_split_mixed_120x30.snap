@@ -3,15 +3,15 @@ source: crates/teamctl-ui/tests/snapshots.rs
 expression: s
 ---
 ┌AGENTS────────────────────┐┌DETAIL · writing:manager──────────────────────────────────────────────────────────────────┐
-│ *  manager               ││┌ * writing:manager ─────────┐┌ * writing:dev1 ────────────┐┌ * writing:critic ──────────┐│
-│ *  dev1                  │││(focus this split to stream)││(focus this split to stream)││(focus this split to stream)││
-│ *  dev2                  │││                            ││                            ││                            ││
-│ *  critic                │││                            ││                            ││                            ││
+│ o  manager               ││┌ o writing:manager ─────────┐┌ o writing:dev1 ────────────┐┌ o writing:critic ──────────┐│
+│ o  dev1                  │││(focus this split to stream)││(focus this split to stream)││(focus this split to stream)││
+│ o  dev2                  │││                            ││                            ││                            ││
+│ o  critic                │││                            ││                            ││                            ││
 │                          │││                            ││                            ││                            ││
 │                          │││                            ││                            ││                            ││
 │                          │││                            ││                            ││                            ││
 │                          │││                            │└────────────────────────────┘│                            ││
-│                          │││                            │┌ * writing:dev2 ────────────┐│                            ││
+│                          │││                            │┌ o writing:dev2 ────────────┐│                            ││
 │                          │││                            ││(focus this split to stream)││                            ││
 │                          │││                            ││                            ││                            ││
 │                          │││                            ││                            ││                            ││

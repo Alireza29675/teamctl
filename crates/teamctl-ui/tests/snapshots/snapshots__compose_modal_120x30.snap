@@ -1,11 +1,10 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-assertion_line: 406
 expression: s
 ---
 ┌AGENTS────────────────────┐┌DETAIL · writing:dev1─────────────────────────────────────────────────────────────────────┐
-│ *  manager               ││                      (no scrollback yet — agent may be starting up)                      │
-│ *  dev1                  ││                                                                                          │
+│ o  manager               ││                      (no scrollback yet — agent may be starting up)                      │
+│ o  dev1                  ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
