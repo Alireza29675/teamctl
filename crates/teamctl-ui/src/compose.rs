@@ -590,6 +590,7 @@ mod tests {
             is_manager: false,
             display_name: Some("Dev 1 (Drafter)".into()),
             rate_limit_resets_at: None,
+            last_activity_at: None,
             reports_to: None,
         };
         let team = TeamSnapshot {

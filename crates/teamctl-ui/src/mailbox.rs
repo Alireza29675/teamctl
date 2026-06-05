@@ -854,6 +854,7 @@ mod tests {
             is_manager: true,
             display_name: Some("Sage (Visionary)".into()),
             rate_limit_resets_at: None,
+            last_activity_at: None,
             reports_to: None,
         };
         let team = TeamSnapshot {
@@ -900,6 +901,7 @@ mod tests {
             is_manager: true,
             display_name: Some("Hugo (PM)".into()),
             rate_limit_resets_at: None,
+            last_activity_at: None,
             reports_to: None,
         };
         let team = TeamSnapshot {
@@ -982,6 +984,7 @@ mod tests {
             is_manager: false,
             display_name: Some("Wren (Engineer)".into()),
             rate_limit_resets_at: None,
+            last_activity_at: None,
             reports_to: None,
         };
         let team = TeamSnapshot {

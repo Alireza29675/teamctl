@@ -456,8 +456,10 @@ mod drain_tests {
     }
 }
 
-mod shlex {
+pub(crate) mod shlex {
     /// Minimal POSIX shell single-quote escaper so we don't pull a full dep.
+    /// Shared crate-internally — `render` uses it to quote the #428 heartbeat
+    /// marker path in the activity hooks.
     pub fn try_quote(s: &str) -> anyhow::Result<String> {
         anyhow::ensure!(!s.contains('\0'), "null byte in shell arg");
         let escaped = s.replace('\'', r"'\''");
