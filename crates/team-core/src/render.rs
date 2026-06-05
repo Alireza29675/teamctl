@@ -140,6 +140,22 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
     // than the tool silently vanishing from its catalog. Emitted first
     // and never removed; declared hooks (below) are appended after it.
     let mut v = serde_json::json!({
+        // #421: pre-trust every project-scoped MCP server for headless
+        // agents. When Claude Code discovers a `.mcp.json` server it hasn't
+        // seen — on a fresh session or after `update` introduces a new one —
+        // it otherwise blocks on a "New MCP server found in this project:
+        // <name>" prompt. An unattended agent has no human to press Enter, so
+        // it freezes indefinitely (live owner repro). This top-level key
+        // pre-approves all *project* MCP servers (not user/global), so the
+        // prompt never fires. It only reaches headless agents: attended
+        // sessions skip `--settings` entirely, so a human at the terminal
+        // still sees and answers the prompt — a built-in opt-out. The key is
+        // Claude-owned: verified working against Claude Code 2.1.165, but a
+        // future rename would silently no-op and re-freeze headless panes, so
+        // the startup-dialog watcher stays as a version-independent backstop.
+        // Trade-off the owner OK'd: unattended convenience over per-server
+        // confirmation, scoped to this project's declared servers.
+        "enableAllProjectMcpServers": true,
         "hooks": {
             "PreToolUse": [
                 {
@@ -1101,6 +1117,25 @@ mod tests {
         assert!(
             cmd.contains("Interactive prompts are disabled"),
             "systemMessage missing from hook command: {cmd}"
+        );
+    }
+
+    #[test]
+    fn claude_settings_pre_trust_all_project_mcp_servers() {
+        // #421: the rendered settings carry `enableAllProjectMcpServers: true`
+        // at the top level so a headless agent never freezes on Claude's "New
+        // MCP server found in this project" prompt (no human to confirm it).
+        // Attended sessions skip `--settings` entirely, so this only affects
+        // unattended panes; non-claude runtimes get no settings file at all
+        // (covered by `claude_settings_absent_for_non_claude_runtimes`).
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let s = render_claude_settings(&c, h).expect("claude-code agent must get settings");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(
+            v["enableAllProjectMcpServers"],
+            serde_json::Value::Bool(true),
+            "headless settings must pre-trust project MCP servers: {s}"
         );
     }
 
