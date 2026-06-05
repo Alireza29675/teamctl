@@ -2391,6 +2391,7 @@ mod tests {
             is_manager: false,
             display_name: None,
             rate_limit_resets_at: None,
+            last_activity_at: None,
             reports_to: None,
         }
     }

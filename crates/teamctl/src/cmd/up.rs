@@ -232,6 +232,10 @@ pub fn render_project_public(compose: &Compose, project_id: &str) -> Result<()> 
     fs::create_dir_all(&envs_dir)?;
     fs::create_dir_all(&mcp_dir)?;
     fs::create_dir_all(&claude_dir)?;
+    // #428: per-agent activity-heartbeat markers (touched by the rendered
+    // hooks, stat()d by the TUI). Created here alongside the other state
+    // subdirs so the rendered hook can be a bare `touch` of the marker.
+    fs::create_dir_all(compose.root.join("state/heartbeats"))?;
     let bin = super::team_mcp_bin().display().to_string();
     for h in compose.agents().filter(|h| h.project == project_id) {
         let (env, mcp) = render_agent(compose, h, &bin);
@@ -383,6 +387,10 @@ pub fn render_all_public(compose: &Compose) -> Result<()> {
     fs::create_dir_all(&envs_dir)?;
     fs::create_dir_all(&mcp_dir)?;
     fs::create_dir_all(&claude_dir)?;
+    // #428: per-agent activity-heartbeat markers (touched by the rendered
+    // hooks, stat()d by the TUI). Created here alongside the other state
+    // subdirs so the rendered hook can be a bare `touch` of the marker.
+    fs::create_dir_all(compose.root.join("state/heartbeats"))?;
     let bin = super::team_mcp_bin().display().to_string();
     for h in compose.agents() {
         let (env, mcp) = render_agent(compose, h, &bin);
@@ -833,6 +841,15 @@ mod tests {
 
         let compose = compose_with_multi_role_prompt(root, "p");
         render_project_public(&compose, "p").expect("render_project_public");
+
+        // #428: render must create the heartbeat dir so the rendered bare
+        // `touch` hook has somewhere to write. If this regresses, the dir is
+        // missing => `touch` fails => no marker => every agent reads Idle
+        // (the safe failure, but a silent loss of the working signal).
+        assert!(
+            root.join("state/heartbeats").is_dir(),
+            "render must create state/heartbeats/"
+        );
 
         let concat = role_prompt_concat_path(root, "p", "mgr");
         let got = std::fs::read_to_string(&concat).expect("concat file written");

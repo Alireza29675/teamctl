@@ -119,6 +119,7 @@ fn synth_agent(id: &str, state: AgentState, unread: u32, pending: u32) -> AgentI
         is_manager: false,
         display_name: None,
         rate_limit_resets_at: None,
+        last_activity_at: None,
         reports_to: None,
     }
 }

@@ -76,6 +76,18 @@ pub fn role_prompt_concat_path(root: &Path, project: &str, agent: &str) -> PathB
         .join(format!("{project}-{agent}.md"))
 }
 
+/// Absolute path to the per-agent activity heartbeat marker (#428). The
+/// `PreToolUse`/`UserPromptSubmit` hooks `touch` it on activity and the
+/// `Stop`/`StopFailure` hooks `rm` it at turn-end; the TUI `stat`s its
+/// mtime at the 1s refresh and classifies the agent Working (touched
+/// within 15s) or Idle. NOT JSON — a bare marker whose mtime is the whole
+/// signal. Compound `<project>-<agent>` like every sibling helper, so
+/// agents that share a name across projects never collide on one marker.
+pub fn heartbeat_path(root: &Path, project: &str, agent: &str) -> PathBuf {
+    root.join("state/heartbeats")
+        .join(format!("{project}-{agent}"))
+}
+
 /// Rendered env + MCP content for a single agent.
 pub fn render_agent(
     compose: &Compose,
@@ -149,6 +161,51 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
     // compose-root-relative (like `role_prompt`), rendered as absolute
     // paths.
     let hooks_obj = v["hooks"].as_object_mut().expect("hooks is a json object");
+
+    // #428: per-agent activity heartbeat. The TUI derives a Working/Idle
+    // sub-state of `Running` from the mtime of a per-agent marker file
+    // (touched within 15s => Working) — see `heartbeat_path` and
+    // `teamctl-ui`'s `data::is_working`. `PreToolUse` + `UserPromptSubmit`
+    // `touch` the marker on every tool call / prompt; `Stop` + `StopFailure`
+    // `rm` it at turn-end. No `matcher` => match all tools (do NOT borrow
+    // the deny hook's narrow matcher). The marker path is shell-quoted via
+    // `shlex` (not hand-rolled) so a compose root with spaces OR an embedded
+    // quote can't word-split and silently touch/rm the wrong path. The
+    // commands emit no stdout — that matters for `UserPromptSubmit`, whose
+    // exit-0 stdout is injected into the model's context. Zero DB writes:
+    // the hook only touches a file the TUI stat()s. The `state/heartbeats/`
+    // dir is created by `teamctl up`/`reload` alongside the other state
+    // subdirs, so the command is a bare `touch`. (A marker left fresh by an
+    // unclean shutdown is bounded to one 15s window and masked by the
+    // Stopped/Unknown state gate in the roster — see #428 / the PR note.)
+    {
+        let path = heartbeat_path(&compose.root, h.project, h.agent)
+            .display()
+            .to_string();
+        // Reuse the crate's POSIX single-quote escaper (errors only on a NUL
+        // byte, impossible in a filesystem path) rather than hand-rolling
+        // quoting that breaks on an embedded apostrophe.
+        let marker =
+            crate::supervisor::shlex::try_quote(&path).expect("heartbeat marker path is NUL-free");
+        let touch = format!("touch {marker}");
+        let clear = format!("rm -f {marker}");
+        for (event, command) in [
+            ("PreToolUse", &touch),
+            ("UserPromptSubmit", &touch),
+            ("Stop", &clear),
+            ("StopFailure", &clear),
+        ] {
+            hooks_obj
+                .entry(event.to_string())
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+                .as_array_mut()
+                .expect("hook event maps to a json array")
+                .push(serde_json::json!({
+                    "hooks": [ { "type": "command", "command": command } ]
+                }));
+        }
+    }
+
     for hook in &h.spec.hooks {
         let command = compose.root.join(&hook.command);
         let mut entry = serde_json::json!({
@@ -1059,9 +1116,10 @@ mod tests {
 
     #[test]
     fn declared_hook_merges_alongside_deny_hook() {
-        // #383 Phase 2: a per-agent hook is appended AFTER the built-in
-        // deny hook in the same PreToolUse bucket — the deny keeps slot 0
-        // and the command resolves compose-root-relative to absolute.
+        // #383 Phase 2 + #428: a per-agent PreToolUse hook is appended
+        // AFTER the built-ins in the same bucket — the deny hook keeps slot
+        // 0, the #428 heartbeat touch sits at slot 1, and the declared hook
+        // lands at slot 2 with its command resolved to an absolute path.
         let mut c = fixture();
         c.projects[0].managers.get_mut("mgr").unwrap().hooks = vec![HookSpec {
             event: "PreToolUse".into(),
@@ -1072,7 +1130,11 @@ mod tests {
         let s = render_claude_settings(&c, h).expect("claude-code agent must get settings");
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         let pre = v["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(pre.len(), 2, "deny hook + declared hook expected");
+        assert_eq!(
+            pre.len(),
+            3,
+            "deny hook + #428 heartbeat touch + declared hook expected"
+        );
         // Built-in deny hook survives in slot 0.
         assert_eq!(
             pre[0]["matcher"].as_str().unwrap(),
@@ -1082,41 +1144,119 @@ mod tests {
             .as_str()
             .unwrap()
             .contains(r#""permissionDecision":"deny""#));
-        // Declared hook appended after it.
-        assert_eq!(pre[1]["matcher"].as_str().unwrap(), "Bash");
-        assert_eq!(pre[1]["hooks"][0]["type"].as_str().unwrap(), "command");
+        // #428 heartbeat touch at slot 1 (match-all, no matcher).
+        assert!(
+            pre[1].get("matcher").is_none(),
+            "heartbeat touch must be match-all: {}",
+            pre[1]
+        );
+        // Declared hook appended after the built-ins.
+        assert_eq!(pre[2]["matcher"].as_str().unwrap(), "Bash");
+        assert_eq!(pre[2]["hooks"][0]["type"].as_str().unwrap(), "command");
         assert_eq!(
-            pre[1]["hooks"][0]["command"].as_str().unwrap(),
+            pre[2]["hooks"][0]["command"].as_str().unwrap(),
             "/teamctl/hooks/guard.sh"
         );
     }
 
     #[test]
-    fn no_declared_hooks_leaves_settings_unchanged() {
-        // #383 Phase 2: empty `hooks` (the default) must render exactly
-        // the built-in deny hook and nothing else.
+    fn default_hooks_are_deny_plus_heartbeat_buckets() {
+        // #383 Phase 2 + #428: with no compose-declared hooks, the settings
+        // file renders exactly the built-in default buckets — the
+        // `PreToolUse` deny hook plus the #428 activity-heartbeat hooks —
+        // and nothing else. Asserted as an exact key-set (not a raw count)
+        // so each future built-in (e.g. #430 `SessionStart`) extends the
+        // set deterministically instead of racing on a number.
         let c = fixture();
         let h = c.agents().next().unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
         let hooks = v["hooks"].as_object().unwrap();
+        let keys: std::collections::BTreeSet<&str> = hooks.keys().map(String::as_str).collect();
         assert_eq!(
-            hooks.len(),
-            1,
-            "only the built-in PreToolUse bucket expected"
+            keys,
+            ["PreToolUse", "Stop", "StopFailure", "UserPromptSubmit"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            "exact set of built-in default hook buckets expected with no declared hooks"
         );
+        // PreToolUse holds the deny hook (slot 0) + the heartbeat touch.
         assert_eq!(
             hooks["PreToolUse"].as_array().unwrap().len(),
-            1,
-            "only the deny hook expected"
+            2,
+            "deny hook + heartbeat touch expected"
         );
+        // Each heartbeat-only bucket holds exactly its one entry.
+        for ev in ["UserPromptSubmit", "Stop", "StopFailure"] {
+            assert_eq!(
+                hooks[ev].as_array().unwrap().len(),
+                1,
+                "{ev} should hold exactly one built-in entry"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_hooks_touch_and_clear_the_marker() {
+        // #428: the four activity-heartbeat hooks render with the agent's
+        // marker path, `type:command`, and no `matcher` (match-all). touch
+        // on PreToolUse/UserPromptSubmit, rm on Stop/StopFailure.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let path = heartbeat_path(&c.root, h.project, h.agent)
+            .display()
+            .to_string();
+        // Same shlex quoting the renderer uses — pins the exact emitted
+        // command, so a regression in quoting (or a dropped `touch`/`rm`)
+        // fails here rather than silently misfiring at runtime.
+        let q = crate::supervisor::shlex::try_quote(&path).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
+        let hooks = &v["hooks"];
+
+        // PreToolUse: deny stays at slot 0, heartbeat touch appended at slot 1.
+        let touch_entry = &hooks["PreToolUse"].as_array().unwrap()[1];
+        assert!(
+            touch_entry.get("matcher").is_none(),
+            "heartbeat must be match-all (no matcher): {touch_entry}"
+        );
+        assert_eq!(touch_entry["hooks"][0]["type"].as_str().unwrap(), "command");
+        assert_eq!(
+            touch_entry["hooks"][0]["command"].as_str().unwrap(),
+            format!("touch {q}"),
+            "PreToolUse should touch the quoted marker"
+        );
+
+        // UserPromptSubmit touches the same marker.
+        assert_eq!(
+            hooks["UserPromptSubmit"].as_array().unwrap()[0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap(),
+            format!("touch {q}"),
+            "UserPromptSubmit should touch the quoted marker"
+        );
+
+        // Stop + StopFailure clear it.
+        for ev in ["Stop", "StopFailure"] {
+            let entry = &hooks[ev].as_array().unwrap()[0];
+            assert!(
+                entry.get("matcher").is_none(),
+                "{ev} must be match-all (no matcher)"
+            );
+            assert_eq!(
+                entry["hooks"][0]["command"].as_str().unwrap(),
+                format!("rm -f {q}"),
+                "{ev} should rm the quoted marker"
+            );
+        }
     }
 
     #[test]
     fn declared_hook_without_matcher_opens_new_event_bucket() {
         // #383 Phase 2: a hook on a fresh event (no matcher) creates its
         // own bucket and omits `matcher` so Claude Code matches all tools;
-        // the deny hook's PreToolUse bucket is left untouched.
+        // PreToolUse keeps only its built-ins (deny + #428 heartbeat) since
+        // this declared hook targets PostToolUse.
         let mut c = fixture();
         c.projects[0].managers.get_mut("mgr").unwrap().hooks = vec![HookSpec {
             event: "PostToolUse".into(),
@@ -1126,7 +1266,11 @@ mod tests {
         let h = c.agents().next().unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
-        assert_eq!(v["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            v["hooks"]["PreToolUse"].as_array().unwrap().len(),
+            2,
+            "PreToolUse keeps its deny + #428 heartbeat built-ins"
+        );
         let post = &v["hooks"]["PostToolUse"].as_array().unwrap()[0];
         assert!(
             post.get("matcher").is_none(),

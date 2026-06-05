@@ -65,6 +65,14 @@ pub struct AgentInfo {
     /// [`format_rate_limit_window`] to render "5m 12s" / "1h 23m" —
     /// past timestamps render as `None` (no active limit).
     pub rate_limit_resets_at: Option<f64>,
+    /// #428: unix epoch seconds of this agent's activity-heartbeat marker
+    /// mtime (see [`team_core::render::heartbeat_path`]), or `None` when
+    /// the marker is absent — the agent has done nothing since boot, or is
+    /// a non-claude runtime that gets no heartbeat hooks. The agent is
+    /// Working when this is fresh within [`HEARTBEAT_FRESH_SECS`] (see
+    /// [`is_working`]), else Idle — a UI sub-state of `Running`. #429 (C2b)
+    /// renders the working/idle glyph from it.
+    pub last_activity_at: Option<f64>,
     /// T-211: short agent name (the YAML key in the manager's project)
     /// this agent reports to. `None` for top-level agents (no parent)
     /// — they render at depth 0 in the Agents pane. When `Some`, the
@@ -205,6 +213,17 @@ impl TeamSnapshot {
             let unread_mail = counts.unread.get(&id).copied().unwrap_or(0);
             let pending_approvals = counts.pending.get(&id).copied().unwrap_or(0);
             let rate_limit_resets_at = counts.rate_limit.get(&id).copied();
+            // #428: stat the heartbeat marker's mtime (zero DB — the hook
+            // only touches a file). `None` when absent => Idle downstream.
+            let last_activity_at = std::fs::metadata(team_core::render::heartbeat_path(
+                &compose.root,
+                h.project,
+                h.agent,
+            ))
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs_f64());
             agents.push(AgentInfo {
                 id,
                 agent: h.agent.into(),
@@ -216,6 +235,7 @@ impl TeamSnapshot {
                 is_manager: h.is_manager,
                 display_name,
                 rate_limit_resets_at,
+                last_activity_at,
                 reports_to,
             });
         }
@@ -530,6 +550,23 @@ pub fn format_rate_limit_window(resets_at: Option<f64>, now_unix: f64) -> Option
     }
 }
 
+/// #428: freshness window for the activity heartbeat. A marker touched
+/// within this many seconds of "now" means the agent is Working; older or
+/// absent means Idle. The TUI refreshes every 1s, so a 15s window gives a
+/// comfortable margin against a slow tool call between heartbeat touches.
+pub const HEARTBEAT_FRESH_SECS: f64 = 15.0;
+
+/// #428: classify an agent's activity from its heartbeat marker mtime
+/// (see [`AgentInfo::last_activity_at`]). Working iff the marker was
+/// touched within [`HEARTBEAT_FRESH_SECS`] of `now_unix` (strict `<`); a
+/// missing (`None`) or stale marker is Idle. Pure + total so the 15s
+/// boundary is unit-testable without touching the filesystem. #429 (C2b)
+/// calls this to pick the working/idle glyph; Stopped/Unknown agents are
+/// classified by `state` before this is ever consulted.
+pub fn is_working(last_activity_at: Option<f64>, now_unix: f64) -> bool {
+    matches!(last_activity_at, Some(t) if now_unix - t < HEARTBEAT_FRESH_SECS)
+}
+
 /// Single-cell glyph for an agent's primary state — derived from
 /// (`state`, `pending_approvals`) in priority order: pending approval
 /// beats process state. Plain ASCII fallback when the caller signals a
@@ -572,8 +609,23 @@ mod tests {
             is_manager: false,
             display_name: None,
             rate_limit_resets_at: None,
+            last_activity_at: None,
             reports_to: None,
         }
+    }
+
+    #[test]
+    fn is_working_classifies_at_the_15s_boundary() {
+        // #428: strict `< 15s` => Working; absent or stale => Idle.
+        let now = 1_000_000.0;
+        assert!(is_working(Some(now), now), "just touched => working");
+        assert!(is_working(Some(now - 14.0), now), "14s old => working");
+        assert!(
+            !is_working(Some(now - 15.0), now),
+            "exactly 15s => idle (strict <)"
+        );
+        assert!(!is_working(Some(now - 16.0), now), "16s old => idle");
+        assert!(!is_working(None, now), "absent marker => idle");
     }
 
     #[test]
@@ -687,6 +739,7 @@ mod tests {
             is_manager: true,
             display_name: Some("Hugo (PM)".into()),
             rate_limit_resets_at: None,
+            last_activity_at: None,
             reports_to: None,
         };
         let team = TeamSnapshot {
