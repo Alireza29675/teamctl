@@ -4,6 +4,21 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-06-06
+
+### Added
+
+- **Live working/idle status in the agent roster (`teamctl ui`).** A running
+  agent now shows a bright `●` when it's actively working versus a dim `○` when
+  idle — driven by an activity heartbeat refreshed as the agent works — and the
+  old `✉` unread-mail glyph is dropped so the status column reads at a glance. In
+  monochrome terminals these degrade to `*` / `o`. (#432, #433, #434)
+
+### Changed
+
+- `whatsnew` and the post-`update` summary now render the release-body markdown
+  with terminal styling instead of printing the raw markup. (#426)
+
 ### Fixed
 
 - **Headless agents no longer freeze on Claude's "New MCP server found in this
