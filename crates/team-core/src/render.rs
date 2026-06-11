@@ -88,6 +88,16 @@ pub fn heartbeat_path(root: &Path, project: &str, agent: &str) -> PathBuf {
         .join(format!("{project}-{agent}"))
 }
 
+/// Absolute path to the shared boot-context hook script (#430). Wired into
+/// every claude-code agent's `SessionStart` hook and rewritten by `teamctl
+/// up` (see `ensure_wrapper_and_dirs`), so it sits beside the agent wrapper
+/// in `bin/` rather than under per-agent `state/`. One script serves all
+/// agents — it reads the wake `source` from stdin, so it needs no per-agent
+/// identity baked into the path.
+pub fn boot_script_path(root: &Path) -> PathBuf {
+    root.join("bin/boot.sh")
+}
+
 /// Rendered env + MCP content for a single agent.
 pub fn render_agent(
     compose: &Compose,
@@ -220,6 +230,35 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
                     "hooks": [ { "type": "command", "command": command } ]
                 }));
         }
+    }
+
+    // #430: boot-context SessionStart hook. On every session (re)start Claude
+    // Code runs this and injects the script's stdout (`additionalContext`)
+    // into the agent's context, so a freshly woken pane knows it just
+    // (re)started and from which transition. The command is the shared
+    // `bin/boot.sh` asset `teamctl up` emits: inlining it would mean
+    // triple-escaping a sed + case + JSON-emit pipeline through shell ×
+    // settings-JSON × Rust, and it runs in the agent's `/bin/sh` (macOS bash
+    // 3.2), so a real file stays readable and `sh -n`-checkable. No `matcher`
+    // => fire on every source (startup|resume|clear|compact); `timeout: 5`
+    // bounds a wedged hook. The script emits the REQUIRED `hookEventName`
+    // itself — without it Claude Code silently drops `additionalContext`, the
+    // exact trap this hook exists to avoid. The path is shlex-quoted (like the
+    // #428 marker) so a compose root with spaces or a quote can't word-split.
+    // Supersedes the bootstrap-prompt mechanism #258 sketched (do not close
+    // #258 — its downtime-context idea lives on here).
+    {
+        let path = boot_script_path(&compose.root).display().to_string();
+        let command =
+            crate::supervisor::shlex::try_quote(&path).expect("boot script path is NUL-free");
+        hooks_obj
+            .entry("SessionStart".to_string())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+            .as_array_mut()
+            .expect("hook event maps to a json array")
+            .push(serde_json::json!({
+                "hooks": [ { "type": "command", "command": command, "timeout": 5 } ]
+            }));
     }
 
     for hook in &h.spec.hooks {
@@ -1196,12 +1235,12 @@ mod tests {
 
     #[test]
     fn default_hooks_are_deny_plus_heartbeat_buckets() {
-        // #383 Phase 2 + #428: with no compose-declared hooks, the settings
-        // file renders exactly the built-in default buckets — the
-        // `PreToolUse` deny hook plus the #428 activity-heartbeat hooks —
-        // and nothing else. Asserted as an exact key-set (not a raw count)
-        // so each future built-in (e.g. #430 `SessionStart`) extends the
-        // set deterministically instead of racing on a number.
+        // #383 Phase 2 + #428 + #430: with no compose-declared hooks, the
+        // settings file renders exactly the built-in default buckets — the
+        // `PreToolUse` deny hook, the #428 activity-heartbeat hooks, and the
+        // #430 `SessionStart` boot-context hook — and nothing else. Asserted
+        // as an exact key-set (not a raw count) so each future built-in
+        // extends the set deterministically instead of racing on a number.
         let c = fixture();
         let h = c.agents().next().unwrap();
         let v: serde_json::Value =
@@ -1210,9 +1249,15 @@ mod tests {
         let keys: std::collections::BTreeSet<&str> = hooks.keys().map(String::as_str).collect();
         assert_eq!(
             keys,
-            ["PreToolUse", "Stop", "StopFailure", "UserPromptSubmit"]
-                .into_iter()
-                .collect::<std::collections::BTreeSet<_>>(),
+            [
+                "PreToolUse",
+                "SessionStart",
+                "Stop",
+                "StopFailure",
+                "UserPromptSubmit"
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
             "exact set of built-in default hook buckets expected with no declared hooks"
         );
         // PreToolUse holds the deny hook (slot 0) + the heartbeat touch.
@@ -1221,8 +1266,8 @@ mod tests {
             2,
             "deny hook + heartbeat touch expected"
         );
-        // Each heartbeat-only bucket holds exactly its one entry.
-        for ev in ["UserPromptSubmit", "Stop", "StopFailure"] {
+        // Each single-entry built-in bucket holds exactly its one entry.
+        for ev in ["UserPromptSubmit", "Stop", "StopFailure", "SessionStart"] {
             assert_eq!(
                 hooks[ev].as_array().unwrap().len(),
                 1,
@@ -1284,6 +1329,41 @@ mod tests {
                 "{ev} should rm the quoted marker"
             );
         }
+    }
+
+    #[test]
+    fn session_start_hook_runs_the_boot_script() {
+        // #430: the SessionStart boot-context hook renders as a single
+        // match-all entry whose command is the shlex-quoted absolute path to
+        // the shared `bin/boot.sh` asset, with a 5s timeout. The script (not
+        // this JSON) emits the REQUIRED `hookEventName` — here we pin the
+        // wiring that points Claude Code at it, and that it fires on every
+        // source (no matcher).
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let path = boot_script_path(&c.root).display().to_string();
+        let q = crate::supervisor::shlex::try_quote(&path).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
+        let bucket = v["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(
+            bucket.len(),
+            1,
+            "exactly one SessionStart built-in expected"
+        );
+        let entry = &bucket[0];
+        assert!(
+            entry.get("matcher").is_none(),
+            "SessionStart must be match-all (fire on every source): {entry}"
+        );
+        let inner = &entry["hooks"][0];
+        assert_eq!(inner["type"].as_str().unwrap(), "command");
+        assert_eq!(
+            inner["command"].as_str().unwrap(),
+            q,
+            "SessionStart should run the quoted boot.sh path"
+        );
+        assert_eq!(inner["timeout"].as_i64().unwrap(), 5, "5s timeout expected");
     }
 
     #[test]
