@@ -345,8 +345,28 @@ fn parse_mapping_key_line(line: &str) -> Option<(usize, &str)> {
 /// indent `key_indent`. The block includes every following line whose
 /// effective indent is `> key_indent` plus interleaved blank/comment
 /// lines, stopping at the first line with indent `<= key_indent` that is
-/// itself a mapping key (or end of file).
+/// itself a mapping key.
+///
+/// At end of file (no dedented sibling bounds the block) the end is the
+/// leaf's own last content line, *not* `lines.len()`: trailing comment
+/// lines that follow the file-final block are trivia that belong to the
+/// file, not the leaf, and must survive a leaf replace — the whole point of
+/// the comment-preserving substrate (#319). Interior trivia between the
+/// leaf's content lines stays inside the block as before.
+///
+/// Caveat (pre-existing, not introduced by this fix): a run of *pure*
+/// trailing blank lines at EOF can still lose one line to the
+/// `lines()`/`join("\n")` round-trip in `splice_nested_mapping`, which
+/// cannot distinguish `\n\n\n` from `\n\n`. Comments survive because they
+/// are non-empty, and blanks adjacent to a surviving comment survive too;
+/// only a terminal pure-blank run is affected. This bound is still a strict
+/// improvement — before it, *all* trailing trivia after a file-final leaf
+/// (comments included) was deleted by the splice.
 fn block_end_after(lines: &[&str], key_line: usize, key_indent: usize) -> usize {
+    // The leaf key line itself is always block content; deeper-indented
+    // lines extend it. Track the last such content line so trailing trivia
+    // at EOF is excluded from the returned range.
+    let mut last_content = key_line;
     for (i, line) in lines.iter().enumerate().skip(key_line + 1) {
         let trimmed = line.trim_start();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -356,8 +376,9 @@ fn block_end_after(lines: &[&str], key_line: usize, key_indent: usize) -> usize 
         if indent <= key_indent {
             return i;
         }
+        last_content = i;
     }
-    lines.len()
+    last_content + 1
 }
 
 #[cfg(test)]
@@ -511,6 +532,274 @@ workers:
         assert!(after.contains("      telegram:"));
         assert!(after.contains("        bot_token_env: TEAMCTL_TG_MAINTAINER_TOKEN"));
         assert!(after.contains("        chat_ids_env: TEAMCTL_TG_MAINTAINER_CHATS"));
+    }
+
+    /// #319: when the replaced leaf is the file-final content block,
+    /// followed only by comment and/or blank trivia, `block_end_after`
+    /// must not absorb that trailing trivia into the splice range — the
+    /// trailing comment/blank lines have to survive a leaf replace just as
+    /// they do mid-file. Latent in production because a dedented sibling
+    /// (e.g. a `workers:` block after `managers:`) usually bounds the leaf;
+    /// hand-authored files that end on the replaced leaf hit it.
+    #[test]
+    fn replace_file_final_leaf_preserves_trailing_trivia() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file-final.yaml");
+        let fixture = "\
+version: 2
+managers:
+  pm:
+    runtime: claude-code
+    interfaces:
+      telegram:
+        bot_token_env: OLD_TOKEN
+        chat_ids_env: OLD_CHATS
+
+# operator note: keep this trailing footer
+";
+        fs::write(&path, fixture).unwrap();
+
+        let doc = load(&path).unwrap();
+        let doc = set_nested_mapping(
+            doc,
+            &["managers", "pm", "interfaces", "telegram"],
+            &[
+                ("bot_token_env", "NEW_TOKEN"),
+                ("chat_ids_env", "NEW_CHATS"),
+            ],
+        )
+        .unwrap();
+        save(&doc, &path).unwrap();
+
+        let after = fs::read_to_string(&path).unwrap();
+        // The replace itself worked.
+        assert!(
+            after.contains("        bot_token_env: NEW_TOKEN"),
+            "leaf not replaced:\n{after}"
+        );
+        // The file-final trailing comment survives the replace (#319).
+        assert!(
+            after.contains("# operator note: keep this trailing footer"),
+            "file-final trailing comment eaten on leaf replace (#319):\n{after}"
+        );
+        // The blank line separating the leaf from the footer survives too.
+        assert!(
+            after.contains("\n\n# operator note: keep this trailing footer"),
+            "file-final trailing blank line eaten on leaf replace (#319):\n{after}"
+        );
+    }
+
+    /// #319 edge: more than one trailing comment, interleaved with blank
+    /// lines, all following a file-final leaf. `block_end_after` skips every
+    /// comment/blank line without advancing `last_content`, so the splice
+    /// range stops at the leaf's last value line and the whole trivia block
+    /// survives verbatim and in order.
+    #[test]
+    fn replace_file_final_leaf_preserves_multiple_trailing_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("multi-footer.yaml");
+        let fixture = "\
+version: 2
+managers:
+  pm:
+    runtime: claude-code
+    interfaces:
+      telegram:
+        bot_token_env: OLD_TOKEN
+        chat_ids_env: OLD_CHATS
+
+# footer line one
+
+# footer line two
+# footer line three
+";
+        fs::write(&path, fixture).unwrap();
+
+        let doc = load(&path).unwrap();
+        let doc = set_nested_mapping(
+            doc,
+            &["managers", "pm", "interfaces", "telegram"],
+            &[
+                ("bot_token_env", "NEW_TOKEN"),
+                ("chat_ids_env", "NEW_CHATS"),
+            ],
+        )
+        .unwrap();
+        save(&doc, &path).unwrap();
+
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(
+            after.contains("        bot_token_env: NEW_TOKEN"),
+            "leaf not replaced:\n{after}"
+        );
+        // Every trailing comment survives.
+        for footer in [
+            "# footer line one",
+            "# footer line two",
+            "# footer line three",
+        ] {
+            assert!(
+                after.contains(footer),
+                "trailing comment `{footer}` eaten on leaf replace (#319):\n{after}"
+            );
+        }
+        // The trailing trivia survives verbatim — same comments, same
+        // interleaved blanks, same order, right after the replaced leaf.
+        assert!(
+            after.contains(
+                "        chat_ids_env: NEW_CHATS\n\n# footer line one\n\n# footer line two\n# footer line three\n"
+            ),
+            "trailing comment/blank cluster not preserved verbatim and in order:\n{after}"
+        );
+    }
+
+    /// #319 edge: a comment that immediately abuts the file-final leaf with
+    /// no blank line between the leaf's last value and the comment. The
+    /// comment is still trailing trivia (its indent doesn't matter — the
+    /// `#` guard short-circuits before the indent check) and must survive.
+    #[test]
+    fn replace_file_final_leaf_preserves_abutting_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("abutting.yaml");
+        let fixture = "\
+version: 2
+managers:
+  pm:
+    runtime: claude-code
+    interfaces:
+      telegram:
+        bot_token_env: OLD_TOKEN
+        chat_ids_env: OLD_CHATS
+# abutting footer, no blank above
+";
+        fs::write(&path, fixture).unwrap();
+
+        let doc = load(&path).unwrap();
+        let doc = set_nested_mapping(
+            doc,
+            &["managers", "pm", "interfaces", "telegram"],
+            &[
+                ("bot_token_env", "NEW_TOKEN"),
+                ("chat_ids_env", "NEW_CHATS"),
+            ],
+        )
+        .unwrap();
+        save(&doc, &path).unwrap();
+
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(
+            after.contains("        bot_token_env: NEW_TOKEN"),
+            "leaf not replaced:\n{after}"
+        );
+        // The comment sits directly after the leaf's last value, with no
+        // blank line inserted or eaten.
+        assert!(
+            after.contains("        chat_ids_env: NEW_CHATS\n# abutting footer, no blank above"),
+            "abutting trailing comment eaten or shifted on leaf replace (#319):\n{after}"
+        );
+    }
+
+    /// #319 edge: a trailing comment indented *deeper* than the file-final
+    /// leaf. `block_end_after`'s `trimmed.starts_with('#')` guard fires
+    /// before the `indent <= key_indent` check, so a deeper-indented comment
+    /// is treated as trivia (not block content) and `last_content` is not
+    /// advanced past it — the comment must survive uncorrupted rather than
+    /// be absorbed into the replaced range.
+    #[test]
+    fn replace_file_final_leaf_preserves_deeper_indented_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deep-comment.yaml");
+        let fixture = "\
+version: 2
+managers:
+  pm:
+    runtime: claude-code
+    interfaces:
+      telegram:
+        bot_token_env: OLD_TOKEN
+        chat_ids_env: OLD_CHATS
+            # deeply indented operator note
+";
+        fs::write(&path, fixture).unwrap();
+
+        let doc = load(&path).unwrap();
+        let doc = set_nested_mapping(
+            doc,
+            &["managers", "pm", "interfaces", "telegram"],
+            &[
+                ("bot_token_env", "NEW_TOKEN"),
+                ("chat_ids_env", "NEW_CHATS"),
+            ],
+        )
+        .unwrap();
+        save(&doc, &path).unwrap();
+
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(
+            after.contains("        bot_token_env: NEW_TOKEN"),
+            "leaf not replaced:\n{after}"
+        );
+        // The deeper-indented comment survives with its indentation intact.
+        assert!(
+            after.contains("            # deeply indented operator note"),
+            "deeper-indented trailing comment corrupted on leaf replace (#319):\n{after}"
+        );
+    }
+
+    /// #319 edge: file-final leaf followed by a trailing comment, with the
+    /// file NOT ending in a newline. The comment survival is the #319
+    /// behavior (the file-final trailing comment is excluded from the splice
+    /// range by `block_end_after`); the no-trailing-newline preservation is
+    /// guarded by the orthogonal, pre-existing `source.ends_with('\n')` join
+    /// branch, not by the `block_end_after` change — both must hold here.
+    #[test]
+    fn replace_file_final_leaf_preserves_no_trailing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no-newline.yaml");
+        // Note: fixture deliberately has no trailing newline.
+        let fixture = "\
+version: 2
+managers:
+  pm:
+    runtime: claude-code
+    interfaces:
+      telegram:
+        bot_token_env: OLD_TOKEN
+        chat_ids_env: OLD_CHATS
+
+# footer with no final newline";
+        assert!(
+            !fixture.ends_with('\n'),
+            "fixture precondition: must not end in a newline"
+        );
+        fs::write(&path, fixture).unwrap();
+
+        let doc = load(&path).unwrap();
+        let doc = set_nested_mapping(
+            doc,
+            &["managers", "pm", "interfaces", "telegram"],
+            &[
+                ("bot_token_env", "NEW_TOKEN"),
+                ("chat_ids_env", "NEW_CHATS"),
+            ],
+        )
+        .unwrap();
+        save(&doc, &path).unwrap();
+
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(
+            after.contains("        bot_token_env: NEW_TOKEN"),
+            "leaf not replaced:\n{after}"
+        );
+        assert!(
+            after.contains("# footer with no final newline"),
+            "trailing comment eaten on leaf replace (#319):\n{after}"
+        );
+        // The no-trailing-newline shape is preserved.
+        assert!(
+            !after.ends_with('\n'),
+            "splice must not introduce a trailing newline the source lacked:\n{after:?}"
+        );
     }
 
     /// Idempotency: re-running set_nested_mapping with the same path

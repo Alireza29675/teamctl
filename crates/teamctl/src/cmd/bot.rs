@@ -1638,12 +1638,6 @@ mod tests {
         );
     }
 
-    #[ignore = "blocked on #319: yaml_edit::block_end_after eats the file-final \
-                trailing comment on a leaf replace. The managed-bots wizard's own \
-                writes don't create this shape (seeding appends `interfaces:` last, \
-                pushing comments before it), so typical usage is safe — but a \
-                --force re-run after an operator hand-adds a trailing comment hits \
-                it. Un-ignore when #319 lands; this is its ready regression guard."]
     #[test]
     fn splice_manager_bot_preserves_file_final_comment_on_replace() {
         // #319 deliberate check (the actual trigger): manager_bot.token_env
