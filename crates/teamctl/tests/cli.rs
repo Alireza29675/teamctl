@@ -211,6 +211,88 @@ fn send_injects_into_mailbox() {
     assert_eq!(text, "hi there");
 }
 
+// ── T-431: rl-hit records a forensic rate-limit hit row ─────────────────
+
+#[test]
+fn rl_hit_records_a_forensic_row_for_a_known_agent() {
+    // End-to-end: the StopFailure hook invokes `teamctl rl-hit <project>:<agent>`.
+    // run() loads the compose, resolves the runtime, and inserts one row.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "rl-hit",
+            "alpha:dev",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let db = tmp.path().join("state/mailbox.db");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let (agent_id, runtime, resets_at, raw_match): (String, String, Option<f64>, String) = conn
+        .query_row(
+            "SELECT agent_id, runtime, resets_at, raw_match \
+             FROM rate_limits ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(agent_id, "alpha:dev");
+    assert_eq!(runtime, "claude-code", "runtime resolved from the compose");
+    assert_eq!(
+        resets_at, None,
+        "forensic marker stores NULL resets_at so it stays invisible to the TUI countdown"
+    );
+    assert_eq!(raw_match, "stopfailure:rate_limit");
+}
+
+#[test]
+fn rl_hit_is_resilient_to_an_agent_absent_from_the_compose() {
+    // An agent that was renamed/removed since the settings file was rendered
+    // still records a row (DEFAULT_RUNTIME fallback) and exits 0: the hook is
+    // fire-and-forget and must never error a stop.
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "rl-hit",
+            "alpha:ghost",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "rl-hit must exit 0 even for an unknown agent: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let db = tmp.path().join("state/mailbox.db");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let (agent_id, runtime): (String, String) = conn
+        .query_row(
+            "SELECT agent_id, runtime FROM rate_limits ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(agent_id, "alpha:ghost");
+    assert_eq!(
+        runtime, "claude-code",
+        "DEFAULT_RUNTIME fallback for an agent not in the compose"
+    );
+}
+
 // ── T-091: --help surfaces the version ──────────────────────────────────
 
 #[test]

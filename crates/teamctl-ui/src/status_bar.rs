@@ -9,11 +9,9 @@
 //!   background thread — sysinfo's per-tick refresh is sub-millisecond.
 //!
 //! - **Center:** the focused agent's claude rate-limit window when
-//!   active, formatted as `limit 5m 12s` (T-212). Gated behind the
-//!   `TEAMCTL_UI_RATE_LIMIT_INDICATOR=1` preview env var — opt-in
-//!   while the indicator's shape stabilizes against the future
-//!   usage-% data path. Hides when the focused agent has no active
-//!   window; swaps with focus.
+//!   active, formatted as `limit 5m 12s` (T-212). On by default (#431);
+//!   operators opt out with `TEAMCTL_UI_RATE_LIMIT_INDICATOR=0`. Hides
+//!   when the focused agent has no active window; swaps with focus.
 //!
 //! Truncation priority on narrow terminals: **path > per-agent
 //! center > CPU/RAM** (T-209 done-when, extended by T-212). Operators
@@ -76,14 +74,12 @@ impl Widget for StatusBar<'_> {
         // Render path at column 0.
         buf.set_string(area.x, area.y, &path_rendered, Style::default().fg(muted));
 
-        // T-212: per-agent rate-limit indicator in the center slot.
-        // Gated behind the `rate_limit_indicator_enabled` preview
-        // flag (env: `TEAMCTL_UI_RATE_LIMIT_INDICATOR=1`) so the
-        // operator-facing shape can stabilize alongside the
-        // eventual usage-% data path before the indicator opts in
-        // for everyone. When the flag is off, the slot stays blank
-        // regardless of agent state — path + metrics layout is
-        // unchanged from T-209 baseline.
+        // T-212 / #431: per-agent rate-limit indicator in the center
+        // slot. Gated on the `rate_limit_indicator_enabled` flag, which
+        // is on by default; operators opt out with
+        // `TEAMCTL_UI_RATE_LIMIT_INDICATOR=0`. When the flag is off, the
+        // slot stays blank regardless of agent state; path + metrics
+        // layout is unchanged from the T-209 baseline.
         //
         // When enabled, renders ONLY when the focused agent has an
         // active rate-limit window (`format_rate_limit_window`
