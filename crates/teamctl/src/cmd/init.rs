@@ -407,17 +407,12 @@ fn lead_attach_target(compose: &team_core::compose::Compose) -> Option<String> {
 /// `blank`, or a compose we can't deserialize) yields an empty `Vec`,
 /// and the caller simply skips the section. Init never fails on this.
 fn team_structure_lines(files: &[(String, &'static str)]) -> Vec<String> {
-    // House convention (see warn.rs / release_notes.rs): raw ANSI gated
-    // on `is_terminal()`, no colour when piped. The preview prints to
-    // stderr, so that's the stream we test.
-    let color = io::stderr().is_terminal();
-    let paint = |code: &str, s: &str| -> String {
-        if color {
-            format!("\x1b[{code}m{s}\x1b[0m")
-        } else {
-            s.to_string()
-        }
-    };
+    // Gate raw ANSI on `crate::term::use_color()` — the NO_COLOR +
+    // `is_terminal()` house convention warn.rs / bot.rs / release_notes.rs
+    // follow, so `NO_COLOR=1` stays plain even on a TTY. The preview prints
+    // to stderr, so that's the stream we test. (T-181)
+    let color = crate::term::use_color(io::stderr().is_terminal());
+    let paint = |code: &str, s: &str| -> String { paint_with(code, s, color) };
     const GREY: &str = "90"; // tree lines + the `(role)` suffix
     const PINK: &str = "38;5;218"; // agent names — light pink (256-colour)
 
@@ -536,6 +531,17 @@ fn team_structure_lines(files: &[(String, &'static str)]) -> Vec<String> {
         }
     }
     out
+}
+
+/// SGR-paint `s` with `code`, but only when `color` is set. Split out of
+/// `team_structure_lines` (like warn.rs / bot.rs) so the NO_COLOR / TTY
+/// gate is unit-testable without a real terminal. (T-181)
+fn paint_with(code: &str, s: &str, color: bool) -> String {
+    if color {
+        format!("\x1b[{code}m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
 }
 
 /// Roster label for an agent: its `display_name` when set, else the id —
@@ -757,6 +763,21 @@ pub fn template_list_for_cli() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paint_with_emits_ansi_only_when_color_on() {
+        // T-181: the init team-structure preview must honor NO_COLOR /
+        // non-TTY via `use_color`. `paint_with` is the gate's testable core.
+        let colored = paint_with("38;5;218", "ada", true);
+        assert_eq!(colored, "\x1b[38;5;218mada\x1b[0m");
+
+        let plain = paint_with("38;5;218", "ada", false);
+        assert_eq!(plain, "ada");
+        assert!(
+            !plain.contains('\x1b'),
+            "NO_COLOR / non-TTY output must carry no ANSI, got: {plain:?}"
+        );
+    }
 
     #[test]
     fn confirm_defaults_to_yes_on_empty_declines_on_n() {
