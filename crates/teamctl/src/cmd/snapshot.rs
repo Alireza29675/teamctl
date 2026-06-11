@@ -272,6 +272,20 @@ pub struct ChangedInputs {
 }
 
 impl ChangedInputs {
+    /// The marker a `reload --force` uses to drag an unchanged ("keep")
+    /// agent into the restart set. Every input is false, so `any()` is
+    /// false. `plan()` never emits this shape (it only records a
+    /// `change` entry when an input actually differs), so an all-false
+    /// `change` entry can only mean "forced" — which the preview/apply
+    /// output renders as `(forced)` instead of a changed-inputs label.
+    pub fn forced() -> Self {
+        Self {
+            env: false,
+            mcp: false,
+            role_prompt: false,
+        }
+    }
+
     pub fn any(&self) -> bool {
         self.env || self.mcp || self.role_prompt
     }
@@ -498,6 +512,19 @@ mod tests {
             role_prompt: true,
         };
         assert_eq!(c.label(), "env+role_prompt");
+    }
+
+    #[test]
+    fn forced_changed_inputs_is_all_false() {
+        // T-384: `--force` drags unchanged agents into the change set
+        // carrying this all-false marker. `any()` must be false so the
+        // apply/preview output recognises it as forced (not a real diff),
+        // and so it can never be confused with a genuine plan() change
+        // entry, which is only emitted when an input actually differs.
+        let f = ChangedInputs::forced();
+        assert!(!f.env && !f.mcp && !f.role_prompt);
+        assert!(!f.any());
+        assert_eq!(f.label(), "");
     }
 
     #[test]

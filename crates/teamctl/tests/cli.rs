@@ -1540,6 +1540,88 @@ fn except_every_agent_reports_empty_scope() {
     );
 }
 
+// ── T-384: reload --force ───────────────────────────────────────────────
+//
+// The forced-keep promotion and the `reloaded · id (forced)` output are
+// unit-tested in reload.rs / snapshot.rs: a `keep` state needs a prior
+// `state/applied.json` whose fingerprints match the live compose, which
+// the no-tmux integration harness can't produce (it never runs `up`).
+// These pin the CLI surface instead — the flag parses, composes with
+// `--fresh` / `--dry-run`, and on a fresh root (no prior snapshot, every
+// agent is `add`) `--force` has no kept agents to promote, so it stays a
+// clean no-op on the diff path.
+
+#[test]
+fn reload_force_dry_run_without_prior_lists_added_not_forced() {
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("added   · alpha:manager"),
+        "fresh root → diff path lists adds: {stdout}"
+    );
+    assert!(
+        !stdout.contains("(forced)"),
+        "no prior snapshot → no kept agents to force-restart: {stdout}"
+    );
+}
+
+#[test]
+fn reload_force_composes_with_fresh_and_dry_run() {
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+    let out = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "reload",
+            "--dry-run",
+            "--fresh",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("(fresh)") && stdout.contains("(dry run)"),
+        "--force composes with --fresh and --dry-run: {stdout}"
+    );
+}
+
+#[test]
+fn reload_help_documents_force_flag() {
+    let out = Command::new(bin())
+        .args(["reload", "--help"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "reload --help failed");
+    let help = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        help.contains("--force"),
+        "reload --help must document --force: {help}"
+    );
+}
+
 #[test]
 fn help_documents_all_scope_levels_consistently() {
     // Acceptance criterion: `--help` for each of up/down/reload
