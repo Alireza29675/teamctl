@@ -910,13 +910,13 @@ fn status_bar_renders_rate_limit_for_focused_agent_with_active_window() {
 
 #[test]
 fn status_bar_omits_rate_limit_when_preview_flag_disabled() {
-    // Active rate-limit window present, but the preview flag is OFF
-    // (default). The center slot stays blank — this is the shape
-    // operators see by default until they opt in via
-    // `TEAMCTL_UI_RATE_LIMIT_INDICATOR=1`.
+    // Active rate-limit window present, but the indicator is opted OUT.
+    // The center slot stays blank: the shape operators see when they set
+    // `TEAMCTL_UI_RATE_LIMIT_INDICATOR=0`. The indicator is on by default
+    // (#431), so set the flag false explicitly to exercise the opt-out.
     let mut app = fresh_app();
     app.dismiss_splash();
-    // Default: rate_limit_indicator_enabled = false (env var unset).
+    app.rate_limit_indicator_enabled = false;
     app.team.root = std::path::PathBuf::from("/tmp/teamctl-fixture/.team");
     let mut agent = synth_agent("p:a", AgentState::Running, 0, 0);
     agent.rate_limit_resets_at = Some(unix_now_secs() + 3661.0);

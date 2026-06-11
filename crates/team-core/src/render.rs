@@ -261,6 +261,44 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
             }));
     }
 
+    // #431: rate-limit hit marker. Appended as a SECOND entry to the same
+    // `StopFailure` bucket the #428 heartbeat clear already lives in (slot 0 =
+    // match-all `rm -f <marker>`; this is slot 1, scoped by `matcher`). On a
+    // turn that ends because the runtime hit its rate limit, Claude Code runs
+    // this and `teamctl rl-hit` records a forensic hit row. The `rate_limit`
+    // matcher is a real `StopFailure` reason value, so the entry only fires on
+    // rate-limit stops, not every failure. The command mirrors the wrapper's
+    // own convention (agent-wrapper.sh): a PATH `teamctl` guarded by
+    // `command -v`, with a trailing `|| true` so this is pure fire-and-forget:
+    // a host without teamctl on PATH (or any rl-hit error) degrades to a silent
+    // exit-0 no-op instead of erroring the stop, matching the heartbeat clear's
+    // always-exit-0 `rm -f`. The compose root and the
+    // `<project>:<agent>` id are baked in (render has both in scope, no env
+    // dependency) and shlex-quoted like the #428 marker / #430 boot path; the
+    // guard and the `--root`/`rl-hit` literals are not quoted. The hook has no
+    // PTY output to read a reset time from, so `rl-hit` stores `resets_at` NULL,
+    // invisible to the TUI countdown (which filters `resets_at IS NOT NULL`),
+    // leaving `rl-watch` the sole countdown source.
+    {
+        let root = crate::supervisor::shlex::try_quote(&compose.root.display().to_string())
+            .expect("compose root is NUL-free");
+        let agent_id = format!("{}:{}", h.project, h.agent);
+        let agent_id =
+            crate::supervisor::shlex::try_quote(&agent_id).expect("agent id is NUL-free");
+        let command = format!(
+            "command -v teamctl >/dev/null 2>&1 && teamctl --root {root} rl-hit {agent_id} || true"
+        );
+        hooks_obj
+            .entry("StopFailure".to_string())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+            .as_array_mut()
+            .expect("hook event maps to a json array")
+            .push(serde_json::json!({
+                "matcher": "rate_limit",
+                "hooks": [ { "type": "command", "command": command } ]
+            }));
+    }
+
     for hook in &h.spec.hooks {
         let command = compose.root.join(&hook.command);
         let mut entry = serde_json::json!({
@@ -1235,12 +1273,13 @@ mod tests {
 
     #[test]
     fn default_hooks_are_deny_plus_heartbeat_buckets() {
-        // #383 Phase 2 + #428 + #430: with no compose-declared hooks, the
-        // settings file renders exactly the built-in default buckets — the
-        // `PreToolUse` deny hook, the #428 activity-heartbeat hooks, and the
-        // #430 `SessionStart` boot-context hook — and nothing else. Asserted
-        // as an exact key-set (not a raw count) so each future built-in
-        // extends the set deterministically instead of racing on a number.
+        // #383 Phase 2 + #428 + #430 + #431: with no compose-declared hooks,
+        // the settings file renders exactly the built-in default buckets: the
+        // `PreToolUse` deny hook, the #428 activity-heartbeat hooks, the #430
+        // `SessionStart` boot-context hook, and the #431 `StopFailure`
+        // rate-limit marker, and nothing else. Asserted as an exact key-set
+        // (not a raw count) so each future built-in extends the set
+        // deterministically instead of racing on a number.
         let c = fixture();
         let h = c.agents().next().unwrap();
         let v: serde_json::Value =
@@ -1266,14 +1305,83 @@ mod tests {
             2,
             "deny hook + heartbeat touch expected"
         );
-        // Each single-entry built-in bucket holds exactly its one entry.
-        for ev in ["UserPromptSubmit", "Stop", "StopFailure", "SessionStart"] {
+        // StopFailure holds the heartbeat clear (slot 0) + the #431 rate-limit
+        // marker (slot 1): slot 0 is the match-all `rm -f`, slot 1 carries the
+        // `rate_limit` matcher and the `rl-hit` command.
+        let stop_failure = hooks["StopFailure"].as_array().unwrap();
+        assert_eq!(
+            stop_failure.len(),
+            2,
+            "heartbeat clear + rate-limit marker expected"
+        );
+        assert!(
+            stop_failure[0].get("matcher").is_none(),
+            "StopFailure slot 0 should be the match-all heartbeat clear"
+        );
+        assert!(stop_failure[0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("rm -f "));
+        assert_eq!(
+            stop_failure[1]["matcher"].as_str().unwrap(),
+            "rate_limit",
+            "StopFailure slot 1 should scope to rate-limit stops"
+        );
+        assert!(stop_failure[1]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("rl-hit"));
+        // Each remaining single-entry built-in bucket holds exactly its one entry.
+        for ev in ["UserPromptSubmit", "Stop", "SessionStart"] {
             assert_eq!(
                 hooks[ev].as_array().unwrap().len(),
                 1,
                 "{ev} should hold exactly one built-in entry"
             );
         }
+    }
+
+    #[test]
+    fn stop_failure_rate_limit_hook_records_a_hit() {
+        // #431: the StopFailure bucket's slot-1 entry is the rate-limit marker.
+        // The canary `default_hooks_are_deny_plus_heartbeat_buckets` pins the
+        // bucket shape (2 entries, slot 1 matcher `rate_limit` + `rl-hit`); this
+        // pins the load-bearing details of the emitted command string.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
+        let stop_failure = v["hooks"]["StopFailure"].as_array().unwrap();
+        let command = stop_failure[1]["hooks"][0]["command"].as_str().unwrap();
+
+        // Guard first so a host without `teamctl` on PATH never errors the stop.
+        assert!(
+            command.starts_with("command -v teamctl >/dev/null"),
+            "rl-hit command must lead with the PATH guard: {command}"
+        );
+        // The compose root is baked in so the hook needs no env to find the db.
+        assert!(
+            command.contains("--root"),
+            "rl-hit command must pass the compose --root: {command}"
+        );
+        // The subcommand and the agent's `<project>:<agent>` id, pulled from the
+        // fixture handle so the assertion tracks the fixture rather than a
+        // hard-coded literal.
+        assert!(
+            command.contains("rl-hit"),
+            "rl-hit subcommand missing: {command}"
+        );
+        let agent_id = format!("{}:{}", h.project, h.agent);
+        assert!(
+            command.contains(&agent_id),
+            "rl-hit command must target the agent id {agent_id}: {command}"
+        );
+        // Trailing `|| true` makes the marker pure fire-and-forget: any rl-hit
+        // error degrades to a silent exit-0 instead of erroring the stop.
+        assert!(
+            command.ends_with("|| true"),
+            "rl-hit command must end with the fire-and-forget guard: {command}"
+        );
     }
 
     #[test]
@@ -1316,7 +1424,9 @@ mod tests {
             "UserPromptSubmit should touch the quoted marker"
         );
 
-        // Stop + StopFailure clear it.
+        // Stop + StopFailure clear it. The heartbeat clear is always slot 0
+        // (match-all); on StopFailure the #431 rate-limit marker follows at
+        // slot 1, so the heartbeat entry keeps its slot.
         for ev in ["Stop", "StopFailure"] {
             let entry = &hooks[ev].as_array().unwrap()[0];
             assert!(

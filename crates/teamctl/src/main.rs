@@ -333,6 +333,11 @@ enum Command {
         #[arg(last = true, allow_hyphen_values = true)]
         runtime_command: Vec<String>,
     },
+
+    /// Record a rate-limit hit for <agent>. Invoked by the StopFailure
+    /// hook; not normally run by hand.
+    #[command(name = "rl-hit")]
+    RlHit { agent: String },
 }
 
 #[derive(Subcommand)]
@@ -498,6 +503,7 @@ fn main() -> Result<()> {
             target,
             runtime_command,
         } => cmd::rl_watch::run(&root, &target, &runtime_command),
+        Command::RlHit { agent } => cmd::rl_hit::run(&root, &agent),
         Command::Approvals => cmd::approval::pending(&root),
         Command::Approve { id, note } => cmd::approval::decide(&root, id, true, note.as_deref()),
         Command::Deny { id, note } => cmd::approval::decide(&root, id, false, note.as_deref()),

@@ -18,6 +18,7 @@ pub mod mail;
 pub mod project_filter;
 pub mod release_notes;
 pub mod reload;
+pub mod rl_hit;
 pub mod rl_watch;
 pub mod send;
 pub mod sessions;
