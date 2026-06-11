@@ -338,6 +338,11 @@ enum Command {
     /// hook; not normally run by hand.
     #[command(name = "rl-hit")]
     RlHit { agent: String },
+
+    /// Record one budget cost row for <agent> from the Stop hook payload on
+    /// stdin. Invoked by the Stop hook; not normally run by hand.
+    #[command(name = "budget-record")]
+    BudgetRecord { agent: String },
 }
 
 #[derive(Subcommand)]
@@ -504,6 +509,7 @@ fn main() -> Result<()> {
             runtime_command,
         } => cmd::rl_watch::run(&root, &target, &runtime_command),
         Command::RlHit { agent } => cmd::rl_hit::run(&root, &agent),
+        Command::BudgetRecord { agent } => cmd::budget_record::run(&root, &agent),
         Command::Approvals => cmd::approval::pending(&root),
         Command::Approve { id, note } => cmd::approval::decide(&root, id, true, note.as_deref()),
         Command::Deny { id, note } => cmd::approval::decide(&root, id, false, note.as_deref()),

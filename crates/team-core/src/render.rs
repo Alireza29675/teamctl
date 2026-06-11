@@ -344,6 +344,40 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
             }));
     }
 
+    // #333: budget cost writer. Appended as a SECOND entry to the same `Stop`
+    // bucket the #428 heartbeat clear already lives in (slot 0 = match-all
+    // touch-lastseen + `rm -f <marker>`; this is slot 1, also match-all so it
+    // fires on every clean turn-end). Claude Code pipes the Stop payload to
+    // this command on stdin; `teamctl budget-record` reads the transcript named
+    // in that payload, sums the just-finished turn's token usage, prices it, and
+    // INSERTs one `budget` row — the missing writer behind a permanently-$0.00
+    // `USD-24H`. The command mirrors the #431 rl-hit shape exactly: a PATH
+    // `teamctl` guarded by `command -v`, with a trailing `|| true` so it's pure
+    // fire-and-forget — a host without teamctl on PATH (or any record error)
+    // degrades to a silent exit-0 no-op instead of erroring the stop, matching
+    // the heartbeat clear's always-exit-0 `rm -f`. The compose root and the
+    // `<project>:<agent>` id are baked in (render has both in scope, no env
+    // dependency) and shlex-quoted like the #428 marker / #431 rl-hit id; the
+    // guard and the `--root`/`budget-record` literals are not quoted.
+    {
+        let root = crate::supervisor::shlex::try_quote(&compose.root.display().to_string())
+            .expect("compose root is NUL-free");
+        let agent_id = format!("{}:{}", h.project, h.agent);
+        let agent_id =
+            crate::supervisor::shlex::try_quote(&agent_id).expect("agent id is NUL-free");
+        let command = format!(
+            "command -v teamctl >/dev/null 2>&1 && teamctl --root {root} budget-record {agent_id} || true"
+        );
+        hooks_obj
+            .entry("Stop".to_string())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+            .as_array_mut()
+            .expect("hook event maps to a json array")
+            .push(serde_json::json!({
+                "hooks": [ { "type": "command", "command": command } ]
+            }));
+    }
+
     for hook in &h.spec.hooks {
         let command = compose.root.join(&hook.command);
         let mut entry = serde_json::json!({
@@ -1379,8 +1413,34 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("rl-hit"));
+        // Stop holds the heartbeat clear (slot 0) + the #333 budget cost writer
+        // (slot 1): both are match-all (no matcher), slot 1 carries the
+        // `budget-record` command.
+        let stop = hooks["Stop"].as_array().unwrap();
+        assert_eq!(
+            stop.len(),
+            2,
+            "heartbeat clear + budget cost writer expected"
+        );
+        assert!(
+            stop[0].get("matcher").is_none(),
+            "Stop slot 0 should be the match-all heartbeat clear"
+        );
+        let stop_clear = stop[0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(
+            stop_clear.starts_with("touch ") && stop_clear.contains(" && rm -f "),
+            "Stop slot 0 should touch lastseen then rm the marker: {stop_clear}"
+        );
+        assert!(
+            stop[1].get("matcher").is_none(),
+            "Stop slot 1 (budget writer) should be match-all"
+        );
+        assert!(stop[1]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("budget-record"));
         // Each remaining single-entry built-in bucket holds exactly its one entry.
-        for ev in ["UserPromptSubmit", "Stop", "SessionStart"] {
+        for ev in ["UserPromptSubmit", "SessionStart"] {
             assert_eq!(
                 hooks[ev].as_array().unwrap().len(),
                 1,
@@ -1429,6 +1489,50 @@ mod tests {
         assert!(
             command.ends_with("|| true"),
             "rl-hit command must end with the fire-and-forget guard: {command}"
+        );
+    }
+
+    #[test]
+    fn stop_budget_record_hook_records_cost() {
+        // #333: the Stop bucket's slot-1 entry is the budget cost writer. The
+        // canary `default_hooks_are_deny_plus_heartbeat_buckets` pins the bucket
+        // shape (2 entries, slot 1 match-all + `budget-record`); this pins the
+        // load-bearing details of the emitted command string, mirroring the #431
+        // rl-hit canary exactly.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
+        let stop = v["hooks"]["Stop"].as_array().unwrap();
+        let command = stop[1]["hooks"][0]["command"].as_str().unwrap();
+
+        // Guard first so a host without `teamctl` on PATH never errors the stop.
+        assert!(
+            command.starts_with("command -v teamctl >/dev/null"),
+            "budget-record command must lead with the PATH guard: {command}"
+        );
+        // The compose root is baked in so the hook needs no env to find the db.
+        assert!(
+            command.contains("--root"),
+            "budget-record command must pass the compose --root: {command}"
+        );
+        // The subcommand and the agent's `<project>:<agent>` id, pulled from the
+        // fixture handle so the assertion tracks the fixture rather than a
+        // hard-coded literal.
+        assert!(
+            command.contains("budget-record"),
+            "budget-record subcommand missing: {command}"
+        );
+        let agent_id = format!("{}:{}", h.project, h.agent);
+        assert!(
+            command.contains(&agent_id),
+            "budget-record command must target the agent id {agent_id}: {command}"
+        );
+        // Trailing `|| true` makes the writer pure fire-and-forget: any record
+        // error degrades to a silent exit-0 instead of erroring the stop.
+        assert!(
+            command.ends_with("|| true"),
+            "budget-record command must end with the fire-and-forget guard: {command}"
         );
     }
 
