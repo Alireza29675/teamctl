@@ -18,6 +18,15 @@ use anyhow::{Context, Result};
 /// `capture-pane -S -3000`, matching `teamctl logs`.
 pub trait PaneSource: Send + Sync {
     fn capture(&self, session: &str) -> Result<Vec<String>>;
+
+    /// Cheap activity probe (#277): the Unix timestamp (seconds) of the
+    /// session window's last activity, or `None` when it can't be read.
+    /// Callers use it to skip the heavy `capture` when the pane hasn't
+    /// changed. The default returns `None`, which keeps callers on the
+    /// unconditional-capture path, so existing impls need no change.
+    fn last_activity_secs(&self, _session: &str) -> Option<u64> {
+        None
+    }
 }
 
 /// Production implementation — shells out to `tmux capture-pane`.
@@ -53,6 +62,31 @@ impl PaneSource for TmuxPaneSource {
             .map(|s| s.to_string())
             .collect())
     }
+
+    /// `tmux display-message -p -t <session> '#{window_activity}'` is a
+    /// single cheap query (no scrollback transfer) returning the Unix
+    /// timestamp of the window's last activity. Gating `capture` on it
+    /// stops an idle pane being re-captured ~10x/second (#277). This is the
+    /// *window's* activity, which is the right signal because a teamctl
+    /// agent session is single-window/single-pane today; if sessions ever
+    /// gain extra windows or splits, revisit this (the slow 1 Hz
+    /// unconditional refresh bounds any staleness to ~1s regardless). An
+    /// empty or non-numeric result (unknown session, or a tmux without
+    /// `window_activity`) yields `None`, which falls back to an
+    /// unconditional capture, the same behaviour as before this change.
+    fn last_activity_secs(&self, session: &str) -> Option<u64> {
+        let output = Command::new("tmux")
+            .args(["display-message", "-p", "-t", session, "#{window_activity}"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<u64>()
+            .ok()
+    }
 }
 
 /// Take the last `n` lines so the detail pane never overruns its
@@ -78,12 +112,19 @@ pub mod test_support {
     pub struct MockPaneSource {
         pub lines: Vec<String>,
         pub asked: Mutex<Vec<String>>,
+        /// Canned activity timestamp returned by `last_activity_secs`.
+        /// `None` (the default) keeps callers on the always-capture path.
+        pub activity_ts: Option<u64>,
     }
 
     impl PaneSource for MockPaneSource {
         fn capture(&self, session: &str) -> Result<Vec<String>> {
             self.asked.lock().unwrap().push(session.to_string());
             Ok(self.lines.clone())
+        }
+
+        fn last_activity_secs(&self, _session: &str) -> Option<u64> {
+            self.activity_ts
         }
     }
 }
@@ -118,6 +159,7 @@ mod tests {
         let mock = MockPaneSource {
             lines: vec!["hi".into(), "bye".into()],
             asked: Mutex::new(Vec::new()),
+            ..Default::default()
         };
         let lines = mock.capture("t-p-a").unwrap();
         assert_eq!(lines, vec!["hi", "bye"]);
