@@ -2011,6 +2011,7 @@ async fn handle_voice(bot: &Bot, msg: &Message, state: &State) -> ResponseResult
     let outcome = transcribe(&audio, stt).await;
     let decision = map_voice_outcome(&outcome);
 
+    let mut insert_ok = false;
     if let Some(inbox_text) = decision.inbox_text.as_deref() {
         let c = state.conn.lock().await;
         // The verify-reply is about to tell the operator what was heard,
@@ -2018,23 +2019,49 @@ async fn handle_voice(bot: &Bot, msg: &Message, state: &State) -> ResponseResult
         // INSERT fails we still send the reply (matches the existing
         // text/dm paths) but log loudly so the drop is diagnosable —
         // mirrors the `tracing::error!` in `handle_inbound_media`.
-        if let Err(e) = c.execute(
+        match c.execute(
             "INSERT INTO messages
                 (project_id, sender, recipient, text, sent_at, telegram_msg_id)
              VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4)",
             params![project, manager, inbox_text, inbound_msg_id],
         ) {
-            tracing::error!(
+            Ok(_) => insert_ok = true,
+            Err(e) => tracing::error!(
                 "voice transcript INSERT failed for {manager}: {e} (operator was \
                  told what was heard but the agent will not receive it)"
-            );
+            ),
         }
+    }
+
+    // #263: confirm the routing to the manager with the same `→ {target}` echo
+    // string the text / dm / media paths use, as a plain send (no
+    // `reply_parameters`) and before the transcript echo so the chat reads as
+    // routing confirmation then what was heard. Note this echo is gated
+    // STRICTER than those sibling paths on purpose: they echo unconditionally
+    // (`let _ = c.execute(...)`), confirming the route even when the INSERT was
+    // dropped, whereas `voice_should_echo_routing` requires the row to have
+    // landed. Confirming a route that never reached the mailbox is exactly the
+    // false "agent got it" this ticket exists to kill, so do not "align" this
+    // gate away. (The siblings' unconditional echo is a separate latent gap.)
+    if voice_should_echo_routing(&decision, insert_ok) {
+        bot.send_message(msg.chat.id, format!("→ {manager}"))
+            .await?;
     }
 
     bot.send_message(msg.chat.id, decision.user_reply)
         .reply_parameters(reply_to)
         .await?;
     Ok(())
+}
+
+/// #263: the operator gets the `→ {manager}` routing echo only when the
+/// transcript actually reached the mailbox — a transcript was produced
+/// (`inbox_text` is `Some`) AND its INSERT succeeded. A transcription failure
+/// or skip (no `inbox_text`) and a dropped INSERT both yield no echo, so the
+/// operator is never told an agent received audio it did not. Pure so the
+/// three branches are unit-testable without a live `Bot`.
+fn voice_should_echo_routing(decision: &VoiceDecision, insert_ok: bool) -> bool {
+    decision.inbox_text.is_some() && insert_ok
 }
 
 /// T-236: body of the operator-facing reply when voice arrives on a
@@ -3986,6 +4013,36 @@ mod tests {
         // And the failure shape must NOT match the skipped phrasing —
         // the operator needs to know whether they were heard or not.
         assert!(!d.user_reply.contains("couldn't capture"));
+    }
+
+    #[test]
+    fn voice_echoes_routing_only_on_a_successful_insert() {
+        // #263, the three acceptance branches. Success: a transcript was
+        // produced and its INSERT landed → the operator gets the `→ {manager}`
+        // routing echo.
+        let ok = map_voice_outcome(&SttOutcome::Ok("hello team".into()));
+        assert!(
+            voice_should_echo_routing(&ok, true),
+            "success path must confirm routing"
+        );
+        // Dropped INSERT: a transcript exists but the row failed to write →
+        // no echo, so the operator is never told an agent received it.
+        assert!(
+            !voice_should_echo_routing(&ok, false),
+            "a dropped INSERT must not claim routing"
+        );
+        // Transcription failure / skip: no transcript → no row, no echo,
+        // regardless of the insert flag (the INSERT never runs in the handler).
+        let failed = map_voice_outcome(&SttOutcome::Failed("network down".into()));
+        assert!(
+            !voice_should_echo_routing(&failed, true),
+            "a transcription failure must not confirm routing"
+        );
+        let skipped = map_voice_outcome(&SttOutcome::Skipped);
+        assert!(
+            !voice_should_echo_routing(&skipped, true),
+            "an empty/skipped capture must not confirm routing"
+        );
     }
 
     #[test]
