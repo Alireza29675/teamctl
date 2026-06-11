@@ -104,13 +104,20 @@ jobs:
       # macOS bash 3.2 byte-for-byte on the parser path). These
       # are sub-second; they fail fast before the slower test
       # matrix kicks in. The macOS runner above catches the same
-      # class for real, but at much higher cost — keep both.
-      - name: Wrapper script — POSIX shell parse check
+      # class for real, but at much higher cost — keep both. Covers
+      # every shipped managed shell asset: the agent wrapper and the
+      # #430/#439 boot-context hook (T-439 grew the latter into real
+      # shell logic, so it earns the same gate).
+      - name: Managed shell assets — POSIX shell parse check
         if: matrix.os == 'ubuntu-24.04'
-        run: dash -n crates/teamctl/assets/agent-wrapper.sh
-      - name: Wrapper script — bash 3.2 compat parse check
+        run: |
+          dash -n crates/teamctl/assets/agent-wrapper.sh
+          dash -n crates/teamctl/assets/boot.sh
+      - name: Managed shell assets — bash 3.2 compat parse check
         if: matrix.os == 'ubuntu-24.04'
-        run: bash --posix -O compat32 -n crates/teamctl/assets/agent-wrapper.sh
+        run: |
+          bash --posix -O compat32 -n crates/teamctl/assets/agent-wrapper.sh
+          bash --posix -O compat32 -n crates/teamctl/assets/boot.sh
       - run: cargo fmt --all -- --check
         if: matrix.rust == 'stable'
       # T-397: the MSRV leg verifies only that the *shipped CLI* — the four

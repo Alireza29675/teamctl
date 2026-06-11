@@ -997,6 +997,141 @@ managers:
         // (the command runs in the agent's shell, macOS bash 3.2 included).
         assert!(DEFAULT_BOOT_SCRIPT.starts_with("#!/bin/sh"));
         assert!(DEFAULT_BOOT_SCRIPT.contains("set -u"));
+        // #439: the two source-specific extensions and the argv-optional
+        // guards. The `${1:-}` / `${2:-}` reads keep the script `set -u`-safe
+        // when an older rendered hook passes no argv (downtime then omits).
+        assert!(
+            DEFAULT_BOOT_SCRIPT.contains("${1:-}") && DEFAULT_BOOT_SCRIPT.contains("${2:-}"),
+            "boot.sh must guard its optional argv under set -u"
+        );
+        assert!(
+            DEFAULT_BOOT_SCRIPT.contains("You were down for"),
+            "boot.sh must carry the downtime sentence"
+        );
+        assert!(
+            DEFAULT_BOOT_SCRIPT.contains("Re-anchor before continuing"),
+            "boot.sh must carry the compact re-anchor copy"
+        );
+    }
+
+    /// #439: execute the real boot.sh asset on the host shell and assert the
+    /// wake notice per `source` × file-state. Each run exercises only its
+    /// host's native branch — macOS takes the BSD `stat -f`/`date -r` path,
+    /// Linux the GNU `stat -c`/`date -d` path — so it is the CI matrix across
+    /// BOTH the macos-14 and ubuntu-24.04 legs that proves the two portability
+    /// fallbacks on real hardware, not just reasoned about. Mtimes are set
+    /// precisely via `File::set_modified` (in std since 1.75, under our 1.86
+    /// MSRV) so the buckets are deterministic.
+    #[test]
+    fn boot_script_reports_downtime_and_reanchor() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, SystemTime};
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("boot.sh");
+        std::fs::write(&script, DEFAULT_BOOT_SCRIPT).unwrap();
+
+        // Run boot.sh under /bin/sh with the given stdin source + argv paths,
+        // returning the parsed `additionalContext`. Parsing as JSON also
+        // enforces the ASCII no-escaping contract: a stray quote in any
+        // injected copy would break this parse and fail the test.
+        let run = |source: &str, args: &[&std::path::Path]| -> String {
+            let mut cmd = Command::new("/bin/sh");
+            cmd.arg(&script);
+            for a in args {
+                cmd.arg(a);
+            }
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            let mut child = cmd.spawn().unwrap();
+            let payload = format!("{{\"source\":\"{source}\"}}");
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(payload.as_bytes())
+                .unwrap();
+            let out = child.wait_with_output().unwrap();
+            assert!(
+                out.status.success(),
+                "boot.sh exited non-zero for source={source}"
+            );
+            let stdout = String::from_utf8(out.stdout).unwrap();
+            let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+            v["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+
+        // A file whose mtime is `secs_ago` seconds before now.
+        let aged = |name: &str, secs_ago: u64| -> std::path::PathBuf {
+            let p = dir.path().join(name);
+            let f = std::fs::File::create(&p).unwrap();
+            f.set_modified(SystemTime::now() - Duration::from_secs(secs_ago))
+                .unwrap();
+            p
+        };
+        let missing = dir.path().join("does-not-exist");
+
+        // source variants, no argv: base notice only, with the compact
+        // re-anchor appended on `compact`.
+        let startup = run("startup", &[]);
+        assert!(startup.starts_with("You booted at "), "{startup}");
+        assert!(
+            !startup.contains("You were down"),
+            "no argv => no downtime: {startup}"
+        );
+        for (src, lead) in [
+            ("resume", "You resumed at "),
+            ("clear", "You cleared context at "),
+        ] {
+            let out = run(src, &[]);
+            assert!(out.starts_with(lead), "{out}");
+            assert!(
+                !out.contains("You were down") && !out.contains("Re-anchor"),
+                "{src} must stay the base notice: {out}"
+            );
+        }
+        let compact = run("compact", &[]);
+        assert!(compact.starts_with("You compacted at "), "{compact}");
+        assert!(
+            compact.contains("Re-anchor before continuing: re-read your working files"),
+            "compact must carry the re-anchor copy: {compact}"
+        );
+
+        // startup downtime from LASTSEEN ($1), marker ($2) absent.
+        assert!(
+            run("startup", &[&aged("ls_2h", 7200), &missing])
+                .contains("You were down for about 2 hours (last active "),
+            "2h lastseen => 2 hours"
+        );
+        assert!(
+            run("startup", &[&aged("ls_30s", 30), &missing])
+                .contains("You were down for under a minute (last active "),
+            "30s lastseen => under a minute"
+        );
+
+        // Unclean shutdown: the marker survived and is fresher than LASTSEEN,
+        // so its mtime wins.
+        assert!(
+            run("startup", &[&aged("l_2h", 7200), &aged("m_10m", 600)])
+                .contains("You were down for about 10 minutes "),
+            "present marker (10m) beats lastseen (2h)"
+        );
+
+        // Omit cases: both files missing, and a non-startup source never
+        // reports downtime even with a usable file present.
+        assert!(
+            !run("startup", &[&missing, &missing]).contains("You were down"),
+            "both missing => omit"
+        );
+        assert!(
+            !run("resume", &[&aged("ls_for_resume", 7200), &missing]).contains("You were down"),
+            "resume must not report downtime"
+        );
     }
 
     /// #430: `teamctl up` materializes `bin/boot.sh` next to the wrapper, with

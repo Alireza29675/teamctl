@@ -88,6 +88,20 @@ pub fn heartbeat_path(root: &Path, project: &str, agent: &str) -> PathBuf {
         .join(format!("{project}-{agent}"))
 }
 
+/// Per-agent "last seen" marker, a sibling of [`heartbeat_path`] (#439). The
+/// boot-context hook `touch`es it at clean turn-end — alongside `rm`-ing the
+/// heartbeat marker — so a freshly woken session can compute how long the
+/// agent was down. Unlike the heartbeat marker (removed at every turn-end,
+/// so present at boot only after an *unclean* shutdown), this one persists
+/// across the gap, making its mtime the agent's last activity. Same compound
+/// `<project>-<agent>` stem as every sibling so cross-project name clashes
+/// can't collide, with a `.lastseen` suffix so it never shadows the marker
+/// the TUI stats for Working/Idle.
+pub fn lastseen_path(root: &Path, project: &str, agent: &str) -> PathBuf {
+    root.join("state/heartbeats")
+        .join(format!("{project}-{agent}.lastseen"))
+}
+
 /// Absolute path to the shared boot-context hook script (#430). Wired into
 /// every claude-code agent's `SessionStart` hook and rewritten by `teamctl
 /// up` (see `ensure_wrapper_and_dirs`), so it sits beside the agent wrapper
@@ -213,8 +227,21 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
         // quoting that breaks on an embedded apostrophe.
         let marker =
             crate::supervisor::shlex::try_quote(&path).expect("heartbeat marker path is NUL-free");
+        // #439: the turn-end clear first `touch`es the per-agent LASTSEEN
+        // sibling, recording the moment of last activity before removing the
+        // marker. LASTSEEN survives the gap (the marker does not), so the
+        // boot-context hook can read its mtime to report downtime on the next
+        // startup. `touch && rm` keeps it one command CC runs in one /bin/sh;
+        // the touch is on a dir teamctl guarantees exists, so it effectively
+        // never fails — and if it ever did, the marker simply lingers one 15s
+        // window (the same bound an unclean shutdown already carries).
+        let lastseen_p = lastseen_path(&compose.root, h.project, h.agent)
+            .display()
+            .to_string();
+        let lastseen = crate::supervisor::shlex::try_quote(&lastseen_p)
+            .expect("lastseen marker path is NUL-free");
         let touch = format!("touch {marker}");
-        let clear = format!("rm -f {marker}");
+        let clear = format!("touch {lastseen} && rm -f {marker}");
         for (event, command) in [
             ("PreToolUse", &touch),
             ("UserPromptSubmit", &touch),
@@ -249,8 +276,26 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
     // #258 — its downtime-context idea lives on here).
     {
         let path = boot_script_path(&compose.root).display().to_string();
-        let command =
+        let boot =
             crate::supervisor::shlex::try_quote(&path).expect("boot script path is NUL-free");
+        // #439: pass the per-agent LASTSEEN + MARKER paths as positional argv
+        // so boot.sh can report downtime on `startup`. The script stays shared
+        // and agent-agnostic — identity arrives via argv, not baked into the
+        // path (the #428 per-agent precedent). Each path is shlex-quoted like
+        // the script path, so a compose root with spaces or a quote can't
+        // word-split into the wrong argument. Order is (lastseen, marker);
+        // boot.sh prefers the marker's mtime when it survives an unclean stop.
+        let lastseen_p = lastseen_path(&compose.root, h.project, h.agent)
+            .display()
+            .to_string();
+        let lastseen = crate::supervisor::shlex::try_quote(&lastseen_p)
+            .expect("lastseen marker path is NUL-free");
+        let marker_p = heartbeat_path(&compose.root, h.project, h.agent)
+            .display()
+            .to_string();
+        let marker = crate::supervisor::shlex::try_quote(&marker_p)
+            .expect("heartbeat marker path is NUL-free");
+        let command = format!("{boot} {lastseen} {marker}");
         hooks_obj
             .entry("SessionStart".to_string())
             .or_insert_with(|| serde_json::Value::Array(Vec::new()))
@@ -1318,10 +1363,13 @@ mod tests {
             stop_failure[0].get("matcher").is_none(),
             "StopFailure slot 0 should be the match-all heartbeat clear"
         );
-        assert!(stop_failure[0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .starts_with("rm -f "));
+        // #439: the heartbeat clear now records LASTSEEN before removing the
+        // marker, so the command leads with `touch ` and still rm's the marker.
+        let clear_cmd = stop_failure[0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(
+            clear_cmd.starts_with("touch ") && clear_cmd.contains(" && rm -f "),
+            "StopFailure slot 0 should touch lastseen then rm the marker: {clear_cmd}"
+        );
         assert_eq!(
             stop_failure[1]["matcher"].as_str().unwrap(),
             "rate_limit",
@@ -1398,6 +1446,11 @@ mod tests {
         // command, so a regression in quoting (or a dropped `touch`/`rm`)
         // fails here rather than silently misfiring at runtime.
         let q = crate::supervisor::shlex::try_quote(&path).unwrap();
+        // #439: the turn-end clear also touches the LASTSEEN sibling.
+        let ls_path = lastseen_path(&c.root, h.project, h.agent)
+            .display()
+            .to_string();
+        let ls = crate::supervisor::shlex::try_quote(&ls_path).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
         let hooks = &v["hooks"];
@@ -1426,7 +1479,8 @@ mod tests {
 
         // Stop + StopFailure clear it. The heartbeat clear is always slot 0
         // (match-all); on StopFailure the #431 rate-limit marker follows at
-        // slot 1, so the heartbeat entry keeps its slot.
+        // slot 1, so the heartbeat entry keeps its slot. #439: the clear first
+        // touches the LASTSEEN sibling, then rm's the marker, in one command.
         for ev in ["Stop", "StopFailure"] {
             let entry = &hooks[ev].as_array().unwrap()[0];
             assert!(
@@ -1435,8 +1489,8 @@ mod tests {
             );
             assert_eq!(
                 entry["hooks"][0]["command"].as_str().unwrap(),
-                format!("rm -f {q}"),
-                "{ev} should rm the quoted marker"
+                format!("touch {ls} && rm -f {q}"),
+                "{ev} should touch the quoted lastseen then rm the quoted marker"
             );
         }
     }
@@ -1445,14 +1499,24 @@ mod tests {
     fn session_start_hook_runs_the_boot_script() {
         // #430: the SessionStart boot-context hook renders as a single
         // match-all entry whose command is the shlex-quoted absolute path to
-        // the shared `bin/boot.sh` asset, with a 5s timeout. The script (not
-        // this JSON) emits the REQUIRED `hookEventName` — here we pin the
-        // wiring that points Claude Code at it, and that it fires on every
-        // source (no matcher).
+        // the shared `bin/boot.sh` asset, with a 5s timeout. #439: the command
+        // now passes two positional argv — the quoted LASTSEEN then MARKER
+        // paths — so the script can compute downtime. The script (not this
+        // JSON) emits the REQUIRED `hookEventName` — here we pin the wiring
+        // that points Claude Code at it, that it carries the per-agent argv,
+        // and that it fires on every source (no matcher).
         let c = fixture();
         let h = c.agents().next().unwrap();
         let path = boot_script_path(&c.root).display().to_string();
         let q = crate::supervisor::shlex::try_quote(&path).unwrap();
+        let ls_path = lastseen_path(&c.root, h.project, h.agent)
+            .display()
+            .to_string();
+        let ls = crate::supervisor::shlex::try_quote(&ls_path).unwrap();
+        let marker_path = heartbeat_path(&c.root, h.project, h.agent)
+            .display()
+            .to_string();
+        let marker = crate::supervisor::shlex::try_quote(&marker_path).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
         let bucket = v["hooks"]["SessionStart"].as_array().unwrap();
@@ -1470,10 +1534,32 @@ mod tests {
         assert_eq!(inner["type"].as_str().unwrap(), "command");
         assert_eq!(
             inner["command"].as_str().unwrap(),
-            q,
-            "SessionStart should run the quoted boot.sh path"
+            format!("{q} {ls} {marker}"),
+            "SessionStart should run the quoted boot.sh path with lastseen + marker argv"
         );
         assert_eq!(inner["timeout"].as_i64().unwrap(), 5, "5s timeout expected");
+    }
+
+    #[test]
+    fn lastseen_path_is_a_dotlastseen_sibling_of_the_marker() {
+        // #439: the lastseen marker lives in the same state/heartbeats dir as
+        // the heartbeat marker, with the same `<project>-<agent>` stem plus a
+        // `.lastseen` suffix — so it never shadows the marker the TUI stats for
+        // Working/Idle. The two render tests use this fn on both sides of their
+        // assertions; this pins the literal shape they rely on.
+        let root = std::path::Path::new("/srv/.team");
+        let marker = heartbeat_path(root, "proj", "ada");
+        let lastseen = lastseen_path(root, "proj", "ada");
+        assert_eq!(lastseen, root.join("state/heartbeats/proj-ada.lastseen"));
+        assert_eq!(
+            lastseen.parent(),
+            marker.parent(),
+            "lastseen must sit in the same heartbeats dir as the marker"
+        );
+        assert_ne!(
+            lastseen, marker,
+            "lastseen must not collide with the marker"
+        );
     }
 
     #[test]
