@@ -3,7 +3,7 @@
 //! Detects the install method from `current_exe()`:
 //!
 //! - `…/Cellar/teamctl/…` → Homebrew (`brew upgrade teamctl`).
-//! - `…/.cargo/bin/teamctl` → cargo (`cargo install teamctl teamctl-ui team-mcp team-bot --force`).
+//! - `…/.cargo/bin/teamctl` → cargo (`cargo install teamctl team-mcp team-bot --force`).
 //! - Anything else → shell installer (`curl -fsSL https://teamctl.run/install | sh`).
 //!
 //! The user can override autodetect with `--method <name>` and skip the
@@ -26,13 +26,13 @@ pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PLUGIN_ID: &str = "teamctl@teamctl";
 
 /// T-188: single source of truth for the workspace binaries `teamctl
-/// update` reinstalls on the cargo path. Used by both the displayed
+/// update` reinstalls on the cargo path — used by both the displayed
 /// "About to run:" preview and the actual `cargo install` exec call,
-/// so the two can't drift the way they did when `teamctl-ui` was
-/// silently missing from the exec list. Order matches the shape
-/// `tools/install.sh:91` already ships with so user-visible commands
-/// look identical across install paths.
-const CARGO_INSTALL_CRATES: &[&str] = &["teamctl", "teamctl-ui", "team-mcp", "team-bot"];
+/// so the two can't drift apart. T-222: `teamctl-ui` is deliberately
+/// excluded — the TUI ships out-of-band and stays opt-in via the
+/// `teamctl ui` lazy-install prompt, so `teamctl update` reinstalls
+/// only the three core binaries.
+const CARGO_INSTALL_CRATES: &[&str] = &["teamctl", "team-mcp", "team-bot"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallMethod {
@@ -263,10 +263,11 @@ fn exec_brew_upgrade() -> Result<()> {
         .context("run `brew update`")?;
     require_success(status, "brew update")?;
     // T-188: the homebrew tap is currently disabled (#3); if/when it
-    // re-enables with separate `teamctl-ui` / `team-mcp` / `team-bot`
-    // formulae, this needs to upgrade all of them — mirror the
-    // `CARGO_INSTALL_CRATES` list above — or the brew path will leak
-    // the same staleness bug the cargo path just shed.
+    // re-enables with separate `team-mcp` / `team-bot` formulae, this
+    // needs to upgrade all of them — mirror the `CARGO_INSTALL_CRATES`
+    // list above — or the brew path will leak the same staleness bug the
+    // cargo path just shed. (`teamctl-ui` is opt-in via `teamctl ui`,
+    // not part of the core update set — see the const above.)
     let status = Command::new("brew")
         .args(["upgrade", "teamctl"])
         .status()
@@ -583,35 +584,33 @@ mod tests {
     }
 
     #[test]
-    fn cargo_install_crates_includes_all_four_binaries() {
-        // T-188: regression pin. The bug was that `teamctl-ui` silently
-        // dropped out of the cargo install list, leaving operators with
-        // a stale TUI binary across upgrades. The fix centralizes the
-        // crate list as a const used by both `describe()` and
-        // `exec_cargo_install()`, so they can't drift apart again.
-        // Anchoring the const directly here catches a re-introduction.
-        assert_eq!(
-            CARGO_INSTALL_CRATES,
-            &["teamctl", "teamctl-ui", "team-mcp", "team-bot"]
-        );
+    fn cargo_install_crates_is_three_core_binaries() {
+        // T-222: regression pin. `teamctl update` reinstalls only the
+        // three core binaries on the cargo path; `teamctl-ui` is
+        // deliberately excluded so the TUI stays opt-in via the
+        // `teamctl ui` lazy-install prompt rather than being force-
+        // reinstalled on every update. Supersedes the T-188 four-binary
+        // pin — the single-source-of-truth guarantee it protected
+        // (describe() and exec_cargo_install() share this const) still
+        // holds; only the membership changed.
+        assert_eq!(CARGO_INSTALL_CRATES, &["teamctl", "team-mcp", "team-bot"]);
     }
 
     #[test]
-    fn cargo_plan_describe_lists_teamctl_ui() {
-        // Belt-and-suspenders pin: the user-facing "About to run:"
-        // string MUST surface `teamctl-ui`. If a future refactor
-        // disconnects `describe()` from `CARGO_INSTALL_CRATES`, this
-        // fails before the docstring/display drift would surface to
-        // operators.
+    fn cargo_install_argv_shape_excludes_teamctl_ui() {
+        // Argv-shape guard (T-222): the user-facing "About to run:" line
+        // — which mirrors the actual `cargo install` argv, since both
+        // read `CARGO_INSTALL_CRATES` — must reinstall exactly the three
+        // core binaries with `--force`, and must NOT surface `teamctl-ui`.
         let plan = Plan {
             method: InstallMethod::Cargo,
         };
         let line = plan.describe();
+        assert_eq!(line, "cargo install teamctl team-mcp team-bot --force");
         assert!(
-            line.contains("teamctl-ui"),
-            "describe() must surface teamctl-ui, got: {line}"
+            !line.contains("teamctl-ui"),
+            "cargo update path must not reinstall teamctl-ui, got: {line}"
         );
-        assert!(line.contains("--force"));
     }
 
     #[test]
