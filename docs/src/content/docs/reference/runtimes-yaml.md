@@ -10,7 +10,7 @@ Each YAML file under `runtimes/` defines one runtime adapter. File stem = runtim
 |---|---|---|---|
 | `binary` | string | yes | CLI binary name (resolved on `$PATH`) or absolute path. |
 | `supports_mcp` | bool | no, default `false` | Must be `true` for participation in the mailbox. All shipped runtimes set this. |
-| `session_resume` | string | no | Parsed-but-inert metadata, kept for back-compat. The actual resume strategy is hard-coded per runtime in `agent-wrapper.sh`: claude-code uses deterministic UUIDv5 `--session-id` (always-on), codex resumes via `--profile`, gemini has no equivalent. Setting this in a custom adapter is a no-op today. |
+| `session_resume` | string | no | Parsed-but-inert metadata, kept for back-compat. The actual resume strategy is hard-coded per runtime in `agent-wrapper.sh`: claude-code spawns with a deterministic UUIDv5 derived from `teamctl:<project>:<agent>` (`--session-id` to create, `--resume` to attach existing); codex resumes via `--profile`; gemini has no equivalent. Setting this in a custom adapter is a no-op today. |
 | `default_model` | string | no | Used when an agent doesn't set its own `model:`. |
 | `env` | map<string,string> | no | Merged into the agent's environment on launch. |
 
