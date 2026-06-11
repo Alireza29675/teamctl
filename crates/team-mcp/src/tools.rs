@@ -92,7 +92,10 @@ pub fn schema() -> Value {
                 "properties": {
                     "to":        { "type": "string", "description": "Target agent id. Either `<project>:<agent>` or a bare `<agent>` in the caller's project." },
                     "text":      { "type": "string" },
-                    "thread_id": { "type": "string" }
+                    "thread_id": {
+                        "type": "string",
+                        "description": "Optional, but the norm on replies. Group this DM into its conversation thread: when the message you're answering carried a `thread_id` in its channel meta, pass that same value here so the conversation stays coherent across the timeline; omit it (start a fresh thread) only when you begin a genuinely new topic. On cross-project *bridged* DMs the bridge sets the thread id for you, so any `thread_id` you pass is ignored."
+                    }
                 },
                 "additionalProperties": false
             }
@@ -200,7 +203,7 @@ pub fn schema() -> Value {
                     },
                     "thread_id": {
                         "type": "string",
-                        "description": "Optional. Group this reply with an existing conversation thread. Pass the `thread_id` value you saw in the channel meta of the inbound message you are responding to; omit for a fresh thread."
+                        "description": "Optional. Group this reply into its mailbox conversation thread: when the inbound message's channel meta carried a `thread_id`, pass that same value here so the conversation stays coherent across the timeline; omit it (start a fresh thread) only when you begin a genuinely new topic. Operator messages from Telegram currently arrive without a `thread_id`, so there's usually nothing to carry on this path — use `reply_to_message_id` for in-chat reply threading to the operator."
                     },
                     "reply_to_message_id": {
                         "type": "integer",
@@ -1279,6 +1282,37 @@ mod tests {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn thread_id_params_document_expected_carry_on() {
+        // #115: thread_id carry-on is prompt-level guidance (not enforced).
+        // Pin that the `dm` and `reply_to_user` thread_id params carry a
+        // description framing carry-on as the norm on replies — regressing
+        // `dm.thread_id` back to an empty param (the original bug) or
+        // softening the wording flattens long conversations into one stream.
+        let tools = schema();
+        let tools = tools.as_array().expect("schema is a JSON array");
+        let desc = |tool: &str, param: &str| -> String {
+            tools
+                .iter()
+                .find(|t| t["name"] == tool)
+                .and_then(|t| t["inputSchema"]["properties"][param]["description"].as_str())
+                .unwrap_or_else(|| panic!("{tool}.{param} must have a description"))
+                .to_string()
+        };
+
+        let dm = desc("dm", "thread_id");
+        assert!(
+            dm.contains("genuinely new topic") && dm.contains("thread_id"),
+            "dm.thread_id must carry the load-bearing carry-on guidance, got: {dm}"
+        );
+
+        let reply = desc("reply_to_user", "thread_id");
+        assert!(
+            reply.contains("genuinely new topic") && reply.contains("thread_id"),
+            "reply_to_user.thread_id must carry the load-bearing carry-on guidance, got: {reply}"
+        );
     }
 
     #[tokio::test]
