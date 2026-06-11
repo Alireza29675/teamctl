@@ -139,7 +139,8 @@ enum Command {
     /// agent in it · `<project> <agent>…` → just those agents ·
     /// `<project> --except <agent>…` → all but those. A per-agent
     /// scope FORCE-restarts the selected agents even if their config
-    /// is unchanged; unscoped reload keeps the changed-only behavior.
+    /// is unchanged; unscoped reload keeps the changed-only behavior
+    /// unless `--force` is passed.
     Reload {
         /// Print the reload plan without rendering, registering, or
         /// touching any agent. Same per-line format as a real reload,
@@ -156,6 +157,14 @@ enum Command {
         /// Composes with `--force`. Claude runtime only.
         #[arg(long)]
         fresh: bool,
+        /// Restart every agent in scope even when its config is
+        /// unchanged. Without this, an unscoped reload restarts only
+        /// agents whose env, mcp, or role_prompt changed. Composes with
+        /// `--fresh` and `--dry-run`. (A per-agent scope already
+        /// force-restarts, so `--force` is for the unscoped and
+        /// `<project>`-only forms.)
+        #[arg(long)]
+        force: bool,
     },
 
     // ── Inspection ───────────────────────────────────────────────────
@@ -472,9 +481,10 @@ fn main() -> Result<()> {
             dry_run,
             scope,
             fresh,
+            force,
         } => {
             let sel = cmd::agent_filter::AgentSelector::from_args(scope.agents, scope.except);
-            cmd::reload::run(&root, dry_run, scope.project.as_deref(), &sel, fresh)
+            cmd::reload::run(&root, dry_run, scope.project.as_deref(), &sel, fresh, force)
         }
         Command::Ps => cmd::status::run(&root),
         Command::Logs { target } => cmd::logs::run(&root, &target),

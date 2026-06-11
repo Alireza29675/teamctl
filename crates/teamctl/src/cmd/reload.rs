@@ -49,6 +49,7 @@ pub fn run(
     project: Option<&str>,
     sel: &AgentSelector,
     fresh: bool,
+    force: bool,
 ) -> Result<()> {
     let compose = super::load(root)?;
     let errs = team_core::validate::validate(&compose);
@@ -88,6 +89,15 @@ pub fn run(
     let mut plan = snapshot::plan(prev.as_ref(), &next);
     if let Some(id) = scoped.as_deref() {
         plan = filter_plan_to_project(plan, id);
+    }
+    // T-384: `--force` restarts every agent in scope regardless of the
+    // diff. Drag the kept (unchanged, still-running) agents into the
+    // change set so they are drained and brought back up like a changed
+    // agent. Added / removed / genuinely-changed agents are unaffected.
+    // Runs after project filtering so a `<project>`-scoped force only
+    // bounces that project's agents.
+    if force {
+        force_promote_keeps(&mut plan, prev.as_ref());
     }
     let no_changes = plan.is_empty()
         && prev
@@ -259,6 +269,43 @@ fn filter_plan_to_project(plan: ReloadPlan, project_id: &str) -> ReloadPlan {
     }
 }
 
+/// T-384: `--force` support. Move every kept agent into the `change`
+/// set so the apply path drains and restarts it even though its
+/// fingerprints are unchanged. The prior snapshot entry (always present
+/// for a keep, which by definition exists in both prev and next) is
+/// copied into `change_prior` so teardown targets the actually-running
+/// tmux session, prefix-drift-safe, exactly like the diff path. The
+/// promoted entry carries `ChangedInputs::forced()` (all-false), which
+/// the preview/apply output renders as `(forced)`.
+fn force_promote_keeps(plan: &mut ReloadPlan, prev: Option<&snapshot::Snapshot>) {
+    let keeps = std::mem::take(&mut plan.keep);
+    for id in keeps {
+        match prev.and_then(|s| s.agents.get(&id)) {
+            Some(prior) => {
+                plan.change_prior.insert(id.clone(), prior.clone());
+                plan.change.push((id, snapshot::ChangedInputs::forced()));
+            }
+            // A keep without a prior entry can't happen (keeps come from
+            // prev ∩ next); leave it kept so a stopped one is still
+            // revived by apply_plan's keep loop.
+            None => plan.keep.push(id),
+        }
+    }
+}
+
+/// The leading `verb · id (annotation)` for a `change` entry, shared by
+/// preview and apply so the two can't drift. A genuine diff entry
+/// reports which inputs changed (`changed · id (env+mcp)`); a
+/// `--force`-promoted keep carries an all-false `ChangedInputs` and
+/// reports `reloaded · id (forced)`, matching the scoped force path.
+fn change_line_head(id: &str, inputs: &snapshot::ChangedInputs) -> String {
+    if inputs.any() {
+        format!("changed · {id} ({})", inputs.label())
+    } else {
+        format!("reloaded · {id} (forced)")
+    }
+}
+
 /// Write the plan to stdout in the same per-line format the apply
 /// path produces, with a `(dry run)` annotation. Used by `--dry-run`
 /// so the operator sees exactly the lines a real reload would print.
@@ -270,10 +317,7 @@ fn print_plan(plan: &ReloadPlan, dry: bool, fresh: bool) {
         println!("removed · {}{dry_suffix}", r.id);
     }
     for (id, inputs) in &plan.change {
-        println!(
-            "changed · {id} ({}){fresh_suffix}{dry_suffix}",
-            inputs.label()
-        );
+        println!("{}{fresh_suffix}{dry_suffix}", change_line_head(id, inputs));
     }
     for id in &plan.add {
         println!("added   · {id}{fresh_suffix}{dry_suffix}");
@@ -300,7 +344,7 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
         let prior = plan
             .change_prior
             .get(id)
-            .expect("change_prior populated by plan()");
+            .expect("change_prior populated alongside every change entry");
         let outcome = sup.drain(&spec_from_prior(compose, id, prior), drain_timeout)?;
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
@@ -309,8 +353,8 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
             sup.up(&spec)?;
         }
         println!(
-            "changed · {id} ({}){}{}",
-            inputs.label(),
+            "{}{}{}",
+            change_line_head(id, inputs),
             super::up::fresh_suffix(fresh),
             drain_suffix(outcome)
         );
@@ -486,5 +530,76 @@ mod tests {
         };
         let filtered = filter_plan_to_project(plan, "z");
         assert!(filtered.is_empty());
+    }
+
+    // ── T-384: reload --force ────────────────────────────────────────
+
+    fn snapshot_with(ids: &[&str]) -> snapshot::Snapshot {
+        let mut agents = BTreeMap::new();
+        for id in ids {
+            agents.insert((*id).to_string(), entry("/tmp/x.env"));
+        }
+        snapshot::Snapshot {
+            agents,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn force_promote_keeps_moves_keeps_into_change_as_forced() {
+        // `--force` drags every kept (unchanged) agent into the change
+        // set with the forced marker, and pulls its prior entry into
+        // change_prior so teardown targets the actually-running session.
+        let prev = snapshot_with(&["a:m", "a:w"]);
+        let mut plan = ReloadPlan {
+            keep: vec!["a:m".into(), "a:w".into()],
+            ..ReloadPlan::default()
+        };
+        force_promote_keeps(&mut plan, Some(&prev));
+        assert!(plan.keep.is_empty(), "keeps drained into change");
+        assert_eq!(plan.change.len(), 2);
+        for (id, inputs) in &plan.change {
+            assert!(!inputs.any(), "{id} promoted as forced (all-false)");
+            assert!(
+                plan.change_prior.contains_key(id),
+                "prior carried for {id} so teardown hits the running session"
+            );
+        }
+        // The shared output head renders a promoted keep as the forced line.
+        assert_eq!(
+            change_line_head(&plan.change[0].0, &plan.change[0].1),
+            "reloaded · a:m (forced)"
+        );
+    }
+
+    #[test]
+    fn force_promote_keeps_without_prior_entry_leaves_it_kept() {
+        // Defensive: a kept id absent from the prior snapshot (can't
+        // happen in practice, since keeps come from prev ∩ next) stays
+        // in keep rather than landing in change with no teardown target.
+        let prev = snapshot_with(&["a:m"]);
+        let mut plan = ReloadPlan {
+            keep: vec!["a:ghost".into()],
+            ..ReloadPlan::default()
+        };
+        force_promote_keeps(&mut plan, Some(&prev));
+        assert_eq!(plan.keep, vec!["a:ghost"]);
+        assert!(plan.change.is_empty());
+    }
+
+    #[test]
+    fn change_line_head_distinguishes_diff_from_forced() {
+        // A genuine diff entry reports which inputs changed; a forced
+        // (all-false) entry reports `reloaded · id (forced)`.
+        let genuine = ChangedInputs {
+            env: true,
+            mcp: true,
+            role_prompt: false,
+        };
+        assert_eq!(change_line_head("a:m", &genuine), "changed · a:m (env+mcp)");
+        assert_eq!(
+            change_line_head("a:m", &ChangedInputs::forced()),
+            "reloaded · a:m (forced)"
+        );
     }
 }
