@@ -24,7 +24,7 @@ use crate::approvals::{
 };
 use crate::compose::{CliMessageSender, ComposeTarget, Editor, EditorAction, MessageSender};
 use crate::data::TeamSnapshot;
-use crate::keysender::{encode_key, KeySender, ScrollDirection, TmuxKeySender};
+use crate::keysender::{encode_key, AsyncKeySender, KeySender, ScrollDirection, TmuxKeySender};
 use crate::layouts;
 use crate::mailbox::{
     BrokerMailboxSource, MailboxBuffers, MailboxInputKind, MailboxSource, MailboxTab, MessageRow,
@@ -39,7 +39,16 @@ use crate::tutorial;
 use crate::watch::Watch;
 
 const SPLASH_AUTO_DISMISS: Duration = Duration::from_secs(3);
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Idle ceiling for the event loop's `event::poll` — also the loop's
+/// redraw cadence when nothing is typed (each iteration redraws, then
+/// blocks here until a key arrives or this elapses). `event::poll` is
+/// fd-event-driven, so a keypress wakes it immediately regardless of
+/// this value (it is NOT the input-latency source, #386); lowering it
+/// only makes the idle redraw + file-watcher dirty-detect snappier. At
+/// ~30 Hz the per-iteration work is a sub-millisecond ratatui diff
+/// (no subprocess unless a capture/refresh is due), so the idle CPU
+/// cost stays negligible.
+const POLL_INTERVAL: Duration = Duration::from_millis(33);
 /// How often the team snapshot + detail-pane capture get refreshed.
 /// PR-UI-2 polls; PR-UI-3 may upgrade to event subscriptions.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -1117,7 +1126,11 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
     let pane_source = TmuxPaneSource;
     let decider = CliApprovalDecider;
     let sender = CliMessageSender;
-    let key_sender = TmuxKeySender;
+    // #386: wrap the blocking `tmux send-keys` round-trip so it runs on
+    // a background thread — the render/event loop enqueues each keystroke
+    // in ~µs and stays free to observe the next key and redraw, instead
+    // of blocking ~3ms per key on the inline subprocess.
+    let key_sender = AsyncKeySender::new(TmuxKeySender);
     let pane_resizer = crate::pane_resize::TmuxPaneResizer;
     // First refresh resolves the team root; only then can we
     // bring up the file-watcher, which keys on `<root>/state/`.

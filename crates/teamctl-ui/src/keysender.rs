@@ -9,16 +9,18 @@
 //! translated to a tmux key-name and shipped over.
 
 use std::process::Command;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Lookup contract: forward one tmux key-name to the named session.
 /// `key` is already encoded — see `encode_key` for the crossterm →
-/// tmux translation. Implementations must treat the call as
-/// fire-and-forget at the operator's typing rate; a per-call
-/// `tmux send-keys` round-trip is acceptable for v1 (the 50ms event
-/// poll already gates throughput).
+/// tmux translation. The production implementation (`TmuxKeySender`)
+/// blocks on a `tmux send-keys` round-trip; callers on a latency-
+/// sensitive thread should wrap it in `AsyncKeySender` so the round-
+/// trip happens off the caller's thread (#386).
 pub trait KeySender: Send + Sync {
     fn send(&self, session: &str, key: &EncodedKey) -> Result<()>;
 
@@ -151,9 +153,11 @@ pub fn encode_key(ev: KeyEvent) -> Option<EncodedKey> {
     }
 }
 
-/// Production implementation — shells out to `tmux send-keys`. Per-
-/// keystroke; v1 doesn't batch (the 50ms event poll already gates
-/// throughput, and per-call latency stays below typing speed).
+/// Production implementation — shells out to `tmux send-keys`, one
+/// subprocess per keystroke. The round-trip blocks the caller ~3ms
+/// (pure tmux client/server cost; the key delivery itself is free), so
+/// the TUI wraps this in `AsyncKeySender` to keep that block off its
+/// render/event loop (#386).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TmuxKeySender;
 
@@ -197,6 +201,144 @@ impl KeySender for TmuxKeySender {
             .output()
             .with_context(|| format!("invoke tmux send-keys -t {session} -X {cmd}"))?;
         Ok(())
+    }
+}
+
+/// Forward through a shared `KeySender`. Lets a single sender be both
+/// moved onto `AsyncKeySender`'s worker thread and retained by the
+/// caller (tests inspect the inner mock after the worker drains).
+impl<T: KeySender + ?Sized> KeySender for std::sync::Arc<T> {
+    fn send(&self, session: &str, key: &EncodedKey) -> Result<()> {
+        (**self).send(session, key)
+    }
+
+    fn scroll(&self, session: &str, direction: ScrollDirection) -> Result<()> {
+        (**self).scroll(session, direction)
+    }
+}
+
+/// One unit of work for the background sender thread. Mirrors the
+/// `KeySender` surface so the worker replays either a keystroke or a
+/// scroll tick against the inner (blocking) sender, in arrival order.
+enum KeyJob {
+    Send {
+        session: String,
+        key: EncodedKey,
+    },
+    Scroll {
+        session: String,
+        direction: ScrollDirection,
+    },
+}
+
+/// Non-blocking `KeySender` decorator — moves the blocking `tmux`
+/// round-trip off the caller's thread. `send`/`scroll` enqueue onto an
+/// unbounded channel and return immediately (sub-microsecond); a single
+/// background thread drains the channel in FIFO order and replays each
+/// job against the wrapped sender.
+///
+/// Why (#386): the TUI forwards each keystroke inline on its
+/// render/event loop (`app::run`). A per-key `tmux send-keys` blocks
+/// that loop ~3ms, and a keystroke that lands while the loop is mid
+/// `capture-pane` / refresh waits behind it — perceptible input lag.
+/// Handing the send to a background thread frees the loop to observe the
+/// next key and redraw. The channel is FIFO and single-consumer, so the
+/// pane still receives keys in the exact order and form the inline path
+/// produced — no batching, no reordering, so the #374 forwarding
+/// contract (Esc / Ctrl+C / arrows) is untouched.
+///
+/// Inner-sender contract: the wrapped `KeySender` must signal failures
+/// by returning `Err` (which the worker swallows and moves on, matching
+/// the inline path's best-effort `let _ = send(...)`), not by panicking.
+/// `TmuxKeySender` honours this — its `tmux` round-trip returns `Err` on
+/// any failure and never unwraps — so the worker thread is durable for
+/// the life of the app.
+pub struct AsyncKeySender {
+    tx: Option<Sender<KeyJob>>,
+    /// Worker sends `()` here once the queue is drained and closed. Drop
+    /// waits on it (bounded) so a normal quit flushes pending keys
+    /// without a stuck tmux being able to hang process exit. The `Mutex`
+    /// is only to satisfy the `Sync` bound on `KeySender` (`Receiver` is
+    /// `Send` but not `Sync`); it's touched solely from `Drop`, never on
+    /// the send hot path.
+    done: std::sync::Mutex<Receiver<()>>,
+}
+
+/// Upper bound on how long `Drop` waits for the worker to flush its
+/// queue. Comfortably covers a normal quit (the queue is near-empty —
+/// the worker drains each key in ~3ms), but caps the wait so a wedged
+/// `tmux` round-trip can't hang the terminal on exit.
+const DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
+
+impl AsyncKeySender {
+    /// Wrap a blocking sender and spawn its drain thread. `inner` is
+    /// moved onto the worker, which runs every job to completion in
+    /// arrival order. The thread lives until this `AsyncKeySender` is
+    /// dropped.
+    pub fn new<K: KeySender + 'static>(inner: K) -> Self {
+        let (tx, rx) = mpsc::channel::<KeyJob>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            // `recv` blocks until a job arrives; the loop ends only once
+            // the `Sender` is dropped (channel closed) AND the queue is
+            // drained, so a buffered burst always flushes before exit.
+            while let Ok(job) = rx.recv() {
+                match job {
+                    KeyJob::Send { session, key } => {
+                        let _ = inner.send(&session, &key);
+                    }
+                    KeyJob::Scroll { session, direction } => {
+                        let _ = inner.scroll(&session, direction);
+                    }
+                }
+            }
+            // Drained + closed — let `Drop` stop waiting. A dropped
+            // receiver (sender already gone) makes this a harmless no-op.
+            let _ = done_tx.send(());
+        });
+        Self {
+            tx: Some(tx),
+            done: std::sync::Mutex::new(done_rx),
+        }
+    }
+}
+
+impl KeySender for AsyncKeySender {
+    fn send(&self, session: &str, key: &EncodedKey) -> Result<()> {
+        if let Some(tx) = &self.tx {
+            // A closed channel (worker gone) is silent — same best-effort
+            // contract as a dropped tmux round-trip in the inline path.
+            let _ = tx.send(KeyJob::Send {
+                session: session.to_string(),
+                key: key.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn scroll(&self, session: &str, direction: ScrollDirection) -> Result<()> {
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(KeyJob::Scroll {
+                session: session.to_string(),
+                direction,
+            });
+        }
+        Ok(())
+    }
+}
+
+impl Drop for AsyncKeySender {
+    fn drop(&mut self) {
+        // Close the channel so the worker's `recv` loop ends once the
+        // queue drains, then wait (bounded) for it to signal completion,
+        // so a fast quit still flushes the last few keys the operator
+        // typed. The `DRAIN_TIMEOUT` cap means a wedged `tmux` round-trip
+        // can't hang the terminal on exit — on timeout we abandon the
+        // (detached) worker and let the OS reap it at process exit.
+        self.tx.take();
+        if let Ok(done) = self.done.get_mut() {
+            let _ = done.recv_timeout(DRAIN_TIMEOUT);
+        }
     }
 }
 
@@ -412,6 +554,147 @@ mod tests {
                 ("t-p-a".to_string(), ScrollDirection::Up),
                 ("t-p-a".to_string(), ScrollDirection::Down),
             ]
+        );
+    }
+
+    // `AsyncKeySender` decorator tests. The worker thread drains
+    // asynchronously, so the drop-join (`drop(acs)`) is the only
+    // synchronisation point that makes the recorded `calls` safe to
+    // read — every assertion below runs strictly AFTER the drop.
+
+    #[test]
+    fn async_preserves_send_order_and_flushes_on_drop() {
+        use test_support::MockKeySender;
+        // Shared so the worker owns one clone and the test inspects
+        // another after the worker drains.
+        let mock = std::sync::Arc::new(MockKeySender::default());
+        let session = "t-p-a";
+        let submitted = vec![
+            EncodedKey {
+                args: vec!["-l".into(), "a".into()],
+            },
+            EncodedKey {
+                args: vec!["-l".into(), "b".into()],
+            },
+            EncodedKey {
+                args: vec!["Escape".into()],
+            },
+            EncodedKey {
+                args: vec!["C-c".into()],
+            },
+        ];
+
+        let acs = AsyncKeySender::new(mock.clone());
+        for key in &submitted {
+            acs.send(session, key).unwrap();
+        }
+        // Drop joins the worker, which drains the channel before
+        // exiting — the flush-on-quit guarantee. Only now is `calls`
+        // race-free to read.
+        drop(acs);
+
+        let calls = mock.calls.lock().unwrap();
+        let expected: Vec<(String, EncodedKey)> = submitted
+            .into_iter()
+            .map(|key| (session.to_string(), key))
+            .collect();
+        assert_eq!(
+            *calls, expected,
+            "every send must land once, in submission order"
+        );
+    }
+
+    #[test]
+    fn async_drops_no_keys_under_a_burst() {
+        use test_support::MockKeySender;
+        let mock = std::sync::Arc::new(MockKeySender::default());
+        let key = EncodedKey {
+            args: vec!["-l".into(), "x".into()],
+        };
+
+        let acs = AsyncKeySender::new(mock.clone());
+        for _ in 0..100 {
+            acs.send("t-p-a", &key).unwrap();
+        }
+        drop(acs);
+
+        let calls = mock.calls.lock().unwrap();
+        assert_eq!(calls.len(), 100, "all 100 buffered sends must flush");
+        assert!(
+            calls.iter().all(|(s, k)| s == "t-p-a" && *k == key),
+            "no entry may be mangled or mis-routed"
+        );
+    }
+
+    #[test]
+    fn async_routes_scroll_through_the_same_channel_in_order() {
+        use test_support::MockKeySender;
+        let mock = std::sync::Arc::new(MockKeySender::default());
+        let session = "t-p-a";
+        let key_a = EncodedKey {
+            args: vec!["-l".into(), "a".into()],
+        };
+        let key_b = EncodedKey {
+            args: vec!["-l".into(), "b".into()],
+        };
+
+        let acs = AsyncKeySender::new(mock.clone());
+        // Interleave sends and scrolls — both ride the one FIFO queue.
+        acs.send(session, &key_a).unwrap();
+        acs.scroll(session, ScrollDirection::Up).unwrap();
+        acs.send(session, &key_b).unwrap();
+        acs.scroll(session, ScrollDirection::Down).unwrap();
+        drop(acs);
+
+        let calls = mock.calls.lock().unwrap();
+        assert_eq!(
+            *calls,
+            vec![(session.to_string(), key_a), (session.to_string(), key_b),],
+            "sends preserve relative order across interleaved scrolls"
+        );
+        let scrolls = mock.scroll_calls.lock().unwrap();
+        assert_eq!(
+            *scrolls,
+            vec![
+                (session.to_string(), ScrollDirection::Up),
+                (session.to_string(), ScrollDirection::Down),
+            ],
+            "scrolls preserve relative order across interleaved sends"
+        );
+    }
+
+    #[test]
+    fn async_round_trips_args_byte_identically() {
+        use test_support::MockKeySender;
+        // The channel must move the already-encoded `args` through
+        // untouched. A mangled round-trip would silently break the
+        // `\;` escape (#114) or the named-key forwarding contract
+        // (#374), so pin both arg vectors exactly.
+        let mock = std::sync::Arc::new(MockKeySender::default());
+        let session = "t-p-a";
+        let escaped_semicolon = EncodedKey {
+            args: vec!["-l".into(), "\\;".into()],
+        };
+        let named_escape = EncodedKey {
+            args: vec!["Escape".into()],
+        };
+
+        let acs = AsyncKeySender::new(mock.clone());
+        acs.send(session, &escaped_semicolon).unwrap();
+        acs.send(session, &named_escape).unwrap();
+        drop(acs);
+
+        let calls = mock.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            calls[0].1.args,
+            vec!["-l".to_string(), "\\;".to_string()],
+            "the `\\;` escape must survive the channel round-trip intact"
+        );
+        assert_eq!(
+            calls[1].1.args,
+            vec!["Escape".to_string()],
+            "a named key must survive the channel round-trip intact"
         );
     }
 }
