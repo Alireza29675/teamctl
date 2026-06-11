@@ -358,7 +358,9 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
     // the heartbeat clear's always-exit-0 `rm -f`. The compose root and the
     // `<project>:<agent>` id are baked in (render has both in scope, no env
     // dependency) and shlex-quoted like the #428 marker / #431 rl-hit id; the
-    // guard and the `--root`/`budget-record` literals are not quoted.
+    // guard and the `--root`/`budget-record` literals are not quoted. On `Stop`
+    // (clean turn-end) only: a rate-limited turn ends on `StopFailure`, so its
+    // partial spend is intentionally not recorded — an accepted v1 gap.
     {
         let root = crate::supervisor::shlex::try_quote(&compose.root.display().to_string())
             .expect("compose root is NUL-free");

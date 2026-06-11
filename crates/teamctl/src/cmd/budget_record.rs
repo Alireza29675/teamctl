@@ -7,9 +7,18 @@
 //!
 //! The `Stop` hook delivers `{session_id, cwd, transcript_path, ...}` on
 //! stdin — token usage is NOT in that payload. We read the session transcript
-//! at `transcript_path` (a JSONL file), sum the token usage of the just-finished
-//! turn (the `assistant` lines after the last `user` line), price the tokens
-//! ourselves (the transcript carries tokens, never usd), and INSERT one row.
+//! at `transcript_path` (a JSONL file) and sum the just-finished turn's token
+//! usage: the `assistant` messages after the last GENUINE user prompt
+//! (tool-result entries are stored as `user` lines too and do NOT reset the
+//! boundary — see `is_real_prompt`), deduplicated by `message.id` because
+//! Claude Code writes one line per content block and repeats each request's
+//! usage. We price the tokens ourselves (the transcript carries tokens, never
+//! usd) and INSERT one row.
+//!
+//! v1 gaps (documented, separable follow-ups): subagent (Task tool) spend is
+//! persisted to sibling `subagents/*.jsonl` files, not the main transcript, so
+//! a Task-heavy turn under-reports; and a rate-limited turn ends on
+//! `StopFailure` (not `Stop`), so its partial spend is not recorded.
 //!
 //! Fire-and-forget: any missing input degrades to a silent `Ok(())`. The hook
 //! command also carries a trailing `|| true`, so this must never error a stop.
@@ -183,6 +192,14 @@ fn sum_last_turn_usage(jsonl: &str) -> TurnUsage {
         .map_or(0, |i| i + 1);
 
     let mut usage = TurnUsage::default();
+    // Claude Code persists one JSONL line per content BLOCK, so a single
+    // assistant API response (text + several `tool_use` blocks) is written as
+    // multiple `assistant` lines that all repeat the same `message.id` and the
+    // same `usage`. Counting every line would bill each request 2-4x (≈2.3x
+    // overcount measured on a real transcript). Dedup by `message.id` so each
+    // API request's usage is summed exactly once. Lines without an id (none
+    // observed in practice) are summed as-is.
+    let mut seen_ids = std::collections::HashSet::new();
     for entry in &entries[turn_start..] {
         if entry_type(entry) != "assistant" {
             continue;
@@ -191,6 +208,11 @@ fn sum_last_turn_usage(jsonl: &str) -> TurnUsage {
             Some(m) => m,
             None => continue,
         };
+        if let Some(id) = message.get("id").and_then(|v| v.as_str()) {
+            if !seen_ids.insert(id.to_string()) {
+                continue;
+            }
+        }
         let model = message
             .get("model")
             .and_then(|m| m.as_str())
@@ -345,6 +367,27 @@ mod tests {
         assert_eq!(usage.output_tok, 0);
         assert_eq!(usage.cache_creation_tok, 0);
         assert_eq!(usage.cache_read_tok, 0);
+    }
+
+    #[test]
+    fn sum_last_turn_usage_dedups_repeated_message_id() {
+        // Claude Code writes one JSONL line per content block, so one assistant
+        // API response is persisted as several `assistant` lines sharing a
+        // `message.id` and repeating its `usage`. Each request's usage must be
+        // counted ONCE; summing every line overcounts (~2.3x on real
+        // transcripts). msg_A appears twice but is counted once.
+        let jsonl = r#"
+{"type":"user","message":{"role":"user","content":"go"}}
+{"type":"assistant","message":{"id":"msg_A","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":50}}}
+{"type":"assistant","message":{"id":"msg_A","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":50}}}
+{"type":"assistant","message":{"id":"msg_B","model":"claude-opus-4-8","usage":{"input_tokens":30,"output_tokens":10}}}
+"#;
+        let usage = sum_last_turn_usage(jsonl);
+        assert_eq!(
+            usage.input_tok, 130,
+            "msg_A (100) counted once + msg_B (30), not msg_A twice"
+        );
+        assert_eq!(usage.output_tok, 60, "msg_A (50) once + msg_B (10)");
     }
 
     #[test]
