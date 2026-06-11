@@ -39,9 +39,39 @@ pub fn maybe_warn_root_source(source: &RootSource, root: &Path) {
         ),
     };
     let mut err = std::io::stderr().lock();
-    if err.is_terminal() {
-        let _ = writeln!(err, "\x1b[33mwarning:\x1b[0m {body}");
+    let color = crate::term::use_color(err.is_terminal());
+    let _ = writeln!(err, "{}", format_warning(&body, color));
+}
+
+/// Format the one-line warning, ANSI-styling the `warning:` prefix only
+/// when `color` is true. Pulled out as a pure fn so the NO_COLOR / TTY
+/// gate (via `crate::term::use_color`) is unit-testable without a real
+/// terminal. (T-181)
+fn format_warning(body: &str, color: bool) -> String {
+    if color {
+        format!("\x1b[33mwarning:\x1b[0m {body}")
     } else {
-        let _ = writeln!(err, "warning: {body}");
+        format!("warning: {body}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_warning;
+
+    #[test]
+    fn format_warning_styles_prefix_only_when_color_on() {
+        let colored = format_warning("oops", true);
+        assert!(
+            colored.contains("\x1b[33mwarning:\x1b[0m oops"),
+            "color path must style the prefix, got: {colored:?}"
+        );
+
+        let plain = format_warning("oops", false);
+        assert_eq!(plain, "warning: oops");
+        assert!(
+            !plain.contains('\x1b'),
+            "NO_COLOR / non-TTY output must carry no ANSI, got: {plain:?}"
+        );
     }
 }

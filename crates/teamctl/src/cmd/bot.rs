@@ -40,12 +40,19 @@ pub enum BotAction {
 
 // ── Setup wizard ────────────────────────────────────────────────────
 
-/// Wrap `s` in an ANSI SGR code when stdout is a terminal; plain text
-/// otherwise (piped/redirected stays clean). Same pattern as warn.rs —
-/// gate the raw ANSI on the `is_terminal()` of the stream it writes to
-/// (here stdout, where the wizard prints).
+/// Wrap `s` in an ANSI SGR code when color is warranted for stdout; plain
+/// text otherwise (piped/redirected, or `NO_COLOR` set, stays clean).
+/// Gates on `crate::term::use_color(...)` — the same NO_COLOR + `is_terminal()`
+/// check warn.rs adopted (T-181), so `NO_COLOR=1` suppresses the wizard's
+/// color even on a TTY (here stdout, where the wizard prints).
 fn styled(code: &str, s: &str) -> String {
-    if io::stdout().is_terminal() {
+    style_with(code, s, crate::term::use_color(io::stdout().is_terminal()))
+}
+
+/// Color-decision-free core of [`styled`], split out so the gate is
+/// unit-testable without a real terminal. (T-181)
+fn style_with(code: &str, s: &str, color: bool) -> String {
+    if color {
         format!("\x1b[{code}m{s}\x1b[0m")
     } else {
         s.to_string()
@@ -1283,6 +1290,21 @@ fn shlex_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn style_with_emits_ansi_only_when_color_on() {
+        // T-181: the wizard's color must honor NO_COLOR / non-TTY via
+        // `use_color`. `style_with` is the gate's testable core.
+        let colored = style_with("3;90", "note", true);
+        assert_eq!(colored, "\x1b[3;90mnote\x1b[0m");
+
+        let plain = style_with("3;90", "note", false);
+        assert_eq!(plain, "note");
+        assert!(
+            !plain.contains('\x1b'),
+            "NO_COLOR / non-TTY output must carry no ANSI, got: {plain:?}"
+        );
+    }
 
     #[test]
     fn default_token_env_strips_project() {
