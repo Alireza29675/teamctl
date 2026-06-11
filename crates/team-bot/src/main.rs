@@ -295,6 +295,165 @@ fn peel_readnow(body: &str) -> (&str, Option<&'static str>) {
     }
 }
 
+/// Per-message budget on quoted text in an inbound reply prefix (#334). The
+/// agent gets the gist; the mailbox id in the header is the recovery path for
+/// the full original. Counted in chars (not bytes) so a multibyte tail is
+/// never split mid-codepoint.
+const INBOUND_QUOTE_MAX_CHARS: usize = 500;
+
+/// The replied-to / quoted context for an inbound Telegram message (#334),
+/// resolved against the mailbox so the agent sees what the user is replying
+/// to. Built by [`resolve_reply_context`]; rendered by [`build_inbound_body`].
+struct ReplyContext {
+    /// Who sent the replied-to message: the mailbox `sender` of the referenced
+    /// row when found (`user:telegram` or a `<project>:<agent>` id), else a
+    /// Telegram-derived fallback (`user:telegram` / `agent` / `unknown`).
+    sender: String,
+    /// Mailbox row id of the replied-to message, when it resolves. Omitted from
+    /// the header otherwise — the agent loses the cross-reference handle but
+    /// still sees the quoted text.
+    mailbox_id: Option<i64>,
+    /// The quoted text, already truncated: the user's partial selection
+    /// (Telegram `quote`) when present, else the replied-to message's text or
+    /// caption. `None` when there is nothing quotable.
+    quoted: Option<String>,
+}
+
+/// Truncate quoted text to [`INBOUND_QUOTE_MAX_CHARS`] chars, appending an
+/// ellipsis when it was cut. Char-based so a multibyte boundary is never split.
+fn truncate_quote(text: &str) -> String {
+    let mut out: String = text.chars().take(INBOUND_QUOTE_MAX_CHARS).collect();
+    if text.chars().count() > INBOUND_QUOTE_MAX_CHARS {
+        out.push('…');
+    }
+    out
+}
+
+/// Reverse of `team-mcp`'s `resolve_telegram_msg_id` (#168): find the mailbox
+/// row (id + sender) a Telegram message id belongs to, for the inbound reply
+/// prefix (#334). `None` when no row carries that id (e.g. a message older than
+/// the bot's history); a real query error is warn-logged and also degrades to
+/// `None`, mirroring the forward path's warn-and-degrade.
+///
+/// Telegram message ids are per-CHAT, and one bot can serve several chats into
+/// the shared mailbox, which stores no chat id — so two chats can hold rows
+/// with the same `telegram_msg_id`. `ORDER BY id DESC LIMIT 1` resolves to the
+/// most recent, which can be the wrong chat's row on a collision. That is
+/// tolerated on purpose: this lookup only supplies the header's sender label
+/// and `msg <id>` handle; the quoted *text* the agent reads comes from the live
+/// `reply_to_message`/`quote` on the inbound update, never from this row. So a
+/// collision mislabels the header (cosmetic, recoverable), never the content.
+/// Scoping by chat would need a schema change (persist a chat id) and is out of
+/// this ticket's lane. The `ORDER BY id DESC` is load-bearing — see the
+/// collision test.
+fn lookup_replied_row(conn: &Connection, telegram_msg_id: i64) -> Option<(i64, String)> {
+    match conn.query_row(
+        "SELECT id, sender FROM messages WHERE telegram_msg_id = ?1 ORDER BY id DESC LIMIT 1",
+        params![telegram_msg_id],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+    ) {
+        Ok(row) => Some(row),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(e) => {
+            tracing::warn!(
+                telegram_msg_id,
+                error = %e,
+                "inbound reply: mailbox lookup failed; quoting without a row id"
+            );
+            None
+        }
+    }
+}
+
+/// Classify a replied-to message's sender from the Telegram `from.is_bot` flag:
+/// a bot account is an agent's outbound message, a human is the operator, an
+/// absent sender (channel / anonymous admin) is unknown. Pure so the three
+/// branches are testable without a teloxide `Message` fixture.
+fn sender_label_for(is_bot: Option<bool>) -> &'static str {
+    match is_bot {
+        Some(true) => "agent",
+        Some(false) => "user:telegram",
+        None => "unknown",
+    }
+}
+
+/// Fallback sender label for a replied-to message not found in the mailbox.
+fn telegram_sender_label(replied: &Message) -> String {
+    sender_label_for(replied.from.as_ref().map(|u| u.is_bot)).to_string()
+}
+
+/// Build the [`ReplyContext`] for an inbound message when the user replied to
+/// or quoted an earlier message (#334). Returns `None` for an ordinary message
+/// (no reply, no quote) so the body forwards unchanged with zero DB work. Best
+/// effort: an unresolved row degrades to a Telegram-derived sender and no
+/// mailbox id, never an error.
+async fn resolve_reply_context(msg: &Message, state: &State) -> Option<ReplyContext> {
+    let replied = msg.reply_to_message();
+    let quote = msg.quote();
+    if replied.is_none() && quote.is_none() {
+        return None;
+    }
+
+    // Sender + mailbox id come from the replied-to message; the mailbox row,
+    // when found, is authoritative for the sender label.
+    let (sender, mailbox_id) = match replied {
+        Some(r) => {
+            let row = {
+                let c = state.conn.lock().await;
+                lookup_replied_row(&c, r.id.0 as i64)
+            };
+            match row {
+                Some((id, sender)) => (sender, Some(id)),
+                None => (telegram_sender_label(r), None),
+            }
+        }
+        None => ("unknown".to_string(), None),
+    };
+
+    // Quoted text: prefer the user's explicit selection (`quote`), else the
+    // replied-to message's own text or caption. Empty is treated as nothing
+    // quotable (`None`) so the field's invariant holds and the header renders
+    // alone rather than with a stray empty blockquote line.
+    let quoted = quote
+        .map(|q| q.text.as_str())
+        .or_else(|| replied.and_then(|r| r.text().or_else(|| r.caption())))
+        .filter(|s| !s.is_empty())
+        .map(truncate_quote);
+
+    Some(ReplyContext {
+        sender,
+        mailbox_id,
+        quoted,
+    })
+}
+
+/// Prefix an inbound mailbox body with a Markdown blockquote carrying the
+/// replied-to / quoted context (#334), so the agent reads what the user is
+/// referring back to as part of the body. Returns `new_text` unchanged for an
+/// ordinary message (`ctx` is `None`). Plain text, not HTML: the mailbox body
+/// is read raw by the agent, and `>` is the Markdown blockquote the model
+/// already understands.
+fn build_inbound_body(new_text: &str, ctx: Option<&ReplyContext>) -> String {
+    let Some(ctx) = ctx else {
+        return new_text.to_string();
+    };
+    let mut out = String::new();
+    match ctx.mailbox_id {
+        Some(id) => out.push_str(&format!("> [reply to {} msg {}]\n", ctx.sender, id)),
+        None => out.push_str(&format!("> [reply to {}]\n", ctx.sender)),
+    }
+    if let Some(quoted) = &ctx.quoted {
+        for line in quoted.lines() {
+            out.push_str("> ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out.push('\n');
+    out.push_str(new_text);
+    out
+}
+
 fn open_mailbox(path: &std::path::Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
@@ -362,6 +521,10 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
     // when an agent's `reply_to_user.reply_to_message_id` (= a mailbox
     // id) references this row, resolving to the value persisted here.
     let inbound_msg_id: i64 = msg.id.0 as i64;
+    // #334: when the user tap-replied to (or quoted) an earlier message,
+    // resolve that context once so every mailbox-writing arm below can prefix
+    // the body with it. `None` for an ordinary message (no extra DB work).
+    let reply_ctx = resolve_reply_context(&msg, &state).await;
     if let Some(rest) = trimmed.strip_prefix("/dm ") {
         if let Some((target, body)) = rest.split_once(' ') {
             if let Some((project, _)) = target.split_once(':') {
@@ -370,6 +533,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
                 // instead of as a stub. Single-space-separated, case-
                 // sensitive prefix; stripped before insert.
                 let (body, delivery_mode) = peel_readnow(body);
+                let body = build_inbound_body(body, reply_ctx.as_ref());
                 let c = state.conn.lock().await;
                 let _ = c.execute(
                     "INSERT INTO messages
@@ -388,12 +552,13 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
         // without `/dm role text` ceremony.
         let target = state.manager.as_deref().unwrap();
         if let Some((project, _)) = target.split_once(':') {
+            let body = build_inbound_body(trimmed, reply_ctx.as_ref());
             let c = state.conn.lock().await;
             let _ = c.execute(
                 "INSERT INTO messages
                     (project_id, sender, recipient, text, sent_at, telegram_msg_id)
                  VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4)",
-                params![project, target, trimmed, inbound_msg_id],
+                params![project, target, body, inbound_msg_id],
             );
             drop(c);
             bot.send_message(msg.chat.id, format!("→ {target}")).await?;
@@ -409,6 +574,7 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
         let (body, delivery_mode) = peel_readnow(trimmed);
         if !body.is_empty() {
             if let Some((project, _)) = target.split_once(':') {
+                let body = build_inbound_body(body, reply_ctx.as_ref());
                 let c = state.conn.lock().await;
                 let _ = c.execute(
                     "INSERT INTO messages
@@ -2324,6 +2490,194 @@ mod tests {
         // the caller can reject (sending an empty immediate row would be
         // useless). Caller is responsible for the empty-body guard.
         assert_eq!(peel_readnow("/readnow "), ("", Some("immediate")));
+    }
+
+    // ── #334 inbound reply / quote context ───────────────────────
+
+    #[test]
+    fn truncate_quote_passes_short_text_through() {
+        // Under the budget: returned verbatim, no ellipsis.
+        assert_eq!(truncate_quote("hello"), "hello");
+        let exactly = "a".repeat(INBOUND_QUOTE_MAX_CHARS);
+        assert_eq!(
+            truncate_quote(&exactly),
+            exactly,
+            "exactly at the cap is untouched"
+        );
+    }
+
+    #[test]
+    fn truncate_quote_cuts_long_text_with_ellipsis() {
+        let long = "a".repeat(INBOUND_QUOTE_MAX_CHARS + 100);
+        let out = truncate_quote(&long);
+        // Kept chars + one ellipsis char.
+        assert_eq!(out.chars().count(), INBOUND_QUOTE_MAX_CHARS + 1);
+        assert!(out.ends_with('…'));
+        assert!(out.starts_with(&"a".repeat(INBOUND_QUOTE_MAX_CHARS)));
+    }
+
+    #[test]
+    fn truncate_quote_counts_chars_not_bytes() {
+        // Multibyte input must truncate on a char boundary (no panic, no
+        // split codepoint). Each `é` is 2 bytes.
+        let multibyte = "é".repeat(INBOUND_QUOTE_MAX_CHARS + 50);
+        let out = truncate_quote(&multibyte);
+        assert_eq!(out.chars().count(), INBOUND_QUOTE_MAX_CHARS + 1);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn build_inbound_body_passes_plain_message_through() {
+        // No reply context: the body is forwarded byte-for-byte.
+        assert_eq!(build_inbound_body("just a message", None), "just a message");
+    }
+
+    #[test]
+    fn build_inbound_body_prefixes_reply_with_mailbox_id() {
+        let ctx = ReplyContext {
+            sender: "user:telegram".to_string(),
+            mailbox_id: Some(730),
+            quoted: Some("handle the auth case".to_string()),
+        };
+        assert_eq!(
+            build_inbound_body("yes please", Some(&ctx)),
+            "> [reply to user:telegram msg 730]\n> handle the auth case\n\nyes please"
+        );
+    }
+
+    #[test]
+    fn build_inbound_body_omits_msg_id_when_unresolved() {
+        // Replied-to message not in the mailbox: header carries the sender
+        // but no `msg N`, and the quoted text still surfaces.
+        let ctx = ReplyContext {
+            sender: "agent".to_string(),
+            mailbox_id: None,
+            quoted: Some("earlier note".to_string()),
+        };
+        assert_eq!(
+            build_inbound_body("ok", Some(&ctx)),
+            "> [reply to agent]\n> earlier note\n\nok"
+        );
+    }
+
+    #[test]
+    fn build_inbound_body_blockquotes_each_line_of_a_multiline_quote() {
+        let ctx = ReplyContext {
+            sender: "p:eng_lead".to_string(),
+            mailbox_id: Some(12),
+            quoted: Some("line one\nline two".to_string()),
+        };
+        assert_eq!(
+            build_inbound_body("got it", Some(&ctx)),
+            "> [reply to p:eng_lead msg 12]\n> line one\n> line two\n\ngot it"
+        );
+    }
+
+    #[test]
+    fn build_inbound_body_header_only_when_nothing_quotable() {
+        // A reply to a message with no text/caption (e.g. a sticker): the
+        // header still records who/which message, with no quoted lines.
+        let ctx = ReplyContext {
+            sender: "user:telegram".to_string(),
+            mailbox_id: Some(5),
+            quoted: None,
+        };
+        assert_eq!(
+            build_inbound_body("what about this", Some(&ctx)),
+            "> [reply to user:telegram msg 5]\n\nwhat about this"
+        );
+    }
+
+    #[test]
+    fn lookup_replied_row_finds_row_by_telegram_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        // A user inbound row and an agent outbound row, each carrying its
+        // Telegram message id — both must be reverse-lookupable.
+        conn.execute(
+            "INSERT INTO messages (project_id, sender, recipient, text, sent_at, telegram_msg_id)
+             VALUES ('p','user:telegram','p:eng_lead','hi',0,730)",
+            [],
+        )
+        .unwrap();
+        let user_row = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO messages (project_id, sender, recipient, text, sent_at, telegram_msg_id)
+             VALUES ('p','p:eng_lead','user:telegram','on it',0,731)",
+            [],
+        )
+        .unwrap();
+        let agent_row = conn.last_insert_rowid();
+
+        assert_eq!(
+            lookup_replied_row(&conn, 730),
+            Some((user_row, "user:telegram".to_string())),
+            "a user's own message resolves to its mailbox row + sender"
+        );
+        assert_eq!(
+            lookup_replied_row(&conn, 731),
+            Some((agent_row, "p:eng_lead".to_string())),
+            "an agent's outbound message resolves to its <project>:<agent> sender"
+        );
+    }
+
+    #[test]
+    fn lookup_replied_row_returns_none_when_absent() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        // A Telegram id with no matching row (older than the bot's history).
+        assert_eq!(lookup_replied_row(&conn, 999), None);
+    }
+
+    #[test]
+    fn lookup_replied_row_picks_most_recent_on_telegram_id_collision() {
+        // Telegram ids are per-chat, so the shared mailbox can hold two rows
+        // with the same telegram_msg_id from different chats. The `ORDER BY id
+        // DESC LIMIT 1` is load-bearing: it resolves to the most recently
+        // inserted row. Pin that so a refactor can't silently drop the ORDER BY.
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn);
+        conn.execute(
+            "INSERT INTO messages (project_id, sender, recipient, text, sent_at, telegram_msg_id)
+             VALUES ('p','user:telegram','p:eng_lead','first',0,42)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (project_id, sender, recipient, text, sent_at, telegram_msg_id)
+             VALUES ('p','p:eng_lead','user:telegram','second',0,42)",
+            [],
+        )
+        .unwrap();
+        let newer = conn.last_insert_rowid();
+        assert_eq!(
+            lookup_replied_row(&conn, 42),
+            Some((newer, "p:eng_lead".to_string())),
+            "collision resolves to the most recently inserted row"
+        );
+    }
+
+    #[test]
+    fn sender_label_for_classifies_bot_human_and_anonymous() {
+        assert_eq!(sender_label_for(Some(true)), "agent");
+        assert_eq!(sender_label_for(Some(false)), "user:telegram");
+        assert_eq!(sender_label_for(None), "unknown");
+    }
+
+    #[test]
+    fn build_inbound_body_renders_quote_only_reply() {
+        // Telegram's hold-to-quote without a full reply-tap: `quote` is present
+        // but there's no resolvable replied-to row, so the sender is `unknown`
+        // and the mailbox id is omitted. The user's selection still surfaces.
+        let ctx = ReplyContext {
+            sender: "unknown".to_string(),
+            mailbox_id: None,
+            quoted: Some("the part I mean".to_string()),
+        };
+        assert_eq!(
+            build_inbound_body("clarify this", Some(&ctx)),
+            "> [reply to unknown]\n> the part I mean\n\nclarify this"
+        );
     }
 
     #[test]
