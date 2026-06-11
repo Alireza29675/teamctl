@@ -12,7 +12,13 @@ just lint        # cargo clippy -- -D warnings + cargo fmt --check
 just build       # cargo build --release
 ```
 
-Minimum supported Rust version: **1.86** (stable).
+Minimum supported Rust version: **1.86** (stable). Daily development runs on `stable` (per `rust-toolchain.toml`); to check the floor explicitly:
+
+```bash
+just msrv-check  # builds the shipped CLI crates on the MSRV toolchain
+```
+
+It reads the floor from `Cargo.toml`'s `rust-version`, installs that toolchain if needed, and fails if the code or a dependency requires a newer compiler. CI enforces the same floor (a build matrix leg and the publish workflow). `teamctl-ui` carries a higher floor and is excluded, matching the install path.
 
 ## Code style
 
