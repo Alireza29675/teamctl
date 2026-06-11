@@ -120,14 +120,24 @@ pub fn run(method_override: Option<String>, check_only: bool, yes: bool) -> Resu
     plan.execute()?;
     println!("✓ update complete. Run `teamctl --version` to confirm.");
     try_update_claude_plugin(&RealClaudeRunner);
-    // Range = max(current_version, FLOOR_VERSION) to latest, per owner
-    // spec. The aggregate path catches multi-version jumps so an
-    // operator who skipped 0.8.1/0.8.2 sees all their notes on
-    // landing at 0.8.3. Floor clamp is applied internally. Leading
-    // blank line provides visual separation from the installer output.
+    // Don't dump the whole changelog inline on update — point the
+    // operator at `teamctl whatsnew --since <old>`, which renders the
+    // release notes since <old> on demand. <old> is the version we just
+    // updated from, pre-filled so the command is copy-paste ready.
+    // Leading blank line separates the nudge from the installer output. (#302)
     println!();
-    crate::cmd::release_notes::print_since(CURRENT_VERSION, &latest);
+    println!("{}", whatsnew_nudge(CURRENT_VERSION));
     Ok(())
+}
+
+/// The post-update nudge (#302): instead of dumping the whole changelog
+/// inline, point the operator at `teamctl whatsnew --since <from>`, which
+/// renders the release notes since `from` on demand. `from` is the version
+/// we just updated away from, pre-filled so the command is copy-paste
+/// ready. Kept as a pure fn so the wiring is unit-testable without a live
+/// update.
+fn whatsnew_nudge(from: &str) -> String {
+    format!("To see what's new, run: `teamctl whatsnew --since {from}`")
 }
 
 // ── Detection ───────────────────────────────────────────────────────
@@ -622,6 +632,23 @@ mod tests {
         assert_eq!(compare_versions("1.0.0", "0.99.99"), VersionOrder::Newer);
         // Pre-release suffix is stripped → equal to its base version.
         assert_eq!(compare_versions("0.6.0-rc.1", "0.6.0"), VersionOrder::Equal);
+    }
+
+    #[test]
+    fn post_update_nudge_points_at_whatsnew_since_not_a_dump() {
+        // #302: after `teamctl update` we no longer dump the full
+        // changelog inline — we print a single nudge line pointing at
+        // `teamctl whatsnew --since <from>`, with the from-version
+        // pre-filled so it's copy-paste ready.
+        let line = whatsnew_nudge("0.9.0");
+        assert!(
+            line.contains("teamctl whatsnew --since 0.9.0"),
+            "nudge must surface the pre-filled whatsnew command, got: {line}"
+        );
+        assert!(
+            !line.contains('\n'),
+            "nudge must be a single line, not a changelog dump, got: {line}"
+        );
     }
 
     // ── T-146 plugin sync ─────────────────────────────────────────
