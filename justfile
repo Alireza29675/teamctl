@@ -21,6 +21,19 @@ lint:
     cargo fmt --all -- --check
     cargo clippy --all-targets -- -D warnings
 
+# Verify the shipped CLI crates build on the declared MSRV floor.
+msrv-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Read the floor from Cargo.toml so the number is never duplicated, install
+    # that toolchain if missing, and build the default-members only: `teamctl-ui`
+    # has a higher floor and is excluded, matching the CI MSRV leg + the publish
+    # path (.github/workflows/publish-crates.yml runs the same check).
+    msrv="$(grep -E '^rust-version = ' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+    echo "Verifying MSRV floor: $msrv"
+    rustup toolchain install "$msrv" --profile minimal --no-self-update || true
+    cargo "+$msrv" build --locked
+
 # Auto-format.
 fmt:
     cargo fmt --all

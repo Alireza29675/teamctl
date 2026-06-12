@@ -30,6 +30,20 @@ jobs:
             exit 1
           fi
 
+      # #399: verify the advertised MSRV floor before publishing, so a release
+      # can never ship a crate that no longer builds on its declared
+      # `rust-version`. Mirrors `just msrv-check` (justfile): reads the floor
+      # from Cargo.toml (never hardcoded) and builds the default-members (the
+      # shipped CLI crates; `teamctl-ui` has a higher floor and is excluded).
+      # Relies on `rustup` being on PATH from the toolchain action above; if
+      # that action is ever swapped, restore a rustup install here too.
+      - name: Verify MSRV floor before publishing
+        run: |
+          msrv="$(grep -E '^rust-version = ' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "MSRV floor: $msrv"
+          rustup toolchain install "$msrv" --profile minimal --no-self-update
+          cargo "+$msrv" build --locked
+
       # Order matters: team-core has no internal deps and must publish first.
       - name: Publish team-core
         env:
