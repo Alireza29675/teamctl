@@ -268,6 +268,16 @@ pub struct App {
     /// `tmux_session` (e.g. `t-hello-manager`). See
     /// `crate::pane_resize`.
     pub last_synced_pane_sizes: std::collections::HashMap<String, (u16, u16)>,
+    /// #277: the `(session, window_activity ts)` of the content currently
+    /// in `detail_buffer`, as last captured by the fast-cadence path. The
+    /// fast path skips the heavy `capture-pane` only when the focused
+    /// session AND its activity ts both still match — so a focus switch
+    /// (different session) or new output (changed ts) always re-captures,
+    /// and a stale frame can't survive on screen. `None` forces a capture.
+    /// The slow 1 Hz refreshes re-capture unconditionally (the safety net)
+    /// and may leave this lagging by one tick: at most one redundant fast
+    /// capture, never a wrong frame.
+    pub detail_buffer_activity: Option<(String, u64)>,
     /// T-209: live system handle for the bottom status bar's
     /// CPU% + RAM% indicator. Refreshed in-place on the existing
     /// 1-second App tick (see `refresh_with_default_sources` and the
@@ -334,6 +344,7 @@ impl App {
             spinner_frame: 0,
             tutorial_step: 0,
             last_synced_pane_sizes: std::collections::HashMap::new(),
+            detail_buffer_activity: None,
             // sysinfo's `new()` allocates but doesn't read any metrics;
             // the first values are populated by the first refresh tick
             // in `refresh_with_default_sources`. Until then the status
@@ -1198,8 +1209,23 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
 /// approval / sysinfo work. No-op when no agent is focused.
 fn recapture_focused_pane<P: PaneSource>(app: &mut App, pane_source: &P) {
     if let Some(session) = app.focused_session().map(|s| s.to_string()) {
-        if let Ok(lines) = pane_source.capture(&session) {
-            app.set_detail_buffer(lines);
+        // #277: skip the 3000-line capture when `detail_buffer` already
+        // holds THIS session's content at the pane's current activity ts
+        // (this runs up to 10x/s on an idle pane). A focus switch
+        // (different session), new output (changed ts), or an unreadable
+        // ts (`None`) all fall through to an unconditional capture, so a
+        // stale frame from another agent can never linger on screen.
+        let ts = pane_source.last_activity_secs(&session);
+        let already_current = matches!(
+            (&app.detail_buffer_activity, ts),
+            (Some((cached_session, cached_ts)), Some(live_ts))
+                if cached_session == &session && *cached_ts == live_ts
+        );
+        if !already_current {
+            if let Ok(lines) = pane_source.capture(&session) {
+                app.set_detail_buffer(lines);
+                app.detail_buffer_activity = ts.map(|t| (session.clone(), t));
+            }
         }
     }
     app.last_pane_refresh = Instant::now();
@@ -3821,6 +3847,7 @@ mod tests {
         let mock = MockPaneSource {
             lines: vec!["hello".into(), "world".into()],
             asked: std::sync::Mutex::new(Vec::new()),
+            ..Default::default()
         };
         // Backdate the clock so any advance is observable.
         let before = Instant::now() - PANE_REFRESH_INTERVAL;
@@ -3848,6 +3875,7 @@ mod tests {
         let mock = MockPaneSource {
             lines: vec!["unused".into()],
             asked: std::sync::Mutex::new(Vec::new()),
+            ..Default::default()
         };
 
         super::recapture_focused_pane(&mut app, &mock);
@@ -3874,12 +3902,129 @@ mod tests {
         let mock = MockPaneSource {
             lines: vec!["unused".into()],
             asked: std::sync::Mutex::new(Vec::new()),
+            ..Default::default()
         };
 
         super::recapture_focused_pane(&mut app, &mock);
 
         assert!(mock.asked.lock().unwrap().is_empty());
         assert!(app.detail_buffer.is_empty());
+    }
+
+    #[test]
+    fn recapture_focused_pane_skips_when_activity_unchanged() {
+        // #277: same focused session + unchanged activity ts → skip the
+        // heavy capture; a changed ts re-captures.
+        use crate::pane::test_support::MockPaneSource;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        let session = app.focused_session().unwrap().to_string();
+
+        let mock = MockPaneSource {
+            lines: vec!["frame-1".into()],
+            activity_ts: Some(100),
+            ..Default::default()
+        };
+        super::recapture_focused_pane(&mut app, &mock);
+        assert_eq!(app.detail_buffer, vec!["frame-1"]);
+        assert_eq!(mock.asked.lock().unwrap().clone(), vec![session.clone()]);
+        assert_eq!(app.detail_buffer_activity, Some((session.clone(), 100)));
+
+        // Same ts already cached → skip; source not queried, buffer kept.
+        let mock2 = MockPaneSource {
+            lines: vec!["frame-2-should-not-appear".into()],
+            activity_ts: Some(100),
+            ..Default::default()
+        };
+        super::recapture_focused_pane(&mut app, &mock2);
+        assert!(
+            mock2.asked.lock().unwrap().is_empty(),
+            "unchanged activity ts → capture skipped"
+        );
+        assert_eq!(app.detail_buffer, vec!["frame-1"], "buffer kept");
+
+        // ts advances → capture the new frame + reseed.
+        let mock3 = MockPaneSource {
+            lines: vec!["frame-3".into()],
+            activity_ts: Some(200),
+            ..Default::default()
+        };
+        super::recapture_focused_pane(&mut app, &mock3);
+        assert_eq!(app.detail_buffer, vec!["frame-3"]);
+        assert_eq!(mock3.asked.lock().unwrap().clone(), vec![session.clone()]);
+        assert_eq!(app.detail_buffer_activity, Some((session, 200)));
+    }
+
+    #[test]
+    fn recapture_focused_pane_recaptures_on_focus_switch() {
+        // #277 regression: switching focus to a different agent must
+        // re-capture even when the new agent's activity ts equals what's
+        // cached, otherwise the detail buffer would keep showing the
+        // PREVIOUS agent's content. The `(session, ts)` cache key is what
+        // prevents that stale frame.
+        use crate::pane::test_support::MockPaneSource;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![
+            agent("p:a", AgentState::Running),
+            agent("p:b", AgentState::Running),
+        ]));
+        app.dismiss_splash();
+
+        app.selected_agent = Some(0);
+        let sess_a = app.focused_session().unwrap().to_string();
+        let mock_a = MockPaneSource {
+            lines: vec!["A-frame".into()],
+            activity_ts: Some(100),
+            ..Default::default()
+        };
+        super::recapture_focused_pane(&mut app, &mock_a);
+        assert_eq!(app.detail_buffer, vec!["A-frame"]);
+
+        // Switch to B, whose activity ts is ALSO 100. Same ts, different
+        // session → must capture B, not reuse A's stale frame.
+        app.selected_agent = Some(1);
+        let sess_b = app.focused_session().unwrap().to_string();
+        assert_ne!(sess_a, sess_b);
+        let mock_b = MockPaneSource {
+            lines: vec!["B-frame".into()],
+            activity_ts: Some(100),
+            ..Default::default()
+        };
+        super::recapture_focused_pane(&mut app, &mock_b);
+        assert_eq!(
+            mock_b.asked.lock().unwrap().clone(),
+            vec![sess_b.clone()],
+            "focus switch must capture the newly focused session"
+        );
+        assert_eq!(
+            app.detail_buffer,
+            vec!["B-frame"],
+            "buffer holds B's content, not stale A"
+        );
+        assert_eq!(app.detail_buffer_activity, Some((sess_b, 100)));
+    }
+
+    #[test]
+    fn recapture_focused_pane_captures_when_activity_unreadable() {
+        // #277 fallback: an unreadable activity ts (`None` — old tmux,
+        // missing session) captures on every tick, the pre-#277 behaviour.
+        use crate::pane::test_support::MockPaneSource;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        let mock = MockPaneSource {
+            lines: vec!["x".into()],
+            activity_ts: None,
+            ..Default::default()
+        };
+        super::recapture_focused_pane(&mut app, &mock);
+        super::recapture_focused_pane(&mut app, &mock);
+        assert_eq!(
+            mock.asked.lock().unwrap().len(),
+            2,
+            "unreadable ts → capture every call"
+        );
     }
 
     // ── Ctrl+Shift+↑/↓ stream-keys agent switch ─────────────────────
