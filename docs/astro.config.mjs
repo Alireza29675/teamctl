@@ -58,6 +58,7 @@ export default defineConfig({
           items: [
             { label: 'Your first team', link: '/guides/first-team/' },
             { label: 'Multi-runtime teams', link: '/guides/multi-runtime/' },
+            { label: 'Existing MCP servers', link: '/guides/existing-mcps/' },
             { label: 'Telegram bot setup', link: '/guides/telegram-bot/' },
             { label: 'Updating teamctl', link: '/guides/updating/' },
             { label: 'Bridges and HITL', link: '/guides/bridges-and-hitl/' },
