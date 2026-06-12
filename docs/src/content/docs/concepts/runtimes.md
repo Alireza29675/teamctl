@@ -6,11 +6,11 @@ A **runtime** is the CLI binary behind an agent. teamctl ships adapters for the 
 
 | Runtime | Binary | MCP | Session resume | Notes |
 |---|---|---|---|---|
-| Claude Code | `claude` | yes | always-on (deterministic `--session-id`) | The default. Strongest for planning + tool use. |
+| Claude Code | `claude` | yes | always-on (deterministic UUID; `--session-id` to create, `--resume` to attach) | The default. Strongest for planning + tool use. |
 | Codex CLI | `codex` | yes (0.14+) | profile | OpenAI's CLI. Good for deep reasoning on patches. |
 | Gemini CLI | `gemini` | yes (0.3+) | n/a (loop-restart) | 1M-token context makes it great for research. |
 
-For Claude Code, every spawn passes `--session-id <uuid>` where `<uuid>` is a UUIDv5 derived deterministically from `teamctl:<project>:<agent>`. claude creates the session at that UUID on first spawn and resumes it on every subsequent spawn — so an agent's context survives `teamctl down`/`up`, crash recovery, and host reboots without operator action. If the session-file at that UUID is ever removed (manual cleanup, claude session-dir reset), claude creates a fresh session at the same UUID on the next spawn — self-healing by construction.
+For Claude Code, every spawn uses a UUIDv5 derived deterministically from `teamctl:<project>:<agent>`. The wrapper passes `--session-id <uuid>` to create the session on first spawn, and `--resume <uuid>` on every subsequent spawn once the session jsonl exists. Same UUID either way, so an agent's context survives `teamctl down`/`up`, crash recovery, and host reboots without operator action. If the session-file at that UUID is ever removed (manual cleanup, claude session-dir reset), the wrapper falls back to `--session-id` and claude recreates a fresh session at the same UUID. Self-healing by construction.
 
 Adapters live under `runtimes/<name>.yaml`:
 
