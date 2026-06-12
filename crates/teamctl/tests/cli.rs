@@ -293,6 +293,99 @@ fn rl_hit_is_resilient_to_an_agent_absent_from_the_compose() {
     );
 }
 
+// ── T-333: budget-record records a cost row from the Stop hook ──────────
+
+#[test]
+fn budget_record_records_a_cost_row_for_a_known_agent() {
+    // End-to-end: the Stop hook pipes its JSON payload to
+    // `teamctl budget-record <project>:<agent>`. run() reads the transcript
+    // named in that payload, sums the last turn's token usage, prices it, and
+    // INSERTs one budget row with a non-zero usd.
+    use std::io::Write;
+
+    let tmp = tempdir().unwrap();
+    seed_two_projects(tmp.path());
+
+    // A minimal session transcript: a prior turn that must be ignored, then the
+    // current turn (a user line + one opus assistant message with usage).
+    let transcript = tmp.path().join("transcript.jsonl");
+    fs::write(
+        &transcript,
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"old\"}}\n\
+         {\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\
+         {\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"now\"}}\n\
+         {\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":1000000,\"output_tokens\":1000000}}}\n",
+    )
+    .unwrap();
+
+    let payload = format!(
+        "{{\"session_id\":\"s1\",\"transcript_path\":\"{}\",\"stop_hook_active\":false}}",
+        transcript.display()
+    );
+
+    let mut child = Command::new(bin())
+        .args([
+            "--root",
+            tmp.path().to_str().unwrap(),
+            "budget-record",
+            "alpha:dev",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let db = tmp.path().join("state/mailbox.db");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let (project_id, agent_id, runtime, usd, input_tok, output_tok): (
+        String,
+        String,
+        String,
+        f64,
+        i64,
+        i64,
+    ) = conn
+        .query_row(
+            "SELECT project_id, agent_id, runtime, usd, input_tok, output_tok \
+             FROM budget ORDER BY id DESC LIMIT 1",
+            [],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(project_id, "alpha");
+    assert_eq!(agent_id, "alpha:dev");
+    assert_eq!(runtime, "claude-code");
+    // Opus: 1M input @ 15/M + 1M output @ 75/M = 90.00. Only the current turn.
+    assert!(
+        (usd - 90.0).abs() < 1e-6,
+        "usd should price the current turn's opus usage: {usd}"
+    );
+    assert_eq!(input_tok, 1_000_000);
+    assert_eq!(output_tok, 1_000_000);
+}
+
 // ── T-091: --help surfaces the version ──────────────────────────────────
 
 #[test]

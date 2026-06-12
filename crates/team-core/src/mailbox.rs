@@ -117,14 +117,18 @@ CREATE TABLE IF NOT EXISTS approvals (
 CREATE INDEX IF NOT EXISTS approvals_pending_idx
     ON approvals(status, expires_at);
 
--- Budget ledger. Rows are appended by interface adapters and by runtime
--- cost parsers. `teamctl budget` aggregates per project/day.
+-- Budget ledger. Rows are appended by runtime cost parsers (the claude-code
+-- writer is `teamctl budget-record`, fired from the Stop hook). `teamctl
+-- budget` aggregates per project/day.
 CREATE TABLE IF NOT EXISTS budget (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id  TEXT NOT NULL,
     agent_id    TEXT,
     runtime     TEXT,
     usd         REAL NOT NULL DEFAULT 0,
+    -- claude-code writer: prompt + both cache buckets (the schema has no cache
+    -- columns; cache tokens are priced into `usd` at their own rates). So this
+    -- is "all non-output tokens", not strictly Anthropic "input tokens".
     input_tok   INTEGER NOT NULL DEFAULT 0,
     output_tok  INTEGER NOT NULL DEFAULT 0,
     observed_at REAL NOT NULL

@@ -5,6 +5,7 @@ pub mod attach;
 pub mod bot;
 pub mod bridge;
 pub mod budget;
+pub mod budget_record;
 pub mod caffeinate;
 pub mod context;
 pub mod down;
