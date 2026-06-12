@@ -2669,6 +2669,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
+ "tracing-subscriber",
  "uuid",
  "yaml-edit",
 ]

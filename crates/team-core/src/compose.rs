@@ -1366,6 +1366,93 @@ broker:
         );
     }
 
+    /// #347 (regression guard, owner-ratified tg 3440): when the legacy-`2`
+    /// auto-rewrite cannot write the file (read-only filesystem: CI sandboxes,
+    /// immutable image mounts), `Compose::load` must NOT hard-error. It swallows
+    /// the rewrite failure, emits a single `tracing::warn`, and proceeds with
+    /// the in-memory normalized value. This pins the exact regression flagged in
+    /// the #346 review: a future refactor flipping the rewrite's `if let Err`
+    /// into `?` would silently turn the graceful degrade into a hard error, and
+    /// nothing else would catch it.
+    ///
+    /// `#[cfg(unix)]` because the read-only condition is set via a unix `chmod`;
+    /// unix is where operators run teamctl. The write failure is simulated by
+    /// making the compose FILE read-only (`0o444`), which reproduces the
+    /// `std::fs::write` EACCES a read-only filesystem produces. The containing
+    /// dir is left writable so the tempdir teardown can still remove the file.
+    /// Caveat: skipped behavior is undefined under `sudo` (root bypasses the
+    /// file mode); CI runners are non-root.
+    #[cfg(unix)]
+    #[test]
+    fn load_degrades_to_in_memory_when_legacy_rewrite_cannot_write() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::{Arc, Mutex};
+
+        // A `tracing` writer that captures formatted events into a buffer, so
+        // the test can assert the degrade's warn fired (acceptance b).
+        struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+        impl Write for CaptureWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".team");
+        std::fs::create_dir_all(&root).unwrap();
+        let compose_path = root.join("team-compose.yaml");
+        std::fs::write(
+            &compose_path,
+            "version: 2\nbroker:\n  type: sqlite\n  path: state/mailbox.db\n",
+        )
+        .unwrap();
+
+        // Read-only file: the load can still read it, but the legacy-`2`
+        // in-place rewrite (`std::fs::write`) fails with EACCES.
+        std::fs::set_permissions(&compose_path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        // Capture WARN-and-above tracing for the duration of the load only
+        // (a thread-scoped default subscriber, never global).
+        let logs = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let sink = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || CaptureWriter(sink.clone()))
+            .finish();
+        let result = tracing::subscriber::with_default(subscriber, || Compose::load(&root));
+
+        // Restore write perms before any assertion can unwind, independent of
+        // the tempdir teardown, so a failing assert never leaves a stuck file.
+        std::fs::set_permissions(&compose_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        // (a) No error: the rewrite failure degrades, it does not bubble up.
+        let compose = result.expect("a read-only compose file must degrade, not error");
+        // (c) In-memory state is normalized despite the un-rewritable file.
+        assert_eq!(compose.global.version.value, "2.0.0");
+        assert!(
+            compose.global.version.from_legacy_int,
+            "legacy-int normalization must still be flagged in memory"
+        );
+        // (b) The degrade is observable: the warn fired, not a silent swallow.
+        let captured = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+        assert!(
+            captured.contains("could not rewrite legacy"),
+            "the read-only degrade must emit its tracing::warn; captured:\n{captured}"
+        );
+        // And the rewrite genuinely did not happen (degrade is real, not a
+        // silently-succeeded write): the legacy literal still on disk.
+        let after = std::fs::read_to_string(&compose_path).unwrap();
+        assert!(
+            after.contains("version: 2"),
+            "the file must be left un-rewritten on the degrade path;\n{after}"
+        );
+    }
+
     // ── #132 PR-1: Project.interfaces.telegram schema ──────────────
 
     /// Minimal Project YAML head for the new-schema tests. Each test

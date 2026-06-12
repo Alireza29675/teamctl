@@ -24,3 +24,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# #347: capture the RO-FS legacy-`2` rewrite degrade's `tracing::warn` in a
+# buffer so the test can assert the degrade is observable, not a silent
+# swallow. Test-only; the shipped lib never builds a subscriber.
+tracing-subscriber.workspace = true
