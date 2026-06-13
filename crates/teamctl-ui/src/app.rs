@@ -1274,8 +1274,9 @@ pub fn sync_focused_pane_size_to<R: crate::pane_resize::PaneResizer>(
     if !matches!(app.layout, MainLayout::Triptych) {
         return;
     }
+    let stream = matches!(app.stage, Stage::StreamKeys);
     let Some(detail) =
-        crate::pane_resize::triptych_detail_area(total_area, app.has_pending_approvals())
+        crate::pane_resize::triptych_detail_area(total_area, app.has_pending_approvals(), stream)
     else {
         return;
     };
@@ -4256,6 +4257,30 @@ mod tests {
         assert_eq!(calls[0].0, "t-hello-mgr");
         assert_eq!(calls[0].1, 90); // inner = (120 - 28 sidebar) - 2 border
         assert_eq!(calls[0].2, 22); // inner = (3/5 of 40) - 2 border
+    }
+
+    #[test]
+    fn sync_uses_taller_detail_in_stream_keys_mode() {
+        // The load-bearing wire (#459): `sync_focused_pane_size_to` must
+        // read `Stage::StreamKeys` and push the taller Detail height into
+        // the tmux pane — otherwise the on-screen Mailbox shrink is
+        // cosmetic and the agent keeps reflowing to the old 60% height.
+        // Same 120×40 terminal as `sync_fires_resize_on_first_frame`
+        // (which asserts 22 rows in normal mode); stream-keys gives the
+        // Mailbox a fixed Length(5) strip, so Detail is 40-5=35 → inner 33.
+        let mut app = pane_sync_fixture();
+        app.stage = Stage::StreamKeys;
+        let resizer = crate::pane_resize::test_support::MockPaneResizer::default();
+        sync_focused_pane_size_to(
+            &mut app,
+            ratatui::layout::Rect::new(0, 0, 120, 40),
+            &resizer,
+        );
+        let calls = resizer.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "t-hello-mgr");
+        assert_eq!(calls[0].1, 90); // width unchanged: (120 - 28) - 2 border
+        assert_eq!(calls[0].2, 33); // taller: (40 - 5 mailbox) - 2 border
     }
 
     #[test]
