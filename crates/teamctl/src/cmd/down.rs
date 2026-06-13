@@ -73,9 +73,64 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
         println!("no agents in scope for project {id}.");
     }
 
+    // T-466: clear this team's rows from the durable system-wide registry
+    // now it's down, so `teamctl ps` and orphan reaping don't report a dead
+    // team. A per-agent down only partially tears the team down, so it stays
+    // registered (`registry_clear_scope` returns `None`). Best-effort: never
+    // fail teardown on a registry error.
+    if let Some(project) = registry_clear_scope(targets.is_some(), scoped.as_deref()) {
+        if let Some(dir) = team_core::registry::config_dir() {
+            if let Err(e) = team_core::registry::clear(&dir, &compose.root, project) {
+                eprintln!("warn · teams registry: {e:#}");
+            }
+        }
+    }
+
     // T-370: release the host-level keep-awake once the last teamctl team on
     // this host is down (host-wide refcount via the `@teamctl` tmux tagging).
     // macOS-only, no-op elsewhere; a stale/dead pid is reaped without error.
     super::caffeinate::stop_if_last();
     Ok(())
+}
+
+/// What `down` should clear from the registry.
+///
+/// - `per_agent` (a `--agent` selector is active) ⇒ `None`: only some of
+///   the team's agents went down, so the team stays registered.
+/// - otherwise ⇒ `Some(scoped)`: clear that scope — `None` clears every
+///   entry for this root (whole-team `down`), `Some(id)` clears just the
+///   one project (so siblings sharing the root stay registered).
+///
+/// Pure so the decision is unit-testable without a registry or `$HOME`.
+fn registry_clear_scope(per_agent: bool, scoped: Option<&str>) -> Option<Option<&str>> {
+    if per_agent {
+        None
+    } else {
+        Some(scoped)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn per_agent_down_leaves_registry_untouched() {
+        // A `--agent` selector only partially tears the team down.
+        assert_eq!(registry_clear_scope(true, None), None);
+        assert_eq!(registry_clear_scope(true, Some("main")), None);
+    }
+
+    #[test]
+    fn whole_team_down_clears_every_entry_for_the_root() {
+        assert_eq!(registry_clear_scope(false, None), Some(None));
+    }
+
+    #[test]
+    fn project_scoped_down_clears_only_that_project() {
+        assert_eq!(
+            registry_clear_scope(false, Some("main")),
+            Some(Some("main"))
+        );
+    }
 }
