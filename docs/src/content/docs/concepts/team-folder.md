@@ -27,7 +27,7 @@ my-repo/
 ```
 $ pwd
 /Users/me/work/my-repo/src/deep/nested
-$ teamctl ps
+$ teamctl status
 …shows agents, even though we're four levels deep
 ```
 
@@ -49,7 +49,7 @@ $ teamctl context ls
    startup             /Users/me/work/startup/.team
 
 $ teamctl context use startup
-$ teamctl ps                  # now shows the startup team
+$ teamctl status              # now shows the startup team
 ```
 
 `teamctl up` auto-registers the current root as a context the first time it runs.
@@ -83,7 +83,7 @@ $ teamctl env --doctor
 ## Inspection
 
 ```
-teamctl ps                     # table: agent, runtime, state, inbox, last activity
+teamctl status                 # table: agent, runtime, state, inbox, last activity
 teamctl mail <agent>           # this agent's inbox
 teamctl mail --all             # every agent's inbox depth + sample
 teamctl tail <agent> -f        # live message stream

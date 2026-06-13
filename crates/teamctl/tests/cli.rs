@@ -2008,3 +2008,98 @@ fn validate_accepts_existing_conformant_id_shapes() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn ps_is_system_wide_and_runs_without_a_compose_root() {
+    // T-467: `ps` lists every running team across the host, so — unlike
+    // `status` — it must run from a directory with no `.team/` and never
+    // resolve a compose root. With no `tmux` on PATH (env_clear) the
+    // enumeration is empty, so we assert it succeeds and prints the header.
+    let dir = tempdir().unwrap();
+    let out = Command::new(bin())
+        .arg("ps")
+        .current_dir(dir.path())
+        .env_clear()
+        .env("HOME", dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "ps must succeed from a no-.team dir; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("PROJECT"),
+        "ps prints the system-wide table header"
+    );
+}
+
+#[test]
+fn ps_json_emits_a_json_array() {
+    // T-467: `--json` parity with the other enumerating commands.
+    let dir = tempdir().unwrap();
+    let out = Command::new(bin())
+        .args(["ps", "--json"])
+        .current_dir(dir.path())
+        .env_clear()
+        .env("HOME", dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("ps --json emits valid JSON");
+    assert!(v.is_array(), "ps --json is a JSON array of running teams");
+}
+
+#[test]
+fn ps_is_root_independent_and_ignores_teamctl_root() {
+    // T-467 invariant: `ps` returns BEFORE root resolution, so a set
+    // `$TEAMCTL_ROOT` must not change its behavior. We point it at a dir
+    // with no `.team/`: if `ps` ever regressed to resolving a root it would
+    // error here (no compose to load) and/or render the per-agent `status`
+    // table. Instead it must print the system-wide header and succeed.
+    let dir = tempdir().unwrap();
+    let out = Command::new(bin())
+        .arg("ps")
+        .current_dir(dir.path())
+        .env_clear()
+        .env("HOME", dir.path())
+        .env("TEAMCTL_ROOT", dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "ps must ignore $TEAMCTL_ROOT and succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("PROJECT"),
+        "ps shows the system-wide header regardless of $TEAMCTL_ROOT"
+    );
+    assert!(
+        !stdout.contains("MANAGER"),
+        "ps must never render the per-agent (status) table"
+    );
+}
+
+#[test]
+fn status_still_requires_a_compose_root() {
+    // T-467: the split keeps `status` project-local — from a dir with no
+    // `.team/` (and no $TEAMCTL_ROOT, cleared by env_clear) it must fail to
+    // resolve a compose root, exactly as the pre-split command did.
+    let dir = tempdir().unwrap();
+    let out = Command::new(bin())
+        .arg("status")
+        .current_dir(dir.path())
+        .env_clear()
+        .env("HOME", dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "status must fail without a resolvable compose root; stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
