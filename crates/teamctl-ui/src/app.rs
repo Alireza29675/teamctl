@@ -1114,6 +1114,18 @@ pub fn refresh_mailbox<M: MailboxSource>(app: &mut App, mailbox_source: &M) {
         .and_then(|i| app.team.agents.get(i))
         .map(|a| a.project.clone())
         .unwrap_or_default();
+    // #462: record the focused agent so the Inbox merge can filter
+    // channel/wire to inbound (`sender != me`). Set before the extends
+    // so the Inbox cursor math sees the filtered view.
+    app.mailbox.agent_id = agent_id.clone();
+    // Capture Inbox tail-follow before the extends: per-tab `extend`
+    // only follows the tab it touches, but channel/wire arrivals grow
+    // the merged Inbox view too, so we re-anchor it once at the end.
+    let inbox_was_at_tail = app.mailbox.inbox_at_tail();
+    // All four data shapes are still fetched and folded into their own
+    // buffers — the channel/wire buffers back both the Inbox merge and
+    // the MailboxFirst channel feed (#462 changed only the tab surface,
+    // not ingestion).
     if let Ok(batch) = mailbox_source.inbox(&agent_id, app.mailbox.inbox_after) {
         app.mailbox.extend(MailboxTab::Inbox, batch);
     }
@@ -1125,6 +1137,9 @@ pub fn refresh_mailbox<M: MailboxSource>(app: &mut App, mailbox_source: &M) {
     }
     if let Ok(batch) = mailbox_source.wire(&project_id, app.mailbox.wire_after) {
         app.mailbox.extend(MailboxTab::Wire, batch);
+    }
+    if inbox_was_at_tail {
+        app.mailbox.follow_inbox_tail();
     }
 }
 
@@ -2517,17 +2532,14 @@ mod tests {
         assert_eq!(app.focused_pane, Pane::Mailbox);
         assert_eq!(app.mailbox_tab, MailboxTab::Inbox);
 
+        // #462: two user tabs → Right toggles Inbox ↔ Sent and wraps.
         dispatch(&mut app, key(KeyCode::Right));
         assert_eq!(app.mailbox_tab, MailboxTab::Sent);
-        dispatch(&mut app, key(KeyCode::Right));
-        assert_eq!(app.mailbox_tab, MailboxTab::Channel);
-        dispatch(&mut app, key(KeyCode::Right));
-        assert_eq!(app.mailbox_tab, MailboxTab::Wire);
         dispatch(&mut app, key(KeyCode::Right));
         assert_eq!(app.mailbox_tab, MailboxTab::Inbox, "→ wraps");
 
         dispatch(&mut app, key(KeyCode::Left));
-        assert_eq!(app.mailbox_tab, MailboxTab::Wire, "← walks back");
+        assert_eq!(app.mailbox_tab, MailboxTab::Sent, "← walks back");
     }
 
     #[test]

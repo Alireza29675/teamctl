@@ -592,7 +592,9 @@ fn render_mailbox_body(buf: &mut Buffer, area: Rect, app: &App) {
     // `visible_indices` is identity in PR-1 (every row visible); PR-2
     // (filter+search) swaps its body — the rest of this render path
     // is the abstraction's call site and does not need changing.
-    let visible = app.mailbox.visible_indices(app.mailbox_tab);
+    // #462: reuse the `rows` we already materialised above so the
+    // (non-trivial) Inbox merge runs once per frame, not twice.
+    let visible = app.mailbox.visible_indices_in(&rows, app.mailbox_tab);
     if visible.is_empty() {
         // PR-1: unreachable (rows non-empty implies visible non-empty),
         // but stays here as the PR-2 empty-filter-result branch.

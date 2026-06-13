@@ -263,30 +263,6 @@ fn mailbox_pane_renders_inbox_tab_with_rows() {
     insta::assert_snapshot!("mailbox_inbox_120x30", buffer_to_string(&buf));
 }
 
-#[test]
-fn mailbox_pane_cycles_to_channel_tab_when_focused() {
-    // Tab from the mailbox pane should advance the active tab; the
-    // pane itself stays focused. Channel tab's empty hint shows
-    // when the channel buffer has nothing yet.
-    let mut app = fresh_app();
-    app.dismiss_splash();
-    app.replace_team(fixture_team(
-        "writing-team",
-        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
-    ));
-    // Cycle focus to Mailbox (Agents → Detail → Mailbox).
-    app.cycle_focus();
-    app.cycle_focus();
-    assert_eq!(app.focused_pane, Pane::Mailbox);
-    // Tab on Mailbox cycles tabs. Two cycles to reach Channel
-    // (Inbox → Sent → Channel).
-    app.cycle_mailbox_tab();
-    app.cycle_mailbox_tab();
-    assert_eq!(app.mailbox_tab, teamctl_ui::mailbox::MailboxTab::Channel);
-    let buf = render_to_buffer(&app, 120, 30);
-    insta::assert_snapshot!("mailbox_channel_focused_120x30", buffer_to_string(&buf));
-}
-
 fn approval(id: i64, action: &str, summary: &str) -> teamctl_ui::approvals::Approval {
     teamctl_ui::approvals::Approval {
         id,
@@ -652,75 +628,49 @@ fn mailbox_first_layout_renders_channel_focused_at_120x30() {
 }
 
 #[test]
-fn mailbox_pane_renders_channel_tab_with_rows() {
-    // T-079-E coverage extension: the existing
-    // `mailbox_pane_cycles_to_channel_tab_when_focused` pins the
-    // empty Channel tab; this fixture pins the populated shape so a
-    // future regression that fails to render channel rows shows up
-    // as a glyph diff rather than a behavioural surprise in the
-    // production TUI.
+fn mailbox_pane_inbox_folds_inbound_channel_and_wire() {
+    // #462: the Inbox tab folds inbound DMs + channel + wire into one
+    // time-ordered (by id) feed. Channel/wire rows keep the
+    // `[#chan] [sender]` disambiguator so they stay distinct from a
+    // plain `[sender]` DM; a broadcast the focused agent itself sent is
+    // excluded — it belongs under Sent, not Inbox. Replaces the retired
+    // per-channel-type tab snapshots (T-079-E) with the merged shape.
     let mut app = fresh_app();
     app.dismiss_splash();
     app.replace_team(fixture_team(
         "writing-team",
         vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
     ));
-    app.cycle_focus();
-    app.cycle_focus();
-    app.cycle_mailbox_tab(); // Inbox → Sent
-    app.cycle_mailbox_tab(); // Sent → Channel
+    // The merge's inbound filter keys on the focused agent id.
+    app.mailbox.agent_id = "writing:manager".to_string();
+    app.mailbox.extend(
+        teamctl_ui::mailbox::MailboxTab::Inbox,
+        vec![message(
+            11,
+            "writing:dev1",
+            "writing:manager",
+            "ready for review",
+        )],
+    );
     app.mailbox.extend(
         teamctl_ui::mailbox::MailboxTab::Channel,
         vec![
-            message(
-                21,
-                "writing:dev1",
-                "channel:writing:devs",
-                "stack rebased on main",
-            ),
-            message(22, "writing:critic", "channel:writing:devs", "looks tight"),
+            message(12, "writing:critic", "channel:writing:devs", "looks tight"),
+            // Self-sent channel post — must NOT surface in Inbox.
+            message(13, "writing:manager", "channel:writing:devs", "merging now"),
         ],
     );
-    let buf = render_to_buffer(&app, 120, 30);
-    insta::assert_snapshot!("mailbox_channel_with_rows_120x30", buffer_to_string(&buf));
-}
-
-#[test]
-fn mailbox_pane_renders_wire_tab_with_rows() {
-    // T-079-E coverage extension: the Wire tab carries
-    // project-broadcast traffic (recipient `channel:<project>:all`).
-    // Pinned here so regressions that confuse the Wire filter or
-    // its rendering surface show up immediately.
-    let mut app = fresh_app();
-    app.dismiss_splash();
-    app.replace_team(fixture_team(
-        "writing-team",
-        vec![synth_agent("writing:manager", AgentState::Running, 0, 0)],
-    ));
-    app.cycle_focus();
-    app.cycle_focus();
-    app.cycle_mailbox_tab(); // Inbox → Sent
-    app.cycle_mailbox_tab(); // Sent → Channel
-    app.cycle_mailbox_tab(); // Channel → Wire
     app.mailbox.extend(
         teamctl_ui::mailbox::MailboxTab::Wire,
-        vec![
-            message(
-                31,
-                "user:cli",
-                "channel:writing:all",
-                "0.7.1 release cut · CHANGELOG updated",
-            ),
-            message(
-                32,
-                "writing:eng_lead",
-                "channel:writing:all",
-                "T-079 cluster Wave 3 dispatching",
-            ),
-        ],
+        vec![message(
+            14,
+            "user:cli",
+            "channel:writing:all",
+            "0.7.1 release cut · CHANGELOG updated",
+        )],
     );
     let buf = render_to_buffer(&app, 120, 30);
-    insta::assert_snapshot!("mailbox_wire_with_rows_120x30", buffer_to_string(&buf));
+    insta::assert_snapshot!("mailbox_inbox_folded_120x30", buffer_to_string(&buf));
 }
 
 #[test]

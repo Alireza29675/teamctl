@@ -992,9 +992,9 @@ fn mb_row(id: i64, sender: &str, recipient: &str, text: &str) -> MessageRow {
 
 #[test]
 fn arrow_right_cycles_mailbox_tabs_forward_when_mailbox_focused() {
-    // T-124 + T-122: `→` cycles Inbox → Sent → Channel → Wire →
-    // Inbox once the mailbox pane has focus. The forward walker
-    // must wrap.
+    // T-124 + #462: `→` toggles Inbox ↔ Sent once the mailbox pane has
+    // focus (Channel/Wire fold into Inbox, so there are only two user
+    // tabs). The walker must wrap.
     let mut h = Harness::new();
     h.app.dismiss_splash();
     // Walk Tab focus to Mailbox.
@@ -1007,34 +1007,22 @@ fn arrow_right_cycles_mailbox_tabs_forward_when_mailbox_focused() {
     assert_eq!(h.app.mailbox_tab, MailboxTab::Sent);
 
     h.dispatch_key(KeyCode::Right);
-    assert_eq!(h.app.mailbox_tab, MailboxTab::Channel);
-
-    h.dispatch_key(KeyCode::Right);
-    assert_eq!(h.app.mailbox_tab, MailboxTab::Wire);
-
-    h.dispatch_key(KeyCode::Right);
     assert_eq!(
         h.app.mailbox_tab,
         MailboxTab::Inbox,
-        "`→` from Wire wraps to Inbox"
+        "`→` from Sent wraps to Inbox"
     );
 }
 
 #[test]
 fn arrow_left_cycles_mailbox_tabs_backward_when_mailbox_focused() {
-    // T-124 + T-122: `←` walks the other direction: Inbox → Wire →
-    // Channel → Sent → Inbox.
+    // T-124 + #462: `←` walks the other direction; with two tabs it
+    // mirrors `→`.
     let mut h = Harness::new();
     h.app.dismiss_splash();
     h.dispatch_key(KeyCode::Tab);
     h.dispatch_key(KeyCode::Tab);
     assert_eq!(h.app.focused_pane, Pane::Mailbox);
-
-    h.dispatch_key(KeyCode::Left);
-    assert_eq!(h.app.mailbox_tab, MailboxTab::Wire);
-
-    h.dispatch_key(KeyCode::Left);
-    assert_eq!(h.app.mailbox_tab, MailboxTab::Channel);
 
     h.dispatch_key(KeyCode::Left);
     assert_eq!(h.app.mailbox_tab, MailboxTab::Sent);
@@ -1092,17 +1080,16 @@ fn brackets_no_longer_cycle_mailbox_tabs_after_t124() {
 fn tab_into_mailbox_preserves_active_tab() {
     // Tabbing pane focus INTO the mailbox must not silently reset
     // `mailbox_tab` — operators returning to a tab they were on
-    // would otherwise lose place. Seed `mailbox_tab` to Channel
-    // before tabbing in, assert it survives.
+    // would otherwise lose place. Seed `mailbox_tab` to Sent
+    // before tabbing away, assert it survives (#462: two tabs).
     let mut h = Harness::new();
     h.app.dismiss_splash();
-    // Walk into Mailbox, advance to Channel, walk back out.
+    // Walk into Mailbox, advance to Sent, walk back out.
     h.dispatch_key(KeyCode::Tab);
     h.dispatch_key(KeyCode::Tab);
-    h.dispatch_key(KeyCode::Right);
     h.dispatch_key(KeyCode::Right);
     assert_eq!(h.app.focused_pane, Pane::Mailbox);
-    assert_eq!(h.app.mailbox_tab, MailboxTab::Channel);
+    assert_eq!(h.app.mailbox_tab, MailboxTab::Sent);
     h.dispatch_key(KeyCode::Tab); // back to Roster
     assert_eq!(h.app.focused_pane, Pane::Roster);
 
@@ -1112,7 +1099,7 @@ fn tab_into_mailbox_preserves_active_tab() {
     assert_eq!(h.app.focused_pane, Pane::Mailbox);
     assert_eq!(
         h.app.mailbox_tab,
-        MailboxTab::Channel,
+        MailboxTab::Sent,
         "active mailbox tab survives the Tab-walk away and back"
     );
 }
