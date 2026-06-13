@@ -1215,11 +1215,32 @@ fn recapture_focused_pane<P: PaneSource>(app: &mut App, pane_source: &P) {
         // (different session), new output (changed ts), or an unreadable
         // ts (`None`) all fall through to an unconditional capture, so a
         // stale frame from another agent can never linger on screen.
+        //
+        // #277 follow-up: `#{window_activity}` has whole-SECOND
+        // resolution, so while a pane is actively changing — the operator
+        // typing >1 key/s in stream-keys, or an agent streaming output —
+        // its ts stays pinned to the current second and equals the cached
+        // ts. A bare `cached_ts == live_ts` test then skipped every tick
+        // within that second, dropping the detail view from ~10Hz to ~1Hz
+        // (it looked frozen). So we only trust the cache once the activity
+        // is *settled*: `live_ts < now_secs`, i.e. it happened in an
+        // earlier whole second. During any sub-second activity
+        // `live_ts == now_secs`, so we recapture every tick — and keep
+        // doing so until `now_secs` rolls past that second, i.e. for up to
+        // ~1s after the pane goes quiet. That tail of idle captures is
+        // bounded and cheap; the gate then re-engages and the idle-CPU win
+        // returns. (A change landing in the final <100ms of a second
+        // followed by immediate idle can be up to ~1s late — bounded by
+        // the unconditional 1Hz full refresh, the same staleness ceiling
+        // the detail view already relies on.)
         let ts = pane_source.last_activity_secs(&session);
+        let now_secs = app.now_secs as u64;
         let already_current = matches!(
             (&app.detail_buffer_activity, ts),
             (Some((cached_session, cached_ts)), Some(live_ts))
-                if cached_session == &session && *cached_ts == live_ts
+                if cached_session == &session
+                    && *cached_ts == live_ts
+                    && live_ts < now_secs
         );
         if !already_current {
             if let Ok(lines) = pane_source.capture(&session) {
@@ -3920,6 +3941,10 @@ mod tests {
         app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
         app.dismiss_splash();
         let session = app.focused_session().unwrap().to_string();
+        // Activity ts 100/200 are far in the past relative to this clock,
+        // so the settled-second condition (`live_ts < now_secs`) holds and
+        // this exercises the cache-hit skip, not the active-second path.
+        app.now_secs = 1_000.0;
 
         let mock = MockPaneSource {
             lines: vec!["frame-1".into()],
@@ -3957,6 +3982,60 @@ mod tests {
     }
 
     #[test]
+    fn recapture_focused_pane_recaptures_during_active_second() {
+        // #277 regression (PR #454): `#{window_activity}` is whole-second,
+        // so an actively-changing pane — operator typing >1 key/s, or an
+        // agent streaming output — reports the SAME ts for every 10Hz tick
+        // within that second. The original `cached_ts == live_ts` gate
+        // skipped all of them and the detail view froze at ~1Hz. The
+        // settled-second gate (`live_ts < now_secs`) must re-capture while
+        // the activity ts is the CURRENT second, then resume skipping once
+        // the clock moves past it.
+        use crate::pane::test_support::MockPaneSource;
+        let mut app = App::new();
+        app.replace_team(fixture_team(vec![agent("p:a", AgentState::Running)]));
+        app.dismiss_splash();
+        let session = app.focused_session().unwrap().to_string();
+
+        // The pane's last activity is happening in the current wall second,
+        // and a previous tick this same second already cached a frame.
+        let active_second = 1_781_343_000u64;
+        app.now_secs = active_second as f64;
+        app.detail_buffer_activity = Some((session.clone(), active_second));
+        app.set_detail_buffer(vec!["stale-within-second".into()]);
+
+        // Same session, same whole-second ts → the old gate would skip.
+        // The settled gate must re-capture: the second isn't settled yet.
+        let mock = MockPaneSource {
+            lines: vec!["live-frame".into()],
+            activity_ts: Some(active_second),
+            ..Default::default()
+        };
+        super::recapture_focused_pane(&mut app, &mock);
+        assert_eq!(
+            mock.asked.lock().unwrap().clone(),
+            vec![session.clone()],
+            "activity in the current second must re-capture, not freeze at ~1Hz"
+        );
+        assert_eq!(app.detail_buffer, vec!["live-frame"]);
+
+        // Clock ticks past that second with no new activity → the same
+        // cached==live ts is now settled → skip (idle-CPU win preserved).
+        app.now_secs = (active_second + 1) as f64;
+        let mock_idle = MockPaneSource {
+            lines: vec!["should-not-appear".into()],
+            activity_ts: Some(active_second),
+            ..Default::default()
+        };
+        super::recapture_focused_pane(&mut app, &mock_idle);
+        assert!(
+            mock_idle.asked.lock().unwrap().is_empty(),
+            "settled activity ts → capture skipped"
+        );
+        assert_eq!(app.detail_buffer, vec!["live-frame"], "buffer kept");
+    }
+
+    #[test]
     fn recapture_focused_pane_recaptures_on_focus_switch() {
         // #277 regression: switching focus to a different agent must
         // re-capture even when the new agent's activity ts equals what's
@@ -3970,6 +4049,9 @@ mod tests {
             agent("p:b", AgentState::Running),
         ]));
         app.dismiss_splash();
+        // Settled clock, so the focus-switch recapture is forced by the
+        // session-key mismatch — not by the active-second path.
+        app.now_secs = 1_000.0;
 
         app.selected_agent = Some(0);
         let sess_a = app.focused_session().unwrap().to_string();
