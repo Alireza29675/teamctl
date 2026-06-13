@@ -153,6 +153,11 @@ auto_confirm_known_dialogs() {
 # the role prompt.
 while :; do
     log "starting runtime=$RUNTIME model=${MODEL:-<default>}"
+    # Per-iteration: the claude-code branch sets this to 1 when it launches
+    # with `--resume`. The collision self-heal at the bottom of the loop
+    # keys on it; reset here so a non-claude runtime (or a fresh-session
+    # launch) never trips it.
+    RESUMED=0
     case "$RUNTIME" in
         claude-code)
             BIN=claude
@@ -195,10 +200,31 @@ while :; do
             # globally unique per agent, so at most one file ever
             # matches and we never have to mirror that algorithm.
             if [ -n "$CLAUDE_SESSION_ID" ]; then
-                if ls "$HOME/.claude/projects/"*/"$CLAUDE_SESSION_ID.jsonl" >/dev/null 2>&1; then
+                # The session UUID is keyed on project:agent only (no cwd),
+                # so two installs that share a project.id derive identical
+                # ids. This probe globs every cwd slug (projects/*/), so
+                # install B can match install A's jsonl, splice `--resume`,
+                # and then claude — scoped to B's own slug — can't find it
+                # ("No conversation found"), exits non-zero, and the loop
+                # respawns into the same failure forever. The
+                # FORCE_FRESH_SESSION one-shot (set after such a failure,
+                # below) breaks that: it forces a `--session-id` launch,
+                # which is cwd-scoped (verified against claude 2.1.175) — it
+                # opens a fresh local session when none exists here (heals
+                # the collision; later restarts then resume it normally), and
+                # errors harmlessly ("already in use") when our own local
+                # session does exist (a genuine crash), leaving the normal
+                # resume to recover on the next pass. RESUMED lets that block
+                # tell a resume launch from a fresh one.
+                if [ "${FORCE_FRESH_SESSION:-0}" = 1 ]; then
+                    set -- "$@" --session-id "$CLAUDE_SESSION_ID"
+                    RESUMED=0
+                elif ls "$HOME/.claude/projects/"*/"$CLAUDE_SESSION_ID.jsonl" >/dev/null 2>&1; then
                     set -- "$@" --resume "$CLAUDE_SESSION_ID"
+                    RESUMED=1
                 else
                     set -- "$@" --session-id "$CLAUDE_SESSION_ID"
+                    RESUMED=0
                 fi
             fi
             [ -n "$CLAUDE_SESSION_NAME" ] && set -- "$@" -n "$CLAUDE_SESSION_NAME"
@@ -311,6 +337,22 @@ while :; do
         kill "$AUTO_CONFIRM_PID" 2>/dev/null
         wait "$AUTO_CONFIRM_PID" 2>/dev/null
     fi
+
+    # Self-heal a session-id collision (see the resume-probe above). If we
+    # launched with `--resume` and the runtime exited non-zero, the matched
+    # jsonl may belong to a different folder (the probe globs every cwd
+    # slug). Retry once, immediately, forcing a fresh cwd-scoped
+    # `--session-id` rather than respawning into a resume that can never
+    # succeed here. One-shot (cleared just below), so a later restart resumes
+    # the now-local session normally. On a genuine crash of a real local
+    # session the forced `--session-id` errors and we fall through to the
+    # normal restart — one harmless extra attempt, never a loop.
+    if [ "$ec" -ne 0 ] && [ "${RESUMED:-0}" = 1 ] && [ "${FORCE_FRESH_SESSION:-0}" != 1 ]; then
+        log "resume failed (ec=$ec); retrying once with a fresh cwd-scoped --session-id"
+        FORCE_FRESH_SESSION=1
+        continue
+    fi
+    FORCE_FRESH_SESSION=0
 
     log "runtime exited ec=$ec — restarting in 5s"
     sleep 5
