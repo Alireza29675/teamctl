@@ -703,37 +703,45 @@ mod tests {
 
     #[test]
     fn record_then_clear_roundtrips_a_real_compose() {
-        // End-to-end through the actual `up`/`down` glue (compose.agents()
-        // → registry_entries → upsert_many → teams.json, then clear)
-        // against a genuine shipped compose — the closest to the up→down
-        // round trip we get without spawning tmux. The config dir is
-        // injected (a tempdir), so no `$HOME` touch and no env race.
-        let template =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/templates/ideate-and-build");
-        let compose = Compose::load(&template).unwrap();
+        // End-to-end through the actual `up`/`down` glue (Compose::load →
+        // compose.agents() → registry_entries → upsert_many → teams.json,
+        // then clear) — the closest to the up→down round trip without
+        // spawning tmux. The compose is a self-contained fixture written
+        // to a tempdir, NOT a shipped template: templates carry
+        // `{{project_id}}` placeholders that don't parse before `init`
+        // substitution (T-466 regression — a real one broke this test once
+        // a template was templatized). The config dir is a second tempdir,
+        // so no `$HOME` touch and no env race.
+        let team = tempfile::tempdir().unwrap();
+        fs::create_dir_all(team.path().join("projects")).unwrap();
+        fs::write(
+            team.path().join("team-compose.yaml"),
+            "version: 2\n\
+             supervisor:\n  type: tmux\n  tmux_prefix: treg-\n\
+             projects:\n  - file: projects/demo.yaml\n",
+        )
+        .unwrap();
+        fs::write(
+            team.path().join("projects/demo.yaml"),
+            "version: 2\n\
+             project:\n  id: demo\n  name: Demo\n  cwd: ./workspace\n\
+             managers:\n  lead:\n    runtime: claude-code\n    role_prompt: roles/lead.md\n\
+             workers:\n  helper:\n    runtime: claude-code\n    role_prompt: roles/helper.md\n    reports_to: lead\n",
+        )
+        .unwrap();
+        let compose = Compose::load(team.path()).unwrap();
         let cfg = tempfile::tempdir().unwrap();
 
         record_in_registry_in(cfg.path(), &compose, None);
 
         let reg = team_core::registry::load(cfg.path()).unwrap();
-        let mut projects: Vec<&str> = compose.agents().map(|h| h.project).collect();
-        projects.sort_unstable();
-        projects.dedup();
-        assert!(
-            !projects.is_empty(),
-            "template declares at least one project"
-        );
-        assert_eq!(reg.teams.len(), projects.len(), "one row per project");
-        for t in &reg.teams {
-            assert_eq!(t.root, compose.root, "row keyed on the compose root");
-            assert_eq!(t.tmux_prefix, compose.global.supervisor.tmux_prefix);
-            assert!(
-                !t.agents.is_empty(),
-                "project {} records its roster",
-                t.project_id
-            );
-            assert!(!t.started_at.is_empty(), "started_at stamped");
-        }
+        assert_eq!(reg.teams.len(), 1, "one row for the single project");
+        let t = &reg.teams[0];
+        assert_eq!(t.project_id, "demo");
+        assert_eq!(t.root, compose.root, "row keyed on the compose root");
+        assert_eq!(t.tmux_prefix, compose.global.supervisor.tmux_prefix);
+        assert_eq!(t.agents, vec!["helper", "lead"], "roster folded + sorted");
+        assert!(!t.started_at.is_empty(), "started_at stamped");
 
         // The `down` clear path empties this root.
         team_core::registry::clear(cfg.path(), &compose.root, None).unwrap();
