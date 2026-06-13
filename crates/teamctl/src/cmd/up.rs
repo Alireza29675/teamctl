@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -142,6 +142,12 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
     };
     super::snapshot::write(&compose.root, &snap)?;
 
+    // T-466: record this team in the durable, system-wide registry so
+    // `teamctl ps`, orphan reaping, and the same-name guard can see teams
+    // across the host — not just the one in the cwd. Best-effort: a
+    // registry hiccup must not fail an otherwise-successful `up`.
+    record_in_registry(&compose, scoped.as_deref());
+
     // T-370: keep the host awake (no idle-sleep) while agents are up so
     // long-running tasks survive display sleep. Host-level + refcounted;
     // macOS-only, no-op elsewhere. Only when we actually brought something up.
@@ -149,6 +155,76 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
         super::caffeinate::ensure_running();
     }
     Ok(())
+}
+
+/// Build the registry rows for the in-scope projects: one
+/// [`team_core::registry::TeamEntry`] per project, agents folded in and
+/// sorted. `scoped` (a `--project` filter) restricts the set to that
+/// project; `None` records every project in the compose. The row's
+/// `agents` is the project's full declared roster — a `--agent` filter
+/// narrows what `up` *spawns*, not the team membership the registry
+/// records (which is the shape `ps` wants to show). Pure over its inputs
+/// so the mapping is unit-testable without a live `Compose` or `$HOME`.
+fn registry_entries<'a>(
+    agents: impl Iterator<Item = (&'a str, &'a str)>,
+    root: &Path,
+    tmux_prefix: &str,
+    scoped: Option<&str>,
+    started_at: &str,
+) -> Vec<team_core::registry::TeamEntry> {
+    let mut by_project: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for (project, agent) in agents {
+        if scoped.is_some_and(|id| id != project) {
+            continue;
+        }
+        by_project
+            .entry(project)
+            .or_default()
+            .push(agent.to_string());
+    }
+    by_project
+        .into_iter()
+        .map(|(project, mut names)| {
+            names.sort();
+            team_core::registry::TeamEntry {
+                project_id: project.to_string(),
+                root: root.to_path_buf(),
+                tmux_prefix: tmux_prefix.to_string(),
+                agents: names,
+                started_at: started_at.to_string(),
+            }
+        })
+        .collect()
+}
+
+/// Persist this team's registry rows. Resolves the config dir from `$HOME`
+/// (skipping with a warning if unset), then delegates to
+/// [`record_in_registry_in`]. Never returns an error: the registry is a
+/// convenience side store, and a failure here must not undo a successful
+/// `up`.
+fn record_in_registry(compose: &Compose, scoped: Option<&str>) {
+    let Some(dir) = team_core::registry::config_dir() else {
+        eprintln!("warn · teams registry: neither HOME nor USERPROFILE set, skipping");
+        return;
+    };
+    record_in_registry_in(&dir, compose, scoped);
+}
+
+/// Inner half of [`record_in_registry`] with the config dir injected, so
+/// the `up` → `teams.json` write path is testable against a real `Compose`
+/// without resolving (or mutating) `$HOME`.
+fn record_in_registry_in(dir: &Path, compose: &Compose, scoped: Option<&str>) {
+    let started_at = team_core::registry::now_rfc3339();
+    let entries = registry_entries(
+        compose.agents().map(|h| (h.project, h.agent)),
+        &compose.root,
+        &compose.global.supervisor.tmux_prefix,
+        scoped,
+        &started_at,
+    );
+    if let Err(e) = team_core::registry::upsert_many(dir, entries) {
+        eprintln!("warn · teams registry: {e:#}");
+    }
 }
 
 /// What a `--fresh` request resolves to for one agent, before any I/O.
@@ -592,6 +668,81 @@ mod tests {
     use std::collections::BTreeMap;
     use team_core::compose::*;
     use team_core::render::role_prompt_concat_path;
+
+    #[test]
+    fn registry_entries_groups_by_project_and_sorts_agents() {
+        let root = Path::new("/r/a/.team");
+        let agents = vec![("main", "scout"), ("main", "compass"), ("ops", "otto")];
+        let entries =
+            registry_entries(agents.into_iter(), root, "t-", None, "2026-06-13T00:00:00Z");
+        assert_eq!(entries.len(), 2);
+        // BTreeMap keys → project-sorted; agents sorted within a project.
+        assert_eq!(entries[0].project_id, "main");
+        assert_eq!(entries[0].agents, vec!["compass", "scout"]);
+        assert_eq!(entries[0].root, root);
+        assert_eq!(entries[0].tmux_prefix, "t-");
+        assert_eq!(entries[0].started_at, "2026-06-13T00:00:00Z");
+        assert_eq!(entries[1].project_id, "ops");
+        assert_eq!(entries[1].agents, vec!["otto"]);
+    }
+
+    #[test]
+    fn registry_entries_scoped_records_only_that_project() {
+        let agents = vec![("main", "compass"), ("ops", "otto")];
+        let entries = registry_entries(
+            agents.into_iter(),
+            Path::new("/r/a/.team"),
+            "t-",
+            Some("ops"),
+            "T0",
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].project_id, "ops");
+        assert_eq!(entries[0].agents, vec!["otto"]);
+    }
+
+    #[test]
+    fn record_then_clear_roundtrips_a_real_compose() {
+        // End-to-end through the actual `up`/`down` glue (compose.agents()
+        // → registry_entries → upsert_many → teams.json, then clear)
+        // against a genuine shipped compose — the closest to the up→down
+        // round trip we get without spawning tmux. The config dir is
+        // injected (a tempdir), so no `$HOME` touch and no env race.
+        let template =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/templates/ideate-and-build");
+        let compose = Compose::load(&template).unwrap();
+        let cfg = tempfile::tempdir().unwrap();
+
+        record_in_registry_in(cfg.path(), &compose, None);
+
+        let reg = team_core::registry::load(cfg.path()).unwrap();
+        let mut projects: Vec<&str> = compose.agents().map(|h| h.project).collect();
+        projects.sort_unstable();
+        projects.dedup();
+        assert!(
+            !projects.is_empty(),
+            "template declares at least one project"
+        );
+        assert_eq!(reg.teams.len(), projects.len(), "one row per project");
+        for t in &reg.teams {
+            assert_eq!(t.root, compose.root, "row keyed on the compose root");
+            assert_eq!(t.tmux_prefix, compose.global.supervisor.tmux_prefix);
+            assert!(
+                !t.agents.is_empty(),
+                "project {} records its roster",
+                t.project_id
+            );
+            assert!(!t.started_at.is_empty(), "started_at stamped");
+        }
+
+        // The `down` clear path empties this root.
+        team_core::registry::clear(cfg.path(), &compose.root, None).unwrap();
+        let after = team_core::registry::load(cfg.path()).unwrap();
+        assert!(
+            after.teams.is_empty(),
+            "whole-root clear empties the registry"
+        );
+    }
 
     /// The wrapper's `auto_confirm_known_dialogs` watcher relies on a
     /// fixed set of dialog-header substrings. A silent edit that drops
