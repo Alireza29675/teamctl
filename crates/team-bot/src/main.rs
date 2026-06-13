@@ -4797,11 +4797,28 @@ mod tests {
         assert!(!use_rich_path(false, true));
     }
 
+    /// Parse a `Cli` from the mandatory args plus `extra`, so the CLI-parse
+    /// tests are hermetic: they pass `--mailbox`/`--token` explicitly and never
+    /// lean on the dogfood shell's ambient `TEAMCTL_*` env. CI runs with a clean
+    /// env, so relying on an ambient `TEAMCTL_MAILBOX` is what slipped these
+    /// tests past local `just test` and failed only in CI.
+    fn parse_cli(extra: &[&str]) -> Result<Cli, clap::Error> {
+        let mut argv = vec![
+            "bot",
+            "--mailbox",
+            "/tmp/teamctl-test-mailbox.db",
+            "--token",
+            "x",
+        ];
+        argv.extend_from_slice(extra);
+        Cli::try_parse_from(argv)
+    }
+
     /// rich-default-on: rich messages are ON by default — with no flag the
     /// opt-out is unset, so `State.rich` (= `!no_rich_messages`) is true.
     #[test]
     fn cli_rich_messages_default_on() {
-        let cli = Cli::try_parse_from(["bot", "--token", "x"]).expect("parse");
+        let cli = parse_cli(&[]).expect("parse");
         assert!(
             !cli.no_rich_messages,
             "rich must be ON by default (opt-out)"
@@ -4811,8 +4828,7 @@ mod tests {
     /// rich-default-on: `--no-rich-messages` is the opt-out kill switch.
     #[test]
     fn cli_no_rich_messages_opt_out() {
-        let cli =
-            Cli::try_parse_from(["bot", "--token", "x", "--no-rich-messages"]).expect("parse");
+        let cli = parse_cli(&["--no-rich-messages"]).expect("parse");
         assert!(cli.no_rich_messages, "--no-rich-messages must force HTML");
     }
 
@@ -4825,7 +4841,8 @@ mod tests {
     #[test]
     fn cli_no_rich_messages_accepts_boolish_values() {
         let parse = |v: &str| {
-            Cli::try_parse_from(["bot", "--token", "x", &format!("--no-rich-messages={v}")])
+            let arg = format!("--no-rich-messages={v}");
+            parse_cli(&[arg.as_str()])
                 .unwrap_or_else(|_| panic!("--no-rich-messages={v} must parse"))
                 .no_rich_messages
         };
