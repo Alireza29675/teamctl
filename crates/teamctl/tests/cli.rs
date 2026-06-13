@@ -565,11 +565,13 @@ fn init_ideate_and_build_template_scaffolds_with_subagents() {
     // the attach hint end-to-end. `init` derives it from the just-written
     // compose on disk — a different parse path than the `lead_attach_target`
     // unit tests exercise. ideate-and-build's workers report to `executor`,
-    // so the hint is `teamctl attach main:executor`, not the back-channel
-    // `compass`; an agent-bearing template also offers `teamctl bot setup`.
+    // so the hint targets `executor`, not the back-channel `compass`. The
+    // project segment is the install slug (`studio` here), not a hard-coded
+    // `main` — see `init_ideate_and_build_derives_unique_project_id` for why
+    // that matters. An agent-bearing template also offers `teamctl bot setup`.
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("teamctl attach main:executor"),
+        stdout.contains("teamctl attach studio:executor"),
         "Next: block must suggest attaching to the lead manager; got:\n{stdout}"
     );
     assert!(
@@ -616,17 +618,78 @@ fn init_ideate_and_build_template_scaffolds_with_subagents() {
 }
 
 #[test]
+fn init_ideate_and_build_derives_unique_project_id() {
+    // Regression (owner-reported bug, 2026-06-13): the ideate-and-build
+    // template hard-coded `project.id: main`. The session UUID is
+    // `Uuid::new_v5(NS, "teamctl:<project>:<agent>")` with NO path
+    // component, so a second install in a different folder produced the
+    // SAME ids (e.g. `teamctl:main:compass`). The wrapper's cross-folder
+    // `--resume` probe then matched the first install's JSONL, Claude
+    // rejected the out-of-scope session, and the agent crash-looped every
+    // 5s. The fix swaps the literal for `{{project_id}}` so each install's
+    // project id derives from its own name/folder slug. This pins it:
+    // two installs under different names get distinct, non-`main` ids.
+    let project_id_of = |name: &str| -> String {
+        let tmp = tempdir().unwrap();
+        let out = Command::new(bin())
+            .current_dir(tmp.path())
+            .args(["init", name, "--template", "ideate-and-build", "--yes"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "init {name} stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let team_dir = tmp.path().join(format!("{name}/.team"));
+        let compose = team_core::compose::Compose::load(&team_dir).unwrap();
+        // Clone the id out before `tmp` drops and removes the dir.
+        compose.projects[0].project.id.clone()
+    };
+
+    let alpha = project_id_of("alpha");
+    let beta = project_id_of("beta");
+
+    assert_eq!(
+        alpha, "alpha",
+        "project id must derive from the install name, not a hard-coded literal"
+    );
+    assert_eq!(beta, "beta");
+    assert_ne!(
+        alpha, "main",
+        "the old hard-coded `id: main` must not survive substitution"
+    );
+    assert_ne!(
+        alpha, beta,
+        "two installs in different folders must get distinct project ids — \
+         identical ids are what collided the path-blind session UUID"
+    );
+}
+
+#[test]
 fn ideate_and_build_template_renders_per_agent_subagents() {
     // T-382: the `subagents:` declared in the template compose must
     // resolve through the real render path into Claude Code's `--agents`
-    // JSON — not just exist as files. Load the shipped template compose
-    // straight from the crate assets and assert each agent gets exactly
-    // its declared stable (and the executor, which declares none, gets
-    // nothing). This is the authoritative check that the template's
+    // JSON — not just exist as files. Scaffold the template via `init` so
+    // its `{{project_id}}` placeholder is substituted into a loadable
+    // compose (loading the raw asset would fail — unsubstituted `{{...}}`
+    // parses as a YAML map, not a string), then assert each agent gets
+    // exactly its declared stable (and the executor, which declares none,
+    // gets nothing). This is the authoritative check that the template's
     // role-prompt sub-agent references are backed by real config.
-    let template =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/templates/ideate-and-build");
-    let compose = team_core::compose::Compose::load(&template).unwrap();
+    let tmp = tempdir().unwrap();
+    let out = Command::new(bin())
+        .current_dir(tmp.path())
+        .args(["init", "studio", "--template", "ideate-and-build", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "init ideate-and-build stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let team_dir = tmp.path().join("studio/.team");
+    let compose = team_core::compose::Compose::load(&team_dir).unwrap();
 
     let expect_names = |agent: &str, expected: &[&str]| {
         let h = compose
