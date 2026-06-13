@@ -660,6 +660,58 @@ mod tests {
         );
     }
 
+    /// Owner-reported crash-loop (2026-06-13): two installs that share a
+    /// `project.id` derive the same deterministic session UUID; the
+    /// resume-probe globs every cwd slug and matches the *other* install's
+    /// jsonl, and claude — scoped to this cwd — can't resume it, exiting
+    /// non-zero forever. The wrapper self-heals: after a `--resume` launch
+    /// exits non-zero it retries ONCE, forcing a cwd-scoped `--session-id`
+    /// (per-cwd, verified) so it opens a fresh local session on a collision
+    /// and errors harmlessly on a genuine crash. Pin the load-bearing pieces
+    /// so a future wrapper edit can't silently drop the heal and bring the
+    /// crash-loop back.
+    #[test]
+    fn wrapper_self_heals_resume_collision() {
+        // The --resume branch must tag the launch so the heal can tell a
+        // resume from a fresh launch.
+        assert!(
+            DEFAULT_WRAPPER.contains("--resume \"$CLAUDE_SESSION_ID\"")
+                && DEFAULT_WRAPPER.contains("RESUMED=1"),
+            "wrapper must mark RESUMED=1 when launching with --resume",
+        );
+        // The one-shot fallback forces a fresh cwd-scoped --session-id.
+        assert!(
+            DEFAULT_WRAPPER.contains("[ \"${FORCE_FRESH_SESSION:-0}\" = 1 ]")
+                && DEFAULT_WRAPPER.contains("--session-id \"$CLAUDE_SESSION_ID\""),
+            "wrapper must force a fresh --session-id launch when FORCE_FRESH_SESSION is set",
+        );
+        // The trigger: a resumed launch that exits non-zero retries exactly
+        // once (guarded by RESUMED and the one-shot flag, so it can't loop).
+        assert!(
+            DEFAULT_WRAPPER.contains("[ \"$ec\" -ne 0 ]")
+                && DEFAULT_WRAPPER.contains("[ \"${RESUMED:-0}\" = 1 ]")
+                && DEFAULT_WRAPPER.contains("FORCE_FRESH_SESSION=1"),
+            "wrapper must retry-fresh only after a resumed launch exits non-zero",
+        );
+        // Order is load-bearing and a plain substring pin can't catch a
+        // reorder: the retry must arm the one-shot and `continue` BEFORE the
+        // reset clears it. If a future edit moved `continue` below the reset
+        // (defeating the heal) or dropped the reset (risking a loop), this
+        // contiguous block changes and the test fails.
+        assert!(
+            DEFAULT_WRAPPER.contains(
+                "        FORCE_FRESH_SESSION=1\n        continue\n    fi\n    FORCE_FRESH_SESSION=0\n"
+            ),
+            "the retry must set the one-shot and `continue` before the reset clears it",
+        );
+        // Per-iteration reset of RESUMED guards a stale resume flag from
+        // carrying into a later iteration and mis-arming the heal.
+        assert!(
+            DEFAULT_WRAPPER.contains("RESUMED=0"),
+            "wrapper must reset RESUMED each iteration",
+        );
+    }
+
     /// #383 Phase 3a: the wrapper threads per-agent sub-agents via
     /// `--agents` when render wrote the JSON file (guarded by `[ -f ]`, so
     /// agents with no `subagents:` pass no flag). Pin the marker so a silent
