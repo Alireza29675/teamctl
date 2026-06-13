@@ -1,7 +1,9 @@
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
-use team_core::supervisor::{AgentSpec, Supervisor, TmuxSupervisor};
+use team_core::compose::Compose;
+use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
 use super::agent_filter::AgentSelector;
 
@@ -69,6 +71,14 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
         println!("down · bot {}", spec.session);
         touched += 1;
     }
+    // T-468: reap orphaned sessions — agents recorded as up at this root by
+    // a prior `up` but no longer in the compose. The loops above only tear
+    // down current-YAML agents, so a removed agent's session would otherwise
+    // linger forever. Read the registry BEFORE the clear below; honors the
+    // same scope as the teardown (whole-team / one project / skip on a
+    // per-agent `--agent` down).
+    touched += reap_orphans(&compose, &sup, scoped.as_deref(), targets.is_some());
+
     if let (Some(id), 0) = (scoped.as_deref(), touched) {
         println!("no agents in scope for project {id}.");
     }
@@ -107,6 +117,72 @@ fn registry_clear_scope(per_agent: bool, scoped: Option<&str>) -> Option<Option<
         None
     } else {
         Some(scoped)
+    }
+}
+
+/// Drain leftover tmux sessions for agents recorded as up at this root (in
+/// the durable registry) but no longer in the compose — the orphans a plain
+/// `down` misses. Only sessions that are still *running* are killed and
+/// announced: a roster row whose session already died (crashed, or reaped by
+/// an earlier `down`) is skipped, so `down` never prints a phantom `reaped`.
+/// Returns the count actually reaped. Best-effort — a missing/unreadable
+/// registry or a supervisor error never fails an otherwise-successful
+/// `down`. Shares `reap_targets`' scope contract (skips on a per-agent down).
+fn reap_orphans(
+    compose: &Compose,
+    sup: &TmuxSupervisor,
+    scoped: Option<&str>,
+    per_agent: bool,
+) -> usize {
+    let Some(dir) = team_core::registry::config_dir() else {
+        return 0;
+    };
+    let desired: HashSet<String> = compose.agents().map(|h| h.id()).collect();
+    let orphans = match team_core::registry::orphans_for_root(
+        &dir,
+        &compose.root,
+        &desired,
+        scoped,
+        per_agent,
+    ) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("warn · teams registry: {e:#}");
+            return 0;
+        }
+    };
+    let mut reaped = 0;
+    for orphan in orphans {
+        let spec = orphan_spec(compose, &orphan);
+        match sup.state(&spec) {
+            // Only a session that's actually up is something to reap.
+            Ok(AgentState::Running) => match sup.down(&spec) {
+                Ok(()) => {
+                    println!("reaped · {}", orphan.id());
+                    reaped += 1;
+                }
+                Err(e) => eprintln!("warn · reap {}: {e:#}", orphan.id()),
+            },
+            // Already gone — the registry row is stale, nothing to kill.
+            Ok(_) => {}
+            Err(e) => eprintln!("warn · reap {} (state): {e:#}", orphan.id()),
+        }
+    }
+    reaped
+}
+
+/// Build a teardown spec for an orphan from its registry roster entry. The
+/// agent's compose handle is gone, so the spec is assembled directly: only
+/// `tmux_session` matters to `TmuxSupervisor::down` (it runs
+/// `tmux kill-session -t <session>`); the other fields are inert here.
+fn orphan_spec(compose: &Compose, e: &team_core::registry::RosterEntry) -> AgentSpec {
+    AgentSpec {
+        project: e.project_id.clone(),
+        agent: e.agent.clone(),
+        tmux_session: e.tmux_session.clone(),
+        wrapper: super::agent_wrapper(&compose.root),
+        cwd: compose.root.clone(),
+        env_file: PathBuf::new(),
     }
 }
 

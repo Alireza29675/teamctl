@@ -165,6 +165,91 @@ pub fn is_orphan(entry: &TeamEntry, path_exists: &impl Fn(&Path) -> bool) -> boo
         || path_exists(&entry.root.join(".team").join("team-compose.yaml")))
 }
 
+/// One recorded `(project, agent)` running under a root, with its tmux
+/// session name reconstructed from the prefix the team was brought up with.
+/// The unit `down`/`reload` orphan-reaping operates on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RosterEntry {
+    pub project_id: String,
+    pub agent: String,
+    pub tmux_session: String,
+}
+
+impl RosterEntry {
+    /// `<project>:<agent>` — matches `compose.agents().id()`.
+    pub fn id(&self) -> String {
+        format!("{}:{}", self.project_id, self.agent)
+    }
+}
+
+impl Registry {
+    /// The recorded roster for `root`: one [`RosterEntry`] per agent of
+    /// every team registered at that root. The tmux session is rebuilt from
+    /// the team's recorded `tmux_prefix` (`{prefix}{project}-{agent}`, the
+    /// supervisor's naming formula) so a reaped session is targeted with the
+    /// name it was started under — correct even if the live compose's prefix
+    /// has since drifted.
+    pub fn roster_for_root(&self, root: &Path) -> Vec<RosterEntry> {
+        self.teams
+            .iter()
+            .filter(|t| t.root == root)
+            .flat_map(|t| {
+                t.agents.iter().map(move |agent| RosterEntry {
+                    project_id: t.project_id.clone(),
+                    agent: agent.clone(),
+                    tmux_session: format!("{}{}-{}", t.tmux_prefix, t.project_id, agent),
+                })
+            })
+            .collect()
+    }
+}
+
+/// The reap set: recorded roster agents that are no longer desired.
+/// `desired` is the current compose's agent ids (`<project>:<agent>`).
+/// `scoped` limits the reap to one project (a `--project` down/reload);
+/// `per_agent` (a `--agent` selector active) disables reaping entirely — a
+/// partial teardown leaves the rest of the team registered and running, so
+/// nothing there is an orphan. Pure; mirrors `down::registry_clear_scope`'s
+/// scope contract so reaping is never broader than the invocation.
+pub fn reap_targets(
+    roster: &[RosterEntry],
+    desired: &std::collections::HashSet<String>,
+    scoped: Option<&str>,
+    per_agent: bool,
+) -> Vec<RosterEntry> {
+    if per_agent {
+        return Vec::new();
+    }
+    roster
+        .iter()
+        .filter(|e| scoped.is_none_or(|p| e.project_id == p))
+        .filter(|e| !desired.contains(&e.id()))
+        .cloned()
+        .collect()
+}
+
+/// Load the registry at `dir` and return the orphan roster for `root` —
+/// recorded agents no longer in `desired`. The down/reload reap entry point:
+/// composes [`load`] + [`Registry::roster_for_root`] + [`reap_targets`] so the
+/// whole on-disk → orphans chain is one tested call. `dir` is taken as a
+/// parameter so tests point at a tempdir without touching `$HOME`. A missing
+/// store loads as empty (no orphans); only a genuine read error propagates.
+pub fn orphans_for_root(
+    dir: &Path,
+    root: &Path,
+    desired: &std::collections::HashSet<String>,
+    scoped: Option<&str>,
+    per_agent: bool,
+) -> Result<Vec<RosterEntry>> {
+    let reg = load(dir)?;
+    Ok(reap_targets(
+        &reg.roster_for_root(root),
+        desired,
+        scoped,
+        per_agent,
+    ))
+}
+
 /// Atomic write: serialize to a pid-scoped sibling temp file, then rename
 /// over the target so a concurrent reader sees either the old or the new
 /// file, never a partial one. The pid in the temp name keeps two processes
@@ -362,5 +447,95 @@ mod tests {
         let extant: HashSet<PathBuf> = [PathBuf::from("/r/proj/.team/team-compose.yaml")].into();
         let exists = |p: &Path| extant.contains(p);
         assert!(!is_orphan(&e, &exists));
+    }
+
+    fn rentry(project: &str, agent: &str, session: &str) -> RosterEntry {
+        RosterEntry {
+            project_id: project.into(),
+            agent: agent.into(),
+            tmux_session: session.into(),
+        }
+    }
+
+    #[test]
+    fn roster_for_root_rebuilds_sessions_from_recorded_prefix() {
+        // entry() records tmux_prefix "t-"; the roster rebuilds each agent's
+        // session as `{prefix}{project}-{agent}`, only for the asked root.
+        let mut reg = Registry::default();
+        reg.teams
+            .push(entry("main", "/r/a/.team", &["compass", "scout"], "T0"));
+        reg.teams.push(entry("ops", "/r/b/.team", &["otto"], "T0"));
+        assert_eq!(
+            reg.roster_for_root(Path::new("/r/a/.team")),
+            vec![
+                rentry("main", "compass", "t-main-compass"),
+                rentry("main", "scout", "t-main-scout"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reap_targets_drops_removed_keeps_current() {
+        // Roster has compass+scout; the current compose (desired) keeps only
+        // compass → scout is the orphan, compass is never reaped.
+        let roster = vec![
+            rentry("main", "compass", "t-main-compass"),
+            rentry("main", "scout", "t-main-scout"),
+        ];
+        let desired: HashSet<String> = ["main:compass".to_string()].into_iter().collect();
+        assert_eq!(
+            reap_targets(&roster, &desired, None, false),
+            vec![rentry("main", "scout", "t-main-scout")]
+        );
+    }
+
+    #[test]
+    fn reap_targets_skips_entirely_on_per_agent_teardown() {
+        // scout would be an orphan (empty desired), but a `--agent` teardown
+        // is partial → reap nothing.
+        let roster = vec![rentry("main", "scout", "t-main-scout")];
+        assert!(reap_targets(&roster, &HashSet::new(), None, true).is_empty());
+    }
+
+    #[test]
+    fn reap_targets_honors_project_scope() {
+        // Two projects share a root; a `--project main` reap touches only
+        // main's orphans, never ops'.
+        let roster = vec![
+            rentry("main", "scout", "t-main-scout"),
+            rentry("ops", "otto", "t-ops-otto"),
+        ];
+        assert_eq!(
+            reap_targets(&roster, &HashSet::new(), Some("main"), false),
+            vec![rentry("main", "scout", "t-main-scout")]
+        );
+    }
+
+    #[test]
+    fn orphans_for_root_loads_and_diffs_against_desired() {
+        // End-to-end over a real on-disk store (what `down`/`reload` reap
+        // through): a team recorded up at this root with compass+scout; the
+        // current compose keeps only compass → scout is the orphan. compass
+        // (still desired) is never returned — no false positive.
+        let dir = tempfile::tempdir().unwrap();
+        upsert(
+            dir.path(),
+            entry("main", "/r/a/.team", &["compass", "scout"], "T0"),
+        )
+        .unwrap();
+        let desired: HashSet<String> = ["main:compass".to_string()].into_iter().collect();
+        assert_eq!(
+            orphans_for_root(dir.path(), Path::new("/r/a/.team"), &desired, None, false).unwrap(),
+            vec![rentry("main", "scout", "t-main-scout")]
+        );
+
+        // A missing store loads as empty → no orphans, not an error: the
+        // applied.json-absent reload path stays safe even with no registry.
+        let empty = tempfile::tempdir().unwrap();
+        assert!(
+            orphans_for_root(empty.path(), Path::new("/r/a/.team"), &desired, None, false)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

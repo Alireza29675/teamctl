@@ -201,8 +201,9 @@ fn registry_entries<'a>(
 /// (skipping with a warning if unset), then delegates to
 /// [`record_in_registry_in`]. Never returns an error: the registry is a
 /// convenience side store, and a failure here must not undo a successful
-/// `up`.
-fn record_in_registry(compose: &Compose, scoped: Option<&str>) {
+/// `up`. `pub(super)` so `reload` can refresh the registry after applying
+/// a diff (T-468) — keeping `ps` / reaping accurate across reloads.
+pub(super) fn record_in_registry(compose: &Compose, scoped: Option<&str>) {
     let Some(dir) = team_core::registry::config_dir() else {
         eprintln!("warn · teams registry: neither HOME nor USERPROFILE set, skipping");
         return;
