@@ -134,6 +134,7 @@ mod tests {
             reports_to: None,
             on_rate_limit: None,
             effort: None,
+            ultracode: false,
             interfaces: None,
             display_name: None,
             hooks: vec![],

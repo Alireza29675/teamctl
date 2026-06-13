@@ -607,6 +607,22 @@ pub struct Agent {
     #[serde(default)]
     pub effort: Option<EffortLevel>,
 
+    /// #461: per-agent ultracode opt-in. When `true`, teamctl emits
+    /// `"ultracode": true` into the agent's Claude Code settings JSON (the
+    /// file the wrapper passes via `--settings`); the resulting session
+    /// behavior is Claude Code's, not teamctl's. ultracode is a Claude Code
+    /// *setting* — not an effort level and not a CLI flag — so it's
+    /// orthogonal to `effort:` above (which rides the `--effort` flag) and
+    /// the two compose freely. Like the `enableAllProjectMcpServers` key in
+    /// `render_claude_settings`, the name is vendor-owned: verified against
+    /// Claude Code 2.1.175, and a future rename would silently no-op.
+    /// claude-only v1: on non-claude runtimes the settings file is skipped
+    /// and a declared opt-in warns (codex/gemini have no equivalent).
+    /// Defaults to `false` → the settings JSON is byte-unchanged for agents
+    /// that don't opt in.
+    #[serde(default)]
+    pub ultracode: bool,
+
     /// Per-manager human-facing interfaces. Today's only adapter is
     /// `telegram`; the shape is reserved for future adapters
     /// (`discord`, `imessage`, …) so a manager can declare every
@@ -1116,6 +1132,20 @@ interfaces:
             let a: Agent = serde_yaml::from_str(yaml).expect(yaml);
             assert_eq!(a.effort, Some(expected), "yaml: {yaml}");
         }
+    }
+
+    #[test]
+    fn ultracode_parses_from_yaml_and_defaults_false() {
+        // #461: the opt-in must round-trip through the YAML parse path (the
+        // render tests set the field by struct mutation, so this pins the
+        // serde wiring the operator actually hits).
+        let on: Agent = serde_yaml::from_str("ultracode: true\n").expect("ultracode: true");
+        assert!(on.ultracode, "ultracode: true must parse to true");
+        let off: Agent = serde_yaml::from_str("ultracode: false\n").expect("ultracode: false");
+        assert!(!off.ultracode, "ultracode: false must parse to false");
+        // Absent key: #[serde(default)] on a bool defaults to false.
+        let absent: Agent = serde_yaml::from_str("effort: low\n").expect("no ultracode key");
+        assert!(!absent.ultracode, "omitted ultracode must default to false");
     }
 
     #[test]
