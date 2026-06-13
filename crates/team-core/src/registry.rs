@@ -250,6 +250,26 @@ pub fn orphans_for_root(
     ))
 }
 
+/// If another team is registered with the same `project_id` but a DIFFERENT
+/// root that still holds a compose (not an orphan), return that root — the
+/// same-name-different-folder collision `up` must refuse. It's the cluster's
+/// root cause: identity is name-keyed, not path-keyed, so two such teams
+/// alias each other's sessions, tmux names, and mailbox keys. The team's own
+/// root is never a conflict (a re-up of the same `(project_id, root)` is
+/// fine). `path_exists` is injected so the liveness check is pure and
+/// unit-testable; production passes `|p| p.exists()`.
+pub fn same_name_other_root(
+    reg: &Registry,
+    project_id: &str,
+    root: &Path,
+    path_exists: &impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    reg.teams
+        .iter()
+        .find(|t| t.project_id == project_id && t.root != root && !is_orphan(t, path_exists))
+        .map(|t| t.root.clone())
+}
+
 /// Atomic write: serialize to a pid-scoped sibling temp file, then rename
 /// over the target so a concurrent reader sees either the old or the new
 /// file, never a partial one. The pid in the temp name keeps two processes
@@ -536,6 +556,37 @@ mod tests {
             orphans_for_root(empty.path(), Path::new("/r/a/.team"), &desired, None, false)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn same_name_other_root_flags_only_a_live_different_folder() {
+        // `main` is registered up at /r/a/.team.
+        let mut reg = Registry::default();
+        reg.teams.push(entry("main", "/r/a/.team", &["x"], "T0"));
+        let a_live = |p: &Path| p == Path::new("/r/a/.team/team-compose.yaml");
+
+        // Launching `main` from a DIFFERENT folder, while /r/a is still live →
+        // the conflict, naming the other root.
+        assert_eq!(
+            same_name_other_root(&reg, "main", Path::new("/r/b/.team"), &a_live),
+            Some(PathBuf::from("/r/a/.team"))
+        );
+        // Re-up of the SAME (project, root) → not a conflict.
+        assert_eq!(
+            same_name_other_root(&reg, "main", Path::new("/r/a/.team"), &a_live),
+            None
+        );
+        // A DIFFERENT project id at another folder → not a conflict.
+        assert_eq!(
+            same_name_other_root(&reg, "ops", Path::new("/r/b/.team"), &a_live),
+            None
+        );
+        // The other folder is gone (orphan, no compose) → stale, don't block.
+        let none_live = |_: &Path| false;
+        assert_eq!(
+            same_name_other_root(&reg, "main", Path::new("/r/b/.team"), &none_live),
+            None
         );
     }
 }

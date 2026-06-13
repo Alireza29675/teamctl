@@ -34,6 +34,12 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
         None => None,
     };
 
+    // T-469: refuse a same-name-different-folder launch before any side
+    // effects. Two teams sharing a `project_id` in different folders alias
+    // each other (identity is name-keyed, not path-keyed) and crash-loop;
+    // bail early with the conflicting directory named.
+    guard_no_name_collision(&compose, scoped.as_deref())?;
+
     // Per T-133: scoped runs skip cross-project work — wrapper write,
     // DB-side projects/agents/acls/channels rewrite, snapshot rewrite
     // — because each of those clobbers state owned by *other*
@@ -195,6 +201,61 @@ fn registry_entries<'a>(
             }
         })
         .collect()
+}
+
+/// T-469: refuse a launch that would alias an already-running team. teamctl
+/// identity is name-keyed (session UUID, tmux name, mailbox key), never
+/// path-keyed, so two teams with the same `project_id` in different folders
+/// alias each other's sessions — the crash-loop behind the owner's report
+/// (tg 2318). If the durable registry already records any in-scope
+/// `project_id` at a DIFFERENT, still-live root, bail before any side
+/// effects, naming the conflicting directory. A re-up of the same
+/// `(project_id, root)` is fine.
+///
+/// `pub(super)` so `reload` — the other spawn path — shares the guard.
+/// Best-effort: a missing, unreadable, OR corrupt registry skips the guard
+/// (the store degrades to empty) rather than blocking a legitimate launch.
+/// The check iterates per declared agent, so a project with zero agents is
+/// not examined — it has no session/tmux/mailbox identity to alias.
+pub(super) fn guard_no_name_collision(compose: &Compose, scoped: Option<&str>) -> Result<()> {
+    let Some(dir) = team_core::registry::config_dir() else {
+        return Ok(());
+    };
+    let reg = match team_core::registry::load(&dir) {
+        Ok(r) => r,
+        Err(_) => return Ok(()), // can't check ⇒ don't block
+    };
+    guard_no_name_collision_in(&reg, compose, scoped, &|p| p.exists())
+}
+
+/// Inner half of [`guard_no_name_collision`] with the registry and the
+/// liveness check injected, so the guard's decision is unit-testable without
+/// `$HOME` or the real filesystem.
+fn guard_no_name_collision_in(
+    reg: &team_core::registry::Registry,
+    compose: &Compose,
+    scoped: Option<&str>,
+    path_exists: &impl Fn(&Path) -> bool,
+) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for h in compose.agents() {
+        if scoped.is_some_and(|s| s != h.project) || !seen.insert(h.project) {
+            continue;
+        }
+        if let Some(other) =
+            team_core::registry::same_name_other_root(reg, h.project, &compose.root, path_exists)
+        {
+            bail!(
+                "project `{}` is already up at {} — two teams with the same project id in \
+                 different folders alias each other (they share session ids, tmux names, and \
+                 mailbox keys) and can crash-loop. Rename the project here, or `teamctl down` \
+                 the other team first.",
+                h.project,
+                other.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Persist this team's registry rows. Resolves the config dir from `$HOME`
@@ -700,6 +761,54 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].project_id, "ops");
         assert_eq!(entries[0].agents, vec!["otto"]);
+    }
+
+    #[test]
+    fn up_guards_against_same_name_in_a_different_folder() {
+        use team_core::registry::{Registry, TeamEntry};
+        // A compose for project `main`, loaded from a tempdir (its canonical
+        // root) — the self-contained-fixture pattern (no shipped template).
+        let team = tempfile::tempdir().unwrap();
+        fs::create_dir_all(team.path().join("projects")).unwrap();
+        fs::write(
+            team.path().join("team-compose.yaml"),
+            "version: 2\nsupervisor:\n  type: tmux\n  tmux_prefix: t-\nprojects:\n  - file: projects/main.yaml\n",
+        )
+        .unwrap();
+        fs::write(
+            team.path().join("projects/main.yaml"),
+            "version: 2\nproject:\n  id: main\n  name: Main\n  cwd: ./workspace\nmanagers:\n  lead:\n    runtime: claude-code\n    role_prompt: roles/lead.md\n",
+        )
+        .unwrap();
+        let compose = Compose::load(team.path()).unwrap();
+
+        let make_reg = |root: PathBuf| {
+            let mut reg = Registry::default();
+            reg.teams.push(TeamEntry {
+                project_id: "main".into(),
+                root,
+                tmux_prefix: "t-".into(),
+                agents: vec!["lead".into()],
+                started_at: "T0".into(),
+            });
+            reg
+        };
+        // `main` already up at a DIFFERENT, live folder → bail, naming it.
+        let other = make_reg(PathBuf::from("/elsewhere/.team"));
+        let live = |p: &Path| p == Path::new("/elsewhere/.team/team-compose.yaml");
+        let err = guard_no_name_collision_in(&other, &compose, None, &live)
+            .expect_err("same name in a different live folder must be refused");
+        assert!(
+            err.to_string().contains("/elsewhere/.team"),
+            "error names the conflicting dir: {err}"
+        );
+        assert!(
+            err.to_string().contains("teamctl down"),
+            "error gives actionable resolution: {err}"
+        );
+        // A re-up of the SAME (project, root) → not a conflict.
+        let same = make_reg(compose.root.clone());
+        assert!(guard_no_name_collision_in(&same, &compose, None, &live).is_ok());
     }
 
     #[test]

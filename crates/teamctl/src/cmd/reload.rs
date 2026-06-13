@@ -63,6 +63,11 @@ pub fn run(
         .map(|name| super::project_filter::resolve(&compose, name))
         .transpose()?;
 
+    // T-469: `reload` spawns agents too (both the force and diff paths
+    // below), so it's a second front door to the same-name-different-folder
+    // collision `up` guards against — gate it before any agent is brought up.
+    super::up::guard_no_name_collision(&compose, scoped.as_deref())?;
+
     // T-305: a per-agent scope force-restarts exactly the selected
     // agents regardless of whether their config changed. This is a
     // distinct path from the diff-driven reload — the unscoped and
