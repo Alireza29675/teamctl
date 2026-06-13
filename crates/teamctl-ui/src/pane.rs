@@ -66,7 +66,11 @@ impl PaneSource for TmuxPaneSource {
     /// `tmux display-message -p -t <session> '#{window_activity}'` is a
     /// single cheap query (no scrollback transfer) returning the Unix
     /// timestamp of the window's last activity. Gating `capture` on it
-    /// stops an idle pane being re-captured ~10x/second (#277). This is the
+    /// stops an idle pane being re-captured ~10x/second (#277). The
+    /// resolution is whole seconds, so an unchanged ts *within the current
+    /// second* does not mean the pane is idle (it may be mid-burst) —
+    /// `recapture_focused_pane` only treats the cache as fresh once this ts
+    /// is in an earlier second (its settled-second gate). This is the
     /// *window's* activity, which is the right signal because a teamctl
     /// agent session is single-window/single-pane today; if sessions ever
     /// gain extra windows or splits, revisit this (the slow 1 Hz
