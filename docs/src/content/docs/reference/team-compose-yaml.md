@@ -56,7 +56,7 @@ projects:
 ## Per-project
 
 ```yaml
-version: "2.0.0"
+version: 2
 
 project:
   id: newsroom
@@ -111,7 +111,7 @@ workers:
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `version` | int | — | Must be `2`. |
+| `version` | string | — | Schema version, the semver string `"2.0.0"`. A legacy integer `2` is also accepted and self-heals (rewritten to `"2.0.0"` on the next save). |
 | `broker.type` | string | `sqlite` | Only `sqlite` is shipping. |
 | `broker.path` | string | `state/mailbox.db` | Resolved relative to the compose root. |
 | `supervisor.type` | string | `tmux` | `tmux` · `systemd` · `launchd`. |
@@ -128,7 +128,7 @@ workers:
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `version` | int | — | Must be `2`. |
+| `version` | int | — | Project schema version (the integer `2`). |
 | `project.id` | string | — | Unique id; used in tmux session names, mailbox scoping. |
 | `project.name` | string | — | Human label. |
 | `project.cwd` | path | — | Working directory for runtimes. Relative paths resolve against the compose root. |
