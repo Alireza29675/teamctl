@@ -1,11 +1,24 @@
 //! Mailbox-pane data source and tab definitions.
 //!
-//! Four filter shapes, one per tab in SPEC §2's Triptych mailbox:
+//! The Triptych mailbox presents **two** tabs, organised by direction
+//! rather than channel type (#462):
 //!
-//! - `Inbox` — DMs whose `recipient = '<project>:<agent>'`.
+//! - `Inbox` — everything inbound to the focused agent, time-merged:
+//!   DMs (`recipient = '<project>:<agent>'`) plus inbound channel and
+//!   wire traffic (`sender != '<project>:<agent>'`, so a broadcast the
+//!   agent itself sent shows under Sent, not here).
 //! - `Sent` — every row whose `sender = '<project>:<agent>'`,
-//!   irrespective of recipient class. Closes the "did this agent
-//!   actually emit X" debug loop without pivoting to the recipient.
+//!   irrespective of recipient class. Sender-side, so it already
+//!   catches outbound DMs, channel posts, and broadcasts.
+//!
+//! Four data shapes still back these tabs — the SQL fetch is unchanged
+//! (`inbox`, `sent`, `channel_feed`, `wire`); only the tab *surface*
+//! folds them by direction. The `Channel` and `Wire` `MailboxTab`
+//! variants survive as **internal** buffer keys (they're dropped from
+//! [`MailboxTab::ALL`], so they're never user-navigable tabs) because
+//! the channel buffer still feeds the MailboxFirst layout's channel
+//! feed and the Inbox merge:
+//!
 //! - `Channel` — channel traffic for channels the focused agent is
 //!   a member of (recipient is `'channel:<channel_id>'`, filtered
 //!   through `channel_members`).
@@ -23,6 +36,7 @@
 //! recipient-class-agnostic — it returns rows from all three
 //! recipient prefix classes.
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -37,12 +51,10 @@ pub enum MailboxTab {
 }
 
 impl MailboxTab {
-    pub const ALL: [MailboxTab; 4] = [
-        MailboxTab::Inbox,
-        MailboxTab::Sent,
-        MailboxTab::Channel,
-        MailboxTab::Wire,
-    ];
+    /// The user-navigable tabs, in tab-bar order. Channel and Wire are
+    /// deliberately absent (#462): their traffic folds into Inbox by
+    /// direction, but the variants survive as internal buffer keys.
+    pub const ALL: [MailboxTab; 2] = [MailboxTab::Inbox, MailboxTab::Sent];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -65,18 +77,19 @@ impl MailboxTab {
     pub fn next(self) -> Self {
         match self {
             MailboxTab::Inbox => MailboxTab::Sent,
-            MailboxTab::Sent => MailboxTab::Channel,
-            MailboxTab::Channel => MailboxTab::Wire,
-            MailboxTab::Wire => MailboxTab::Inbox,
+            MailboxTab::Sent => MailboxTab::Inbox,
+            // Channel/Wire are internal-only (folded into Inbox, never
+            // the active tab); map them to Inbox defensively so cycling
+            // can never strand the cursor on a non-tab.
+            MailboxTab::Channel | MailboxTab::Wire => MailboxTab::Inbox,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            MailboxTab::Inbox => MailboxTab::Wire,
+            MailboxTab::Inbox => MailboxTab::Sent,
             MailboxTab::Sent => MailboxTab::Inbox,
-            MailboxTab::Channel => MailboxTab::Sent,
-            MailboxTab::Wire => MailboxTab::Channel,
+            MailboxTab::Channel | MailboxTab::Wire => MailboxTab::Inbox,
         }
     }
 }
@@ -94,18 +107,21 @@ pub struct MessageRow {
 /// brackets + one-line body. Multi-line bodies are flattened with a
 /// space so a single message stays one row in the pane.
 ///
-/// Prefix is tab-aware (T-231):
+/// Prefix is tab-aware (T-231, #462):
 ///
-/// - **Inbox / Channel / Wire** → `[<senderName>]`. Sender is the
-///   useful disambiguator for received rows; resolved via
-///   [`crate::data::agent_label`] so `display_name` carries when
-///   set.
+/// - **Inbox** → `[<senderName>]` for a DM, or `[#channel] [<sender>]`
+///   for a folded-in channel/wire row (recipient `channel:…`). The
+///   channel segment keeps the disambiguator-first labelling (T-249)
+///   so a broadcast stays distinct from a direct message now that both
+///   share the Inbox.
 /// - **Sent** → `[→<recipientName>]`. Sender on a Sent row is
 ///   always the focused agent (that's the filter), so showing it is
 ///   redundant. Operators want to see WHO the agent talked to;
 ///   recipient resolution goes through
 ///   [`crate::data::recipient_label`] which handles agent,
 ///   `channel:`, and `user:` recipient shapes.
+/// - **Channel** (internal — the MailboxFirst feed) → `[#channel]
+///   [<sender>]`, the two-segment T-249 shape.
 pub fn render_row(row: &MessageRow, team: &crate::data::TeamSnapshot, tab: MailboxTab) -> String {
     let one_line: String = row
         .text
@@ -119,21 +135,35 @@ pub fn render_row(row: &MessageRow, team: &crate::data::TeamSnapshot, tab: Mailb
             let recipient = crate::data::recipient_label(team, &row.recipient);
             format!("[→{recipient}] {one_line}")
         }
-        MailboxTab::Inbox | MailboxTab::Wire => {
-            let sender = crate::data::agent_label(team, &row.sender);
-            format!("[{sender}] {one_line}")
+        MailboxTab::Inbox => {
+            // #462: the Inbox folds inbound DMs + channel + wire. A
+            // channel/wire row (recipient `channel:…`) keeps the T-249
+            // disambiguator-first labelling — `[#channel] [sender]` — so
+            // it stays distinguishable from a direct DM (`[sender]`).
+            // `recipient_label` maps `channel:<p>:<n>` to `#<n>`.
+            if row.recipient.starts_with("channel:") {
+                let channel = crate::data::recipient_label(team, &row.recipient);
+                let sender = crate::data::agent_label(team, &row.sender);
+                format!("[{channel}] [{sender}] {one_line}")
+            } else {
+                let sender = crate::data::agent_label(team, &row.sender);
+                format!("[{sender}] {one_line}")
+            }
         }
         MailboxTab::Channel => {
-            // T-249: the Channel tab folds every subscribed channel
-            // into a single feed; without the channel name, operators
-            // can't tell `#all` from `#dev` from `#docs`. Two
-            // bracketed segments — channel, then sender — matching
-            // the disambiguator-first convention T-231 set on Sent.
-            // `recipient_label` already maps `channel:<p>:<n>` to
-            // `#<n>`, so the resolution lives in one place.
+            // T-249, still used by the MailboxFirst channel feed: two
+            // bracketed segments — channel, then sender — so operators
+            // can tell `#all` from `#dev` from `#docs` in a rolled-up
+            // feed. `recipient_label` maps `channel:<p>:<n>` to `#<n>`.
             let channel = crate::data::recipient_label(team, &row.recipient);
             let sender = crate::data::agent_label(team, &row.sender);
             format!("[{channel}] [{sender}] {one_line}")
+        }
+        MailboxTab::Wire => {
+            // Internal variant, not a user tab; kept for exhaustiveness.
+            // Same sender-only shape it always had.
+            let sender = crate::data::agent_label(team, &row.sender);
+            format!("[{sender}] {one_line}")
         }
     }
 }
@@ -378,6 +408,13 @@ impl MailboxSource for BrokerMailboxSource {
 /// motion in the tab they're watching.
 #[derive(Debug, Default, Clone)]
 pub struct MailboxBuffers {
+    /// The focused agent's id (`<project>:<agent>`), set by
+    /// `refresh_mailbox`. The `sender != me` source for the Inbox
+    /// merge's inbound filter (#462) — kept here so `rows()` and the
+    /// cursor methods that read it don't have to thread `me` through
+    /// every signature. Empty until the first refresh; an empty id
+    /// means the filter is a no-op (one transient frame at most).
+    pub agent_id: String,
     pub inbox: Vec<MessageRow>,
     pub sent: Vec<MessageRow>,
     pub channel: Vec<MessageRow>,
@@ -441,13 +478,50 @@ const MAX_TAB_ROWS: usize = 500;
 pub const PAGE_JUMP: usize = 10;
 
 impl MailboxBuffers {
-    pub fn rows(&self, tab: MailboxTab) -> &[MessageRow] {
+    /// Rows for `tab`, in ascending broker-id (receipt) order.
+    ///
+    /// Most tabs hand back a borrow of their backing buffer. `Inbox`
+    /// is the exception (#462): it returns an owned, time-merged view
+    /// of inbound DMs + channel + wire, so it allocates. `Cow` lets the
+    /// common borrowed case stay zero-copy while the merged case owns
+    /// its Vec; callers use the result as a slice either way (`Cow`
+    /// derefs to `[MessageRow]`).
+    pub fn rows(&self, tab: MailboxTab) -> Cow<'_, [MessageRow]> {
         match tab {
-            MailboxTab::Inbox => &self.inbox,
-            MailboxTab::Sent => &self.sent,
-            MailboxTab::Channel => &self.channel,
-            MailboxTab::Wire => &self.wire,
+            MailboxTab::Inbox => Cow::Owned(self.merged_inbox()),
+            MailboxTab::Sent => Cow::Borrowed(&self.sent),
+            MailboxTab::Channel => Cow::Borrowed(&self.channel),
+            MailboxTab::Wire => Cow::Borrowed(&self.wire),
         }
+    }
+
+    /// The Inbox feed (#462): inbound DMs + inbound channel + inbound
+    /// wire, merged and sorted ascending by broker `id` (receipt
+    /// order, the same order each buffer already holds). Inbound means
+    /// `sender != self.agent_id`, so a channel post or broadcast the
+    /// focused agent itself sent stays under Sent and never
+    /// double-shows here.
+    ///
+    /// **Dedup by id is load-bearing.** The project-wide `all` channel
+    /// is a real channel every agent joins (its `members: "*"`
+    /// registers all of them in `channel_members`), so a broadcast to
+    /// `channel:<project>:all` is returned by *both* the membership
+    /// query behind the `channel` buffer *and* the `wire` buffer — the
+    /// same message id via two paths. Without the dedup every wire
+    /// broadcast would render twice in the folded Inbox. Equal ids are
+    /// adjacent after the id-sort, so `dedup_by_key` collapses them.
+    fn merged_inbox(&self) -> Vec<MessageRow> {
+        let me = self.agent_id.as_str();
+        let mut rows: Vec<MessageRow> = self
+            .inbox
+            .iter()
+            .chain(self.channel.iter().filter(|r| r.sender != me))
+            .chain(self.wire.iter().filter(|r| r.sender != me))
+            .cloned()
+            .collect();
+        rows.sort_by_key(|r| r.id);
+        rows.dedup_by_key(|r| r.id);
+        rows
     }
 
     /// Indices into `rows(tab)` for the rows currently presented to
@@ -467,7 +541,16 @@ impl MailboxBuffers {
     /// per-keystroke recompute on small (~500-row) buffers is well
     /// within budget.
     pub fn visible_indices(&self, tab: MailboxTab) -> Vec<usize> {
-        let rows = self.rows(tab);
+        self.visible_indices_in(&self.rows(tab), tab)
+    }
+
+    /// Like [`visible_indices`] but against an already-materialised row
+    /// slice. The render path already holds `rows(tab)`, so it computes
+    /// visibility through this to avoid a second `rows()` call — for the
+    /// Inbox that call is non-trivial (it clones, sorts, and dedups the
+    /// merged feed, #462), and the per-frame render would otherwise pay
+    /// for the merge twice.
+    pub fn visible_indices_in(&self, rows: &[MessageRow], tab: MailboxTab) -> Vec<usize> {
         let filter = self.filter_text(tab).to_lowercase();
         let search = self.search_text(tab).to_lowercase();
         if filter.is_empty() && search.is_empty() {
@@ -625,6 +708,29 @@ impl MailboxBuffers {
         self.cursor_mut(tab).selected_idx = max;
     }
 
+    /// Whether the Inbox cursor is at (or past) the tail of the merged
+    /// view — i.e. the operator is following new arrivals. Captured
+    /// before a refresh's extends so [`follow_inbox_tail`] can re-anchor
+    /// the cursor afterwards: per-tab `extend` only follows the tab it
+    /// touches, but a channel/wire arrival grows the *Inbox* view too,
+    /// so without this the highlight would stop tracking the newest row
+    /// on the merged tab (#462).
+    pub fn inbox_at_tail(&self) -> bool {
+        let len = self.visible_indices(MailboxTab::Inbox).len();
+        len == 0 || self.inbox_cursor.selected_idx + 1 >= len
+    }
+
+    /// Snap the Inbox cursor to the tail of the post-merge view. Called
+    /// after a refresh's extends when [`inbox_at_tail`] held before
+    /// them, so following the Inbox keeps tracking the newest row even
+    /// when the new arrival came via the channel or wire buffer (#462).
+    pub fn follow_inbox_tail(&mut self) {
+        let len = self.visible_indices(MailboxTab::Inbox).len();
+        if len > 0 {
+            self.inbox_cursor.selected_idx = len - 1;
+        }
+    }
+
     /// Fold a freshly-fetched batch into the appropriate tab,
     /// trimming to the last `MAX_TAB_ROWS`. Bumps the broker
     /// pagination cursor to the last returned id when the batch is
@@ -752,29 +858,39 @@ mod tests {
     }
 
     #[test]
-    fn next_cycles_inbox_sent_channel_wire_inbox() {
+    fn all_is_inbox_and_sent_only() {
+        // #462: Channel/Wire are no longer user tabs.
+        assert_eq!(MailboxTab::ALL, [MailboxTab::Inbox, MailboxTab::Sent]);
+    }
+
+    #[test]
+    fn next_toggles_between_inbox_and_sent() {
+        // #462: two user tabs → next is a straight toggle.
         let mut t = MailboxTab::Inbox;
         t = t.next();
         assert_eq!(t, MailboxTab::Sent);
-        t = t.next();
-        assert_eq!(t, MailboxTab::Channel);
-        t = t.next();
-        assert_eq!(t, MailboxTab::Wire);
         t = t.next();
         assert_eq!(t, MailboxTab::Inbox);
     }
 
     #[test]
-    fn prev_cycles_inbox_wire_channel_sent_inbox() {
+    fn prev_toggles_between_inbox_and_sent() {
         let mut t = MailboxTab::Inbox;
-        t = t.prev();
-        assert_eq!(t, MailboxTab::Wire);
-        t = t.prev();
-        assert_eq!(t, MailboxTab::Channel);
         t = t.prev();
         assert_eq!(t, MailboxTab::Sent);
         t = t.prev();
         assert_eq!(t, MailboxTab::Inbox);
+    }
+
+    #[test]
+    fn internal_channel_wire_variants_fold_to_inbox_on_cycle() {
+        // The folded-in internal variants are never the active tab, but
+        // if cycling ever lands on one it must escape to a real tab, not
+        // strand the cursor on a non-tab.
+        assert_eq!(MailboxTab::Channel.next(), MailboxTab::Inbox);
+        assert_eq!(MailboxTab::Wire.next(), MailboxTab::Inbox);
+        assert_eq!(MailboxTab::Channel.prev(), MailboxTab::Inbox);
+        assert_eq!(MailboxTab::Wire.prev(), MailboxTab::Inbox);
     }
 
     #[test]
@@ -816,6 +932,106 @@ mod tests {
         assert_eq!(buf.channel_after, 0);
     }
 
+    #[test]
+    fn inbox_merges_inbound_channel_and_wire_sorted_excluding_self() {
+        // #462: the Inbox tab folds inbound DMs + channel + wire,
+        // time-ordered by id, with self-sent broadcasts dropped (they
+        // live under Sent).
+        let buf = MailboxBuffers {
+            agent_id: "p:m".to_string(),
+            inbox: vec![row(2, "p:dev", "p:m", "dm")],
+            channel: vec![
+                row(1, "p:dev", "channel:p:eng", "chan inbound"),
+                row(4, "p:m", "channel:p:eng", "chan from me"), // self → dropped
+            ],
+            wire: vec![
+                row(3, "p:ops", "channel:p:all", "wire inbound"),
+                row(5, "p:m", "channel:p:all", "wire from me"), // self → dropped
+            ],
+            ..Default::default()
+        };
+        let inbox = buf.rows(MailboxTab::Inbox);
+        let ids: Vec<i64> = inbox.iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec![1, 2, 3], "inbound DM+channel+wire, id-sorted");
+        // The raw Channel/Wire buffers are untouched — they still back
+        // the MailboxFirst feed and hold the self rows.
+        assert_eq!(buf.rows(MailboxTab::Channel).len(), 2);
+        assert_eq!(buf.rows(MailboxTab::Wire).len(), 2);
+    }
+
+    #[test]
+    fn inbox_dedups_all_channel_wire_overlap() {
+        // The `all` channel is membership-joined by every agent, so an
+        // `all` broadcast lands in BOTH the channel buffer (via the
+        // membership query) and the wire buffer — the same id via two
+        // paths. The merged Inbox must show it once, not twice.
+        let dup = row(7, "p:dev", "channel:p:all", "release cut");
+        let buf = MailboxBuffers {
+            agent_id: "p:m".to_string(),
+            channel: vec![dup.clone()],
+            wire: vec![dup],
+            ..Default::default()
+        };
+        let ids: Vec<i64> = buf.rows(MailboxTab::Inbox).iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec![7], "the all-channel broadcast appears once");
+    }
+
+    #[test]
+    fn inbox_merge_is_noop_filter_before_agent_id_set() {
+        // Empty `agent_id` only co-occurs with empty buffers in
+        // production (`reset` clears both, and `refresh_mailbox` sets
+        // the id before any extend), so the no-op `sender != ""` filter
+        // is unobservable there. Pinned defensively: even hand-fed a
+        // self row with no agent_id, the merge drops nothing rather than
+        // panicking or losing a row.
+        let buf = MailboxBuffers {
+            channel: vec![row(1, "p:m", "channel:p:eng", "self")],
+            ..Default::default()
+        };
+        assert_eq!(buf.rows(MailboxTab::Inbox).len(), 1);
+    }
+
+    #[test]
+    fn inbox_cursor_follows_channel_wire_arrivals_only_when_at_tail() {
+        // The merged Inbox grows when channel/wire rows arrive, not just
+        // DMs. The refresh re-anchor (inbox_at_tail + follow_inbox_tail)
+        // keeps a tail-following cursor on the newest row — but must not
+        // yank a scrolled-up cursor (#462).
+        let mut buf = MailboxBuffers {
+            agent_id: "p:m".to_string(),
+            inbox: vec![row(1, "p:dev", "p:m", "dm one")],
+            ..Default::default()
+        };
+        assert!(buf.inbox_at_tail(), "single row → at tail");
+        // A channel arrival while following the tail.
+        let was_at_tail = buf.inbox_at_tail();
+        buf.extend(
+            MailboxTab::Channel,
+            vec![row(2, "p:dev", "channel:p:eng", "later")],
+        );
+        if was_at_tail {
+            buf.follow_inbox_tail();
+        }
+        assert_eq!(
+            buf.inbox_cursor.selected_idx, 1,
+            "cursor tracked the channel arrival"
+        );
+        // Now scrolled up: a wire arrival must NOT pull the cursor down.
+        buf.inbox_cursor.selected_idx = 0;
+        let was_at_tail = buf.inbox_at_tail();
+        buf.extend(
+            MailboxTab::Wire,
+            vec![row(3, "p:ops", "channel:p:all", "broadcast")],
+        );
+        if was_at_tail {
+            buf.follow_inbox_tail();
+        }
+        assert_eq!(
+            buf.inbox_cursor.selected_idx, 0,
+            "scrolled-up cursor stays put"
+        );
+    }
+
     fn empty_team() -> crate::data::TeamSnapshot {
         crate::data::TeamSnapshot::empty(std::path::PathBuf::from("/tmp"))
     }
@@ -834,6 +1050,26 @@ mod tests {
         let rendered = render_row(&r, &team, MailboxTab::Inbox);
         // 5 chars ("[s] ") + at most 180 chars of body = 185.
         assert!(rendered.chars().count() <= 185);
+    }
+
+    #[test]
+    fn render_row_inbox_disambiguates_channel_from_dm() {
+        // #462: a folded-in channel/wire row keeps the `[#chan]
+        // [sender]` T-249 shape; a DM stays `[sender]` so the two are
+        // distinguishable now that they share the Inbox.
+        let team = empty_team();
+        let dm = row(1, "p:dev", "p:m", "direct");
+        assert_eq!(render_row(&dm, &team, MailboxTab::Inbox), "[p:dev] direct");
+        let chan = row(2, "p:dev", "channel:p:eng", "in channel");
+        assert_eq!(
+            render_row(&chan, &team, MailboxTab::Inbox),
+            "[#eng] [p:dev] in channel"
+        );
+        let wire = row(3, "p:ops", "channel:p:all", "broadcast");
+        assert_eq!(
+            render_row(&wire, &team, MailboxTab::Inbox),
+            "[#all] [p:ops] broadcast"
+        );
     }
 
     #[test]

@@ -211,7 +211,7 @@ fn render_channel_feed(buf: &mut Buffer, area: Rect, app: &App) {
     // dropped on the floor.
     let all_rows = app.mailbox.rows(crate::mailbox::MailboxTab::Channel);
     let filtered: Vec<&crate::mailbox::MessageRow> = match selected {
-        Some(ch) => filter_rows_for_channel(all_rows, &ch.id),
+        Some(ch) => filter_rows_for_channel(&all_rows, &ch.id),
         None => all_rows.iter().collect(),
     };
     if filtered.is_empty() {

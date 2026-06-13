@@ -20,15 +20,15 @@ expression: buffer_to_string(&buf)
 │                          ││                                                                                          │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌MAILBOX───────────────────────────────────────────────────────────────────────────────────┐
-│                          ││ Inbox    Sent    Channel    Wire                                                         │
-│                          ││[user:cli] 0.7.1 release cut · CHANGELOG updated                                     00:00│
-│                          ││[writing:eng_lead] T-079 cluster Wave 3 dispatching                                  00:00│
-│                          ││                                                                                          │
+│                          ││ Inbox    Sent                                                                            │
+│                          ││[writing:dev1] ready for review                                                      00:00│
+│                          ││[#devs] [writing:critic] looks tight                                                 00:00│
+│                          ││[#all] [user:cli] 0.7.1 release cut · CHANGELOG updated                              00:00│
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
-Tab cycle panes  ·  j/k row · f filter · / search · ⏎ detail · q quit                                ? help · t tutorial
+Tab cycle panes  ·  / search · ⏎ open · @ send · q quit                                              ? help · t tutorial
 /fixture                                                                                           CPU 0% · RAM 0.0/0 GB
