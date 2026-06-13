@@ -54,7 +54,8 @@ It is **not** a file wipe: durable on-disk state (`task.md`, `memory/`, `ways-of
 
 | Command | Effect |
 |---|---|
-| `teamctl ps` (alias `status`) | Wide table: agents, supervisor state, inbox depth. |
+| `teamctl ps [--json]` | Host-wide overview: every running team and its working directory, across projects. Runs from anywhere — no compose root required. |
+| `teamctl status` | Wide table for the current team: agents, supervisor state, inbox depth. |
 | `teamctl logs <project>:<agent>` | Capture the tmux pane's scrollback (last ~3000 lines). |
 | `teamctl tail <project>:<agent> [-f/--follow]` | Live message stream for an agent. |
 | `teamctl mail [<project>:<agent>] [--all]` | Inbox snapshot for an agent (or `--all` across the team). |

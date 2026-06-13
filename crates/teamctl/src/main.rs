@@ -168,9 +168,16 @@ enum Command {
     },
 
     // ── Inspection ───────────────────────────────────────────────────
-    /// Wide table: agents, supervisor state, inbox depth.
-    #[command(alias = "status")]
-    Ps,
+    /// Host-wide overview: every running team and its working directory,
+    /// across projects. Runs from anywhere — no compose root required.
+    Ps {
+        /// Emit machine-readable JSON instead of the human table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wide table: agents, supervisor state, inbox depth — for the team in
+    /// the current `.team/` (or `--root`).
+    Status,
     /// Host-wide list of every teamctl-managed tmux session, across
     /// projects (one row per project). With no subcommand, lists.
     /// Use `teamctl sessions kill <project>` to tear down every
@@ -454,6 +461,16 @@ fn main() -> Result<()> {
             Some(SessionsAction::Kill { project }) => cmd::sessions::kill(&project),
         };
     }
+    if let Command::Ps { json } = cli.command {
+        // `ps` is system-wide — every running team and its working dir —
+        // so it's handled before root resolution like `Sessions`, and runs
+        // from anywhere. It DELIBERATELY shares `sessions`' output: `ps` is
+        // the friendly "what's running" name; `sessions` is the same listing
+        // plus the `kill` management subcommand. Keep the two in lockstep —
+        // a change to the listing should be felt by both surfaces. The
+        // project-local per-agent detail stays under `status`.
+        return cmd::sessions::run(json);
+    }
     if let Command::Context { action } = &cli.command {
         return match action {
             ContextAction::Ls => cmd::context::ls(),
@@ -471,7 +488,7 @@ fn main() -> Result<()> {
     // commands have a different blast-radius story (see T-010b).
     let warns_on_override = matches!(
         cli.command,
-        Command::Validate | Command::Ps | Command::Mail { .. } | Command::Inspect { .. }
+        Command::Validate | Command::Status | Command::Mail { .. } | Command::Inspect { .. }
     );
     if warns_on_override {
         cmd::warn::maybe_warn_root_source(&source, &root);
@@ -496,7 +513,7 @@ fn main() -> Result<()> {
             let sel = cmd::agent_filter::AgentSelector::from_args(scope.agents, scope.except);
             cmd::reload::run(&root, dry_run, scope.project.as_deref(), &sel, fresh, force)
         }
-        Command::Ps => cmd::status::run(&root),
+        Command::Status => cmd::status::run(&root),
         Command::Logs { target } => cmd::logs::run(&root, &target),
         Command::Tail { target, follow } => cmd::tail::run(&root, &target, follow),
         Command::Mail { target, all } => cmd::mail::run(&root, target.as_deref(), all),
@@ -538,6 +555,7 @@ fn main() -> Result<()> {
             };
             cmd::bot::run(&root, action)
         }
+        Command::Ps { .. } => unreachable!("handled above"),
         Command::Context { .. } => unreachable!("handled above"),
         Command::Init { .. } => unreachable!("handled above"),
         Command::Adjust { .. } => unreachable!("handled above"),
