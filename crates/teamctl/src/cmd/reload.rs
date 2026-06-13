@@ -32,7 +32,7 @@
 //! File locking on `applied.json` and an audit log land in PR C/D —
 //! the schema is forward-compatible with each.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -87,6 +87,15 @@ pub fn run(
     // role_prompt files. Together they're a tight "nothing applied,
     // nothing to do" check.
     let mut plan = snapshot::plan(prev.as_ref(), &next);
+    // T-468: when applied.json is absent (`prev` is `None`), `snapshot::plan`
+    // yields an EMPTY remove-set, so a reload can't reap an agent deleted from
+    // the YAML. Fall back to the durable registry: any agent it records as up
+    // at this root but no longer in the compose is an orphan — inject those as
+    // removals so `apply_plan` drains them. `orphan_removals` gates this to the
+    // `prev`-absent case; when the snapshot diff is available it already
+    // computes removals, so injecting would double-reap.
+    plan.remove
+        .extend(orphan_removals(prev.is_some(), registry_orphans(&compose)));
     if let Some(id) = scoped.as_deref() {
         plan = filter_plan_to_project(plan, id);
     }
@@ -142,6 +151,15 @@ pub fn run(
         None => next,
     };
     snapshot::write(&compose.root, &snap)?;
+    // T-468: refresh the durable registry to the post-reload roster so
+    // `teamctl ps` and orphan reaping reflect what's now up. This is the
+    // #466 registry-write deferred from up-only into the reload path; the
+    // upsert preserves each team's original `started_at`, so uptime doesn't
+    // reset on a reload. (A project removed *entirely* from the YAML leaves
+    // its row until a whole-team `down` clears the root — benign: `ps` reads
+    // live tmux, not this store, and a later reap re-kills its already-dead
+    // sessions harmlessly.) Best-effort.
+    super::up::record_in_registry(&compose, scoped.as_deref());
     Ok(())
 }
 
@@ -424,6 +442,48 @@ fn spec_from_prior(compose: &Compose, id: &str, prior: &AgentEntry) -> AgentSpec
     }
 }
 
+/// Gate the registry-orphan injection (T-468): the registry fallback fires
+/// ONLY when the prior snapshot is absent (`prev_present == false`) — the
+/// case where `snapshot::plan` can't see removals. When the snapshot is
+/// present it already computes the remove-set, so this returns empty to avoid
+/// double-reaping. Pure, so both branches are unit-tested without driving a
+/// real reload.
+fn orphan_removals(prev_present: bool, orphans: Vec<RemovedAgent>) -> Vec<RemovedAgent> {
+    if prev_present {
+        Vec::new()
+    } else {
+        orphans
+    }
+}
+
+/// Orphans from the durable registry as drainable `RemovedAgent`s: agents it
+/// records as up at this root but absent from the compose. Used only on the
+/// applied.json-absent reload path, where `snapshot::plan` can't see removals
+/// (T-468). The whole-tree set is returned; `filter_plan_to_project` trims it
+/// to scope, mirroring how the snapshot-diff removals are handled. The tmux
+/// session is the one the registry recorded (`spec_from_removed` drains by
+/// session name). Best-effort: a missing or unreadable registry yields none.
+fn registry_orphans(compose: &Compose) -> Vec<RemovedAgent> {
+    let Some(dir) = team_core::registry::config_dir() else {
+        return Vec::new();
+    };
+    let desired: HashSet<String> = compose.agents().map(|h| h.id()).collect();
+    match team_core::registry::orphans_for_root(&dir, &compose.root, &desired, None, false) {
+        Ok(orphans) => orphans
+            .into_iter()
+            .map(|o| RemovedAgent {
+                id: o.id(),
+                tmux_session: o.tmux_session,
+                env_file: PathBuf::new(),
+            })
+            .collect(),
+        Err(e) => {
+            eprintln!("warn · teams registry: {e:#}");
+            Vec::new()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,6 +660,20 @@ mod tests {
         assert_eq!(
             change_line_head("a:m", &ChangedInputs::forced()),
             "reloaded · a:m (forced)"
+        );
+    }
+
+    #[test]
+    fn orphan_removals_only_fires_without_a_prior_snapshot() {
+        // applied.json present (`prev` is Some) → the snapshot diff owns
+        // removals, so the registry fallback must stay empty (no double-reap).
+        assert!(orphan_removals(true, vec![removed("a:gone")]).is_empty());
+        // applied.json absent → the registry fallback supplies the orphans
+        // verbatim so `apply_plan` drains them.
+        let passed = orphan_removals(false, vec![removed("a:gone"), removed("a:zap")]);
+        assert_eq!(
+            passed.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["a:gone", "a:zap"]
         );
     }
 }
