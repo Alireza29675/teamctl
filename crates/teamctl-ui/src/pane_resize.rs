@@ -32,17 +32,53 @@ use std::process::Command;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
+/// The vertical constraints for the right-stack split — Detail above,
+/// Mailbox below. The single source of truth for the split, shared by
+/// the render path (`triptych::Triptych::render`) and the tmux-sync
+/// path ([`triptych_detail_area`]), so the same proportions reach both
+/// — the divergence #459 called out as the critical failure mode (if
+/// only the render branch shrank the Mailbox, tmux would keep sizing
+/// the agent pane to the old split and the shrink would be cosmetic).
+///
+/// Note this single-sources the *split*, not the absolute heights: the
+/// sync path is handed the full terminal area while the render path
+/// gets the body rect after the 2-row footer (statusline + status bar)
+/// is carved off, so the synced pane runs ~1–2 rows taller than the
+/// rendered Detail inner area. That footer offset predates #459 and is
+/// orthogonal to the split.
+///
+/// In stream-keys mode the operator wants maximum room for the live
+/// terminal, so Detail takes all remaining height and the Mailbox
+/// shrinks to a fixed `Length(5)` strip — borders + tabs consume 3
+/// rows, leaving 2 visible mailbox rows (1 when the filter/search
+/// indicator row is showing) (#459). Otherwise the normal 60/40 split,
+/// which survives terminal-resize because `Ratio` re-applies on every
+/// render.
+pub fn right_stack_constraints(is_stream_keys: bool) -> [Constraint; 2] {
+    if is_stream_keys {
+        [Constraint::Min(0), Constraint::Length(5)]
+    } else {
+        [Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)]
+    }
+}
+
 /// Compute the `Rect` the Triptych layout would allocate to the
-/// `Detail` pane given a total terminal area and whether the approvals
-/// stripe is visible. Mirrors `triptych::Triptych::render` so the
-/// run-loop sync path and the actual render path stay in lockstep —
-/// any future tweak to Triptych geometry must update this helper too.
+/// `Detail` pane given a total terminal area, whether the approvals
+/// stripe is visible, and whether stream-keys mode is active. Mirrors
+/// `triptych::Triptych::render`: the right-stack split comes from the
+/// shared [`right_stack_constraints`], so the split proportions here
+/// match what gets rendered (the absolute height carries the
+/// pre-existing 2-row footer offset noted on `right_stack_constraints`).
 ///
 /// Returns `None` when the area is too small for the layout to produce
 /// a non-empty Detail rect (e.g. an 80×24 terminal in the middle of a
 /// resize-down before crossterm catches up). The caller skips the
 /// sync in that case rather than push a degenerate size to tmux.
-pub fn triptych_detail_area(total: Rect, has_pending_approvals: bool) -> Option<Rect> {
+pub fn triptych_detail_area(
+    total: Rect,
+    has_pending_approvals: bool,
+    is_stream_keys: bool,
+) -> Option<Rect> {
     if total.width == 0 || total.height == 0 {
         return None;
     }
@@ -65,7 +101,7 @@ pub fn triptych_detail_area(total: Rect, has_pending_approvals: bool) -> Option<
         .split(body);
     let right_stack = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)])
+        .constraints(right_stack_constraints(is_stream_keys))
         .split(outer[1]);
     let detail = right_stack[0];
     if detail.width == 0 || detail.height == 0 {
@@ -182,7 +218,7 @@ mod tests {
         // 120×40: Agents=28 wide, right-stack=92 wide, Detail=24 rows
         // (3/5 of 40), Mailbox=16 rows (2/5 of 40).
         let total = Rect::new(0, 0, 120, 40);
-        let detail = triptych_detail_area(total, false).unwrap();
+        let detail = triptych_detail_area(total, false, false).unwrap();
         assert_eq!(detail.x, 28);
         assert_eq!(detail.y, 0);
         assert_eq!(detail.width, 92);
@@ -195,7 +231,7 @@ mod tests {
         // height=1, body starts at y=1 with height=39; Detail is
         // 3/5 of 39 = 23 rows, starting at y=1.
         let total = Rect::new(0, 0, 120, 40);
-        let detail = triptych_detail_area(total, true).unwrap();
+        let detail = triptych_detail_area(total, true, false).unwrap();
         assert_eq!(detail.x, 28);
         assert_eq!(detail.y, 1);
         assert_eq!(detail.width, 92);
@@ -204,8 +240,8 @@ mod tests {
 
     #[test]
     fn detail_area_returns_none_on_zero_dimension() {
-        assert!(triptych_detail_area(Rect::new(0, 0, 0, 40), false).is_none());
-        assert!(triptych_detail_area(Rect::new(0, 0, 120, 0), false).is_none());
+        assert!(triptych_detail_area(Rect::new(0, 0, 0, 40), false, false).is_none());
+        assert!(triptych_detail_area(Rect::new(0, 0, 120, 0), false, false).is_none());
     }
 
     #[test]
@@ -213,7 +249,48 @@ mod tests {
         // Width 28 (or less) is exactly consumed by the Agents
         // sidebar; the right-stack has zero width, so Detail does too.
         let total = Rect::new(0, 0, 28, 40);
-        assert!(triptych_detail_area(total, false).is_none());
+        assert!(triptych_detail_area(total, false, false).is_none());
+    }
+
+    #[test]
+    fn right_stack_constraints_shrink_mailbox_in_stream_keys() {
+        // Normal mode: the classic 60/40 Detail/Mailbox split.
+        assert_eq!(
+            right_stack_constraints(false),
+            [Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)]
+        );
+        // Stream-keys: Detail takes the rest, Mailbox a fixed 5-row strip
+        // (#459). This shared helper is the single source of truth both
+        // the render path and `triptych_detail_area` read, so pinning it
+        // guards the two-geometry lockstep.
+        assert_eq!(
+            right_stack_constraints(true),
+            [Constraint::Min(0), Constraint::Length(5)]
+        );
+    }
+
+    #[test]
+    fn detail_area_in_stream_keys_expands_to_near_full_height() {
+        // 120×40 stream-keys: Mailbox is a fixed Length(5) strip, so
+        // Detail gets the remaining 35 rows (vs 24 under the 3/5 split).
+        let total = Rect::new(0, 0, 120, 40);
+        let detail = triptych_detail_area(total, false, true).unwrap();
+        assert_eq!(detail.x, 28);
+        assert_eq!(detail.y, 0);
+        assert_eq!(detail.width, 92);
+        assert_eq!(detail.height, 35);
+    }
+
+    #[test]
+    fn detail_area_in_stream_keys_with_approvals_stripe() {
+        // Same 120×40 with the approvals stripe: body starts at y=1 with
+        // height 39; the Length(5) Mailbox leaves Detail 34 rows at y=1.
+        let total = Rect::new(0, 0, 120, 40);
+        let detail = triptych_detail_area(total, true, true).unwrap();
+        assert_eq!(detail.x, 28);
+        assert_eq!(detail.y, 1);
+        assert_eq!(detail.width, 92);
+        assert_eq!(detail.height, 34);
     }
 
     #[test]

@@ -126,12 +126,18 @@ impl Widget for Triptych<'_> {
             ])
             .split(body);
 
-        // Inner split inside the right stack: Detail above at 60%,
-        // Mailbox below at 40%. The ratio survives terminal-resize
-        // events — `Constraint::Ratio` re-applies on every render.
+        // Inner split inside the right stack: normally Detail above at
+        // 60% / Mailbox below at 40%, but in stream-keys mode Detail
+        // expands to near-full height and the Mailbox shrinks to a ~2-row
+        // strip (#459). The constraints come from the shared
+        // `right_stack_constraints` so the tmux-sync path
+        // (`pane_resize::triptych_detail_area`) applies the identical
+        // split — if the two diverged the agent pane would keep the old
+        // split and the on-screen shrink would be cosmetic.
+        let stream = matches!(self.app.stage, crate::app::Stage::StreamKeys);
         let right_stack = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)])
+            .constraints(crate::pane_resize::right_stack_constraints(stream))
             .split(outer[1]);
 
         render_agents(buf, outer[0], self.app);
