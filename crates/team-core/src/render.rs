@@ -157,6 +157,18 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
                 h.spec.runtime
             );
         }
+        // #461: same degrade for ultracode — a declared opt-in on a runtime
+        // that doesn't read claude settings is a no-op, so warn rather than
+        // silently drop it (matches the hooks/skills/subagents pattern).
+        if h.spec.ultracode {
+            tracing::warn!(
+                target: "team-core::render",
+                "agent `{}:{}` sets ultracode but runtime `{}` does not support it (claude-code only); ignoring",
+                h.project,
+                h.agent,
+                h.spec.runtime
+            );
+        }
         return None;
     }
     // PreToolUse deny hook. Picked over `--disallowed-tools` so the
@@ -399,6 +411,17 @@ pub fn render_claude_settings(compose: &Compose, h: AgentHandle<'_>) -> Option<S
             .as_array_mut()
             .expect("hook event maps to a json array")
             .push(entry);
+    }
+
+    // #461: per-agent ultracode opt-in. ultracode is a Claude Code settings
+    // key (verified against 2.1.175: settable via `--settings '{"ultracode":
+    // true}'`; NOT a CLI flag and NOT an effort value), so it rides this same
+    // settings file the wrapper passes via `--settings`. Inserted only when
+    // opted in, so the default settings shape is byte-identical for everyone
+    // else. claude-only falls out for free: this fn already returned `None`
+    // above for non-claude runtimes.
+    if h.spec.ultracode {
+        v["ultracode"] = serde_json::Value::Bool(true);
     }
 
     Some(serde_json::to_string_pretty(&v).expect("json"))
@@ -880,6 +903,7 @@ mod tests {
                 reports_to: None,
                 on_rate_limit: None,
                 effort: None,
+                ultracode: false,
                 interfaces: None,
                 display_name: None,
                 hooks: vec![],
@@ -1308,6 +1332,23 @@ mod tests {
     }
 
     #[test]
+    fn claude_settings_absent_when_non_claude_agent_opts_into_ultracode() {
+        // #461: a declared `ultracode: true` on a non-claude runtime is a
+        // no-op — the whole settings file is skipped, so the opt-in must
+        // never leak into a rendered artifact. Pins that the early-return
+        // None survives even with the opt-in set (the warn fires; the
+        // contract is the None).
+        let mut c = fixture();
+        {
+            let m = c.projects[0].managers.get_mut("mgr").unwrap();
+            m.runtime = "codex".into();
+            m.ultracode = true;
+        }
+        let h = c.agents().next().unwrap();
+        assert!(render_claude_settings(&c, h).is_none());
+    }
+
+    #[test]
     fn declared_hook_merges_alongside_deny_hook() {
         // #383 Phase 2 + #428: a per-agent PreToolUse hook is appended
         // AFTER the built-ins in the same bucket — the deny hook keeps slot
@@ -1350,6 +1391,31 @@ mod tests {
             pre[2]["hooks"][0]["command"].as_str().unwrap(),
             "/teamctl/hooks/guard.sh"
         );
+    }
+
+    #[test]
+    fn claude_settings_emits_ultracode_when_set() {
+        // #461: opting an agent into ultracode renders `"ultracode": true`
+        // into its Claude Code settings JSON — the file the wrapper passes
+        // via `--settings`.
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().ultracode = true;
+        let h = c.agents().next().unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
+        assert_eq!(v["ultracode"], true);
+    }
+
+    #[test]
+    fn claude_settings_omits_ultracode_when_unset() {
+        // #461: with ultracode left at its default (`false`), the key is
+        // absent entirely — not present-and-false — so the settings shape is
+        // byte-identical for agents that don't opt in.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&render_claude_settings(&c, h).unwrap()).unwrap();
+        assert!(v.get("ultracode").is_none());
     }
 
     #[test]
