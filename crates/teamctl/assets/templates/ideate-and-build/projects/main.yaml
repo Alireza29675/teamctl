@@ -9,7 +9,7 @@
 version: 2
 
 project:
-  id: main
+  id: {{project_id}}
   name: Ideate & Build
   # The repo this team operates on is the one `.team/` lives inside.
   # `..` resolves to the parent of this `.team/` directory.
