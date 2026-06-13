@@ -87,6 +87,13 @@ struct Cli {
     /// T-101 voice STT: optional language hint forwarded to the provider.
     #[arg(long, env = "TEAMCTL_STT_LANGUAGE")]
     stt_language: Option<String>,
+
+    /// Opt-in: render outbound text via Telegram Bot API 10.1 `sendRichMessage`
+    /// (native rich markdown — tables, headings, lists, code, quotes). On any
+    /// failure the bot falls back to the standard HTML sender, so a message is
+    /// never lost. Default off.
+    #[arg(long, env = "TEAMCTL_TELEGRAM_RICH")]
+    rich_messages: bool,
 }
 
 struct State {
@@ -122,6 +129,9 @@ struct State {
     /// dispatch clears the entry for that chat so the indicator
     /// disappears the moment a real message lands.
     typing: Mutex<HashMap<ChatId, Instant>>,
+    /// #479: when true, outbound text is sent via `sendRichMessage` (rich
+    /// markdown) with a transparent fallback to the HTML sender on failure.
+    rich: bool,
 }
 
 /// T-102: ceiling on a single typing window. Telegram's
@@ -211,6 +221,7 @@ async fn main() -> Result<()> {
         media_root,
         stt,
         typing: Mutex::new(HashMap::new()),
+        rich: cli.rich_messages,
     });
 
     // T-086-H: register the manager's runtime-appropriate slash commands
@@ -1084,7 +1095,7 @@ async fn outbound_loop(bot: Bot, state: Arc<State>) {
                 _ => {}
             }
             if !matches!(kind, DispatchKind::Typing) {
-                forward_row(&bot, chat, &row).await;
+                forward_row(&bot, chat, &row, state.rich).await;
             }
             let c = state.conn.lock().await;
             let _ = c.execute(
@@ -1278,7 +1289,82 @@ fn parse_reaction_payload(payload: &str) -> Option<ReactionPayload> {
     })
 }
 
-async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
+/// #479: build the `sendRichMessage` request body. Markdown passes straight
+/// through; Telegram renders the block tree server-side (verified, spike #478).
+fn rich_message_body(chat_id: i64, markdown: &str) -> serde_json::Value {
+    serde_json::json!({
+        "chat_id": chat_id,
+        "rich_message": { "markdown": markdown },
+    })
+}
+
+/// #479: send `markdown` to `chat` via Bot API 10.1 `sendRichMessage`, raw HTTP
+/// (no teloxide support — see #477). Returns Err on any non-2xx / transport
+/// error so the caller can fall back to the HTML sender.
+///
+/// v1 deliberately does not thread replies: spike #478 verified only `chat_id`
+/// and `rich_message.markdown`; an unverified reply field could 400 every reply
+/// and defeat rich exactly when an agent replies. The HTML fallback still
+/// threads. Probing a reply field on `sendRichMessage` is a tracked follow-up.
+async fn forward_rich_row(
+    bot: &Bot,
+    chat: ChatId,
+    markdown: &str,
+    row_id: i64,
+) -> Result<(), String> {
+    // The token lives in the URL path (Bot API has no header auth). `api_url()`
+    // ends in `/` for the default base, so this concat yields the correct
+    // `.../bot<token>/sendRichMessage`. (teamctl never sets a custom api_url; a
+    // path-bearing custom base would instead need teloxide's join semantics.)
+    let url = format!("{}bot{}/sendRichMessage", bot.api_url(), bot.token());
+    let body =
+        serde_json::to_string(&rich_message_body(chat.0, markdown)).map_err(|e| e.to_string())?;
+    // `bot.client()` is teloxide-core's reqwest (0.11 / http 0.2), distinct
+    // from team-bot's own reqwest 0.12 dep used by the Groq STT path — so the
+    // header name is passed as a `&str` literal rather than a `CONTENT_TYPE`
+    // constant, which would otherwise resolve to the wrong `http` version.
+    let resp = bot
+        .client()
+        .post(url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        // `without_url()` is mandatory here: the URL carries the bot token, and
+        // a reqwest transport error's Display appends "for url (<url>)" — so a
+        // bare `e.to_string()` would leak the token into the logs. Stripping the
+        // URL keeps the underlying cause (timeout/connect/…) but drops the token.
+        .map_err(|e| e.without_url().to_string())?;
+    let status = resp.status();
+    if status.is_success() {
+        Ok(())
+    } else {
+        let text = resp.text().await.unwrap_or_default();
+        Err(format!(
+            "row {row_id}: sendRichMessage HTTP {status}: {text}"
+        ))
+    }
+}
+
+/// Existing HTML text send (render_html + parse_mode=Html + reply threading).
+/// Used as the default path and as the #479 rich-send fallback.
+async fn send_text_html(
+    bot: &Bot,
+    chat: ChatId,
+    body: String,
+    reply: Option<ReplyParameters>,
+    row_id: i64,
+) {
+    let mut req = bot.send_message(chat, body).parse_mode(ParseMode::Html);
+    if let Some(rp) = reply {
+        req = req.reply_parameters(rp);
+    }
+    if let Some(e) = req.await.err() {
+        tracing::warn!("send_message (text) failed for mailbox row {}: {e}", row_id);
+    }
+}
+
+async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow, rich: bool) {
     let kind = classify_kind(row.kind.as_deref());
     // T-140: html-escape `row.sender` so the renderer doesn't lean on
     // today's agent-id schema (`[a-z0-9_-]:[a-z0-9_-]`). The em-dash and
@@ -1288,14 +1374,21 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow) {
     let reply = reply_parameters_for(row.telegram_msg_id);
     match kind {
         DispatchKind::Text => {
-            let mut req = bot
-                .send_message(chat, format!("{}{attribution}", render_html(&row.text)))
-                .parse_mode(ParseMode::Html);
-            if let Some(rp) = reply.clone() {
-                req = req.reply_parameters(rp);
-            }
-            if let Some(e) = req.await.err() {
-                tracing::warn!("send_message (text) failed for mailbox row {}: {e}", row.id);
+            let html_body = format!("{}{attribution}", render_html(&row.text));
+            if rich {
+                // raw markdown passthrough + a markdown-escaped attribution
+                let md_attribution =
+                    format!("\n\n— replied by {}", markdown_escape_str(&row.sender));
+                let md_body = format!("{}{md_attribution}", row.text);
+                match forward_rich_row(bot, chat, &md_body, row.id).await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        tracing::warn!("{e}; falling back to HTML send");
+                        send_text_html(bot, chat, html_body, reply.clone(), row.id).await;
+                    }
+                }
+            } else {
+                send_text_html(bot, chat, html_body, reply.clone(), row.id).await;
             }
         }
         DispatchKind::Image | DispatchKind::File => {
@@ -2096,6 +2189,19 @@ fn html_escape_into(out: &mut String, s: &str) {
 fn html_escape_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     html_escape_into(&mut out, s);
+    out
+}
+
+/// #479: backslash-escape the markdown specials that could mangle an
+/// interpolated agent id in the rich-message attribution line.
+fn markdown_escape_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '_' | '*' | '`' | '[' | ']' | '(' | ')' | '~' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
     out
 }
 
@@ -4613,5 +4719,36 @@ mod tests {
             "MAX_DOWNLOAD_BYTES ({MAX_DOWNLOAD_BYTES}) must exceed \
              MAX_VOICE_BYTES ({MAX_VOICE_BYTES})"
         );
+    }
+
+    /// #479: the request body carries exactly `chat_id` (i64) and the raw
+    /// markdown under `rich_message.markdown` — no block tree, no extra fields.
+    #[test]
+    fn rich_message_body_has_chat_and_markdown() {
+        assert_eq!(
+            rich_message_body(123, "# Hi"),
+            serde_json::json!({
+                "chat_id": 123,
+                "rich_message": { "markdown": "# Hi" },
+            }),
+        );
+    }
+
+    /// #479: multiline markdown passes through verbatim — Telegram builds the
+    /// block tree server-side, so the bot must not transform the content.
+    #[test]
+    fn rich_message_body_preserves_multiline_markdown() {
+        let markdown = "# Heading\n\n| a | b |\n- list\n```\ncode\n```\n> quote";
+        let body = rich_message_body(7, markdown);
+        assert_eq!(body["rich_message"]["markdown"], markdown);
+    }
+
+    /// #479: an underscore in an agent id would italicize a span in rich
+    /// markdown; the escape backslashes each special. A schema-clean id like
+    /// `teamctl:kian` carries no specials and passes through untouched.
+    #[test]
+    fn markdown_escape_str_escapes_underscores_and_specials() {
+        assert_eq!(markdown_escape_str("team_a:bot_1"), "team\\_a:bot\\_1");
+        assert_eq!(markdown_escape_str("teamctl:kian"), "teamctl:kian");
     }
 }
