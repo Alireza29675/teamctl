@@ -88,12 +88,28 @@ struct Cli {
     #[arg(long, env = "TEAMCTL_STT_LANGUAGE")]
     stt_language: Option<String>,
 
-    /// Opt-in: render outbound text via Telegram Bot API 10.1 `sendRichMessage`
-    /// (native rich markdown — tables, headings, lists, code, quotes). On any
-    /// failure the bot falls back to the standard HTML sender, so a message is
-    /// never lost. Default off.
-    #[arg(long, env = "TEAMCTL_TELEGRAM_RICH")]
-    rich_messages: bool,
+    /// Rich messages are ON by default: an outbound text message *without* a
+    /// reply target renders via Telegram Bot API 10.1 `sendRichMessage` (native
+    /// rich markdown — tables, headings, lists, code, quotes), with a
+    /// transparent fallback to the HTML sender on any failure so a message is
+    /// never lost. Replies always use the HTML sender to preserve Telegram
+    /// threading. Pass `--no-rich-messages` (or set
+    /// `TEAMCTL_TELEGRAM_NO_RICH=true`) to force the plain HTML sender for every
+    /// message; the env var also accepts `1`/`0`/`yes`/`no`.
+    // BoolishValueParser makes the env accept 1/0/yes/no — a bare `bool` + `env`
+    // rejects `=1` and crashes the bot at startup. clap still renders
+    // `[possible values: true, false]` in --help (derived from the bool type);
+    // that's cosmetically narrower than what's accepted, so don't trim the doc
+    // above to match it.
+    #[arg(
+        long,
+        env = "TEAMCTL_TELEGRAM_NO_RICH",
+        num_args = 0..=1,
+        default_value_t = false,
+        default_missing_value = "true",
+        value_parser = clap::builder::BoolishValueParser::new(),
+    )]
+    no_rich_messages: bool,
 }
 
 struct State {
@@ -129,8 +145,11 @@ struct State {
     /// dispatch clears the entry for that chat so the indicator
     /// disappears the moment a real message lands.
     typing: Mutex<HashMap<ChatId, Instant>>,
-    /// #479: when true, outbound text is sent via `sendRichMessage` (rich
-    /// markdown) with a transparent fallback to the HTML sender on failure.
+    /// #479 / rich-default-on: master switch for rich sends — on unless
+    /// `--no-rich-messages` / `TEAMCTL_TELEGRAM_NO_RICH`. When on, a Text row
+    /// *without* a reply target is sent via `sendRichMessage` (rich markdown)
+    /// with a transparent fallback to the HTML sender on failure; replies always
+    /// use the HTML sender to keep Telegram threading. See `use_rich_path`.
     rich: bool,
 }
 
@@ -221,7 +240,7 @@ async fn main() -> Result<()> {
         media_root,
         stt,
         typing: Mutex::new(HashMap::new()),
-        rich: cli.rich_messages,
+        rich: !cli.no_rich_messages,
     });
 
     // T-086-H: register the manager's runtime-appropriate slash commands
@@ -1302,10 +1321,11 @@ fn rich_message_body(chat_id: i64, markdown: &str) -> serde_json::Value {
 /// (no teloxide support — see #477). Returns Err on any non-2xx / transport
 /// error so the caller can fall back to the HTML sender.
 ///
-/// v1 deliberately does not thread replies: spike #478 verified only `chat_id`
-/// and `rich_message.markdown`; an unverified reply field could 400 every reply
-/// and defeat rich exactly when an agent replies. The HTML fallback still
-/// threads. Probing a reply field on `sendRichMessage` is a tracked follow-up.
+/// This path does not thread replies: spike #478 verified only `chat_id` and
+/// `rich_message.markdown`, and an unverified reply field could 400 every reply.
+/// Callers must not route a reply here — `use_rich_path` sends any row carrying
+/// a reply target via the HTML sender instead, so threading is preserved there.
+/// Probing a reply field on `sendRichMessage` is a tracked follow-up (#444).
 async fn forward_rich_row(
     bot: &Bot,
     chat: ChatId,
@@ -1364,6 +1384,17 @@ async fn send_text_html(
     }
 }
 
+/// Decide whether an outbound Text row takes the rich (`sendRichMessage`) path.
+/// Rich is used only when (a) rich messages are enabled and (b) the row has no
+/// reply target. A reply must stay on the HTML/teloxide sender to preserve
+/// Telegram threading, which `sendRichMessage` cannot do yet (spike #478) — so
+/// the agent's reply-or-not choice selects the path per message (owner directive
+/// tg 2479). The `--no-rich-messages` kill switch (`rich_enabled == false`)
+/// forces the HTML sender for every message regardless of reply target.
+fn use_rich_path(rich_enabled: bool, has_reply_target: bool) -> bool {
+    rich_enabled && !has_reply_target
+}
+
 async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow, rich: bool) {
     let kind = classify_kind(row.kind.as_deref());
     // T-140: html-escape `row.sender` so the renderer doesn't lean on
@@ -1375,7 +1406,7 @@ async fn forward_row(bot: &Bot, chat: ChatId, row: &MailboxRow, rich: bool) {
     match kind {
         DispatchKind::Text => {
             let html_body = format!("{}{attribution}", render_html(&row.text));
-            if rich {
+            if use_rich_path(rich, reply.is_some()) {
                 // raw markdown passthrough + a markdown-escaped attribution
                 let md_attribution =
                     format!("\n\n— replied by {}", markdown_escape_str(&row.sender));
@@ -4750,5 +4781,60 @@ mod tests {
     fn markdown_escape_str_escapes_underscores_and_specials() {
         assert_eq!(markdown_escape_str("team_a:bot_1"), "team\\_a:bot\\_1");
         assert_eq!(markdown_escape_str("teamctl:kian"), "teamctl:kian");
+    }
+
+    /// rich-default-on: the three-way precedence — the `--no-rich-messages`
+    /// kill switch wins, then a reply target forces the (threading) HTML path,
+    /// and only a rich-enabled message with no reply target takes the rich path.
+    #[test]
+    fn use_rich_path_three_way_precedence() {
+        // rich enabled, no reply target → rich (the new default for fresh msgs)
+        assert!(use_rich_path(true, false));
+        // rich enabled, but a reply target → HTML to preserve threading
+        assert!(!use_rich_path(true, true));
+        // kill switch wins regardless of reply target
+        assert!(!use_rich_path(false, false));
+        assert!(!use_rich_path(false, true));
+    }
+
+    /// rich-default-on: rich messages are ON by default — with no flag the
+    /// opt-out is unset, so `State.rich` (= `!no_rich_messages`) is true.
+    #[test]
+    fn cli_rich_messages_default_on() {
+        let cli = Cli::try_parse_from(["bot", "--token", "x"]).expect("parse");
+        assert!(
+            !cli.no_rich_messages,
+            "rich must be ON by default (opt-out)"
+        );
+    }
+
+    /// rich-default-on: `--no-rich-messages` is the opt-out kill switch.
+    #[test]
+    fn cli_no_rich_messages_opt_out() {
+        let cli =
+            Cli::try_parse_from(["bot", "--token", "x", "--no-rich-messages"]).expect("parse");
+        assert!(cli.no_rich_messages, "--no-rich-messages must force HTML");
+    }
+
+    /// rich-default-on: the opt-out accepts boolish values (1/0/true/false/…),
+    /// not just `true`/`false`. clap applies the arg's `value_parser` to both
+    /// the env var and the `--flag=value` form, so this `--no-rich-messages=…`
+    /// test pins the exact parser the `TEAMCTL_TELEGRAM_NO_RICH` env var uses —
+    /// without mutating process env. A bare `bool` arg would reject `=1` and
+    /// crash the bot at startup, so this guards the documented kill switch.
+    #[test]
+    fn cli_no_rich_messages_accepts_boolish_values() {
+        let parse = |v: &str| {
+            Cli::try_parse_from(["bot", "--token", "x", &format!("--no-rich-messages={v}")])
+                .unwrap_or_else(|_| panic!("--no-rich-messages={v} must parse"))
+                .no_rich_messages
+        };
+        assert!(
+            parse("true"),
+            "=true must disable rich (the documented form)"
+        );
+        assert!(parse("1"), "=1 must disable rich (forgiving boolish form)");
+        assert!(!parse("0"), "=0 must keep rich on");
+        assert!(!parse("false"), "=false must keep rich on");
     }
 }
