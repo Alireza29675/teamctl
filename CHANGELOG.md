@@ -4,6 +4,50 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-14
+
+### Added
+
+- **Rich Telegram messages** are now on by default — the bot renders tables, headings, lists, fenced code, and block quotes natively via Bot API 10.1 `sendRichMessage`. Replies still use the HTML sender to preserve threading, and any rich-send failure transparently falls back to HTML so no message is ever dropped. Set `--no-rich-messages` (or `TEAMCTL_TELEGRAM_NO_RICH=1`) to revert to plain HTML. (#484, #488)
+- **Inbound reply and quote context** — when a user tap-replies or hold-quotes an earlier Telegram message, the bot prefixes the inbound mailbox body with a Markdown blockquote naming the sender and the quoted text, so the agent sees what the message refers back to. Plain messages are forwarded unchanged. (#444)
+- **Boot-context wake notice on every session start** — a managed `SessionStart` hook tells a freshly launched or resumed pane which transition just happened (startup, resume, cleared context, or compacted) with a UTC timestamp; the hook script is written and kept current automatically on `teamctl up`. Agents also receive a coarse downtime sentence on startup (e.g. "You were down for about 2 hours") and a re-anchor note after a context compaction reminding them to re-read their working files. (#436, #443)
+- **`teamctl reload --force`** restarts every in-scope agent regardless of whether its config fingerprint changed, giving operators a clean bounce after a host restart or suspected hung state without resorting to `down` + `up`. It composes with `--fresh` and `--dry-run`; forced agents render as `reloaded · <id> (forced)`. (#438)
+- **Per-agent `ultracode` opt-in** in `team-compose.yaml` — set `ultracode: true` on an agent to enable Claude Code's ultracode orchestration mode for it. The key is injected into that agent's rendered settings only and is ignored (with a warning) on non-Claude runtimes. (#464)
+- **`teamctl rl-hit` subcommand** records a rate-limit hit from a Claude Code `StopFailure` hook, giving headless agents (not wrapped in the `rl-watch` PTY) a durable rate-limit signal the TUI can observe. (#441)
+- **Guide to existing MCP servers** — a curated, operator-facing catalog of 10 community and Anthropic MCP servers usable in a per-agent `mcps:` block today, each with a paste-ready stdio snippet and an honest validated-vs-desk-checked verification badge. (#452)
+
+### Changed
+
+- **`teamctl ps` is now system-wide**, listing every running team and its working directory from anywhere, with no compose root required. The project-local per-agent table previously reached via `ps` is now its own `teamctl status` command; both support `--json`. (#475)
+- **TUI mailbox collapses to Inbox and Sent tabs** — inbound DMs, channel posts, and wire broadcasts now merge into a single time-ordered, deduplicated Inbox (with `[#channel]` labels), replacing the previous four-tab split by channel type; everything the agent sent stays under Sent. (#465)
+- **Detail pane grows and Mailbox shrinks in stream-keys mode** — entering stream-keys expands the Detail pane to near-full height and collapses the Mailbox to a compact strip for maximum room to watch live output; the normal 60/40 split restores on exit. (#463)
+- **Stream-keys input is now realtime** — forwarded keystrokes are enqueued on a background worker instead of blocking the render loop on each `tmux send-keys` call, eliminating per-keystroke typing lag. Keys are still delivered in arrival order and flushed on quit, and the idle redraw cadence tightens from 50ms to 33ms for snappier refreshes. (#440)
+- **Focused-pane detail view skips redundant captures when a pane is idle** — a cheap tmux activity probe gates the heavy 3,000-line scrollback capture, so an idle detail pane no longer re-captures ten times a second, cutting CPU while keeping output fresh when it is actually flowing. (#454)
+- **Per-agent rate-limit indicator on by default** — the TUI status-bar indicator is now enabled by default; set `TEAMCTL_UI_RATE_LIMIT_INDICATOR=0` to opt out. (#441)
+- **Agents are guided to carry `thread_id` forward on replies** — the `dm` and `reply_to_user` tool descriptions and the MCP `initialize` instructions now frame carrying the inbound `thread_id` as the default for replies, so multi-agent conversations stay threaded instead of fragmenting. (#450)
+- **Quieter post-update output** — `teamctl update` no longer dumps the whole changelog after upgrading; it prints a single nudge with a pre-filled `teamctl whatsnew --since <old>` command so the release notes are one copy-paste away on demand. (#445)
+- **Runtime docs match Claude Code's resume-if-exists behavior** — the runtimes pages now describe how the wrapper creates a session with `--session-id` on first spawn and attaches with `--resume` on later spawns, self-healing back to `--session-id` if the session file is removed. (#451)
+
+### Fixed
+
+- **`teamctl budget` now records real cost instead of always reporting `$0.00`** — the budget table had a reader and a schema but nothing ever wrote rows, so the cost column was permanently zero. A Claude Code Stop hook now parses each finished turn's token usage from the session transcript, prices it, and writes a cost row; teams running opus/sonnet/haiku get real figures immediately (unknown models price to $0 until their rate is added). (#455)
+- **Orphaned agent sessions are reaped** on `down` and `reload` — when an agent is removed from a team's YAML, its leftover tmux session is now drained instead of being left running forever. (#476)
+- **Same-name launch guard** stops `teamctl up` and `teamctl reload` before any side effects when a project with the same `project_id` is already running from a different folder, naming the conflicting directory and how to resolve it instead of letting the teams alias each other's sessions and crash-loop. (#482)
+- **Agent wrapper self-heals resume failures** — when a session resume exits non-zero, it retries once immediately with a fresh cwd-scoped session id instead of respawning into the same failing `--resume` every five seconds, so a session-id collision can no longer become a permanent crash-loop. (#472)
+- **Unique session IDs per install of the `ideate-and-build` template** — the template no longer hard-codes `project.id: main`, so installing it twice in different folders no longer produces colliding session UUIDs that silently resume the wrong team's sessions and crash-loop. (#470)
+- **Detail pane stays live during fast activity** — fixes a regression where the detail view froze at roughly 1Hz while typing quickly in stream-keys mode or watching a rapidly streaming pane; it now refreshes at the full tick rate during bursts while preserving the idle-CPU savings. (#460)
+- **NO_COLOR is now honored everywhere** — the root-source warning, the bot-setup wizard, and the `teamctl init` team-structure preview now emit plain text under `NO_COLOR` or when piped, closing the last ANSI gaps in the CLI. (#448)
+- **Voice messages confirm their route** — after a voice note is transcribed and lands in the mailbox, the Telegram bot now echoes the `→ {manager}` routing target, so operators see that the transcript actually reached an agent. (#446)
+- **Trailing comments survive YAML edits** — programmatic edits such as `teamctl bot setup --force` no longer delete operator comments and blank lines that follow a replaced block when that block is the last one in the file. (#442)
+- **Corrected `version` field docs for `team-compose.yaml`** — the reference now distinguishes the global semver `version: "2.0.0"` from the per-project integer `version: 2`, and fixes a per-project example that previously failed to parse. (#457)
+
+### Internal
+
+- Durable system-wide team registry — `teamctl up` records each running team's project id and root path to `~/.config/teamctl/teams.json` and `down` clears it; the plumbing under system-wide `ps`, orphan reaping, and the same-name guard. (#471)
+- Local and publish-side MSRV floor guard — a `just msrv-check` recipe and a pre-publish CI step build the shipped CLI crate on the declared Rust 1.86 floor, so a release cannot ship a crate that no longer compiles on its advertised minimum. (#453)
+- Registry round-trip test no longer depends on the shipped `ideate-and-build` template, using a self-contained inline compose fixture. (#474)
+- Pinned the read-only-filesystem graceful degrade for legacy `version: 2` rewrites with a unix anti-regression test; no production logic changes. (#449)
+
 ## [0.9.1] - 2026-06-06
 
 ### Added
