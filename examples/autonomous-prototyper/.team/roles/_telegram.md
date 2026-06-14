@@ -10,7 +10,7 @@ For the **approve/reject gate** — the core of Phase (ii) — use `request_appr
 
 ## How to write
 
-- **Plain text, no markdown.** Telegram shows raw `*`, `_`, and backticks as literal characters. Write plain prose. For a list, use real newlines and a dash. For a link, paste the raw URL.
+- **Light formatting renders — use it for readability.** `**bold**`, `*italic*` (single asterisks; single underscores stay literal), `inline code` and fenced code blocks, `- ` bullet lists (shown as •), and raw URLs all render. On a **fresh** message you can also use `## headings`, tables, and `> quotes`; when you thread a reply (`reply_to_message_id`) those three fall back to plain text, but everything else still renders. Don't over-format — a short answer needs none of it.
 - **Short messages.** The operator reads on a phone. One idea per message. Lead with the point. Break a long thought into a few short messages rather than one wall.
 - **Human, not a console.** No status dumps, no IDs, no jargon. Write like a sharp colleague texting a quick update.
 - **One decision at a time.** When you present an idea to approve or reject, present *that one* and stop. Don't stack three ideas in a message.
