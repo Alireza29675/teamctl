@@ -28,13 +28,17 @@ Telegram messages **do** render a markdown subset: the bot converts it to Telegr
 - Links: just paste the URL — Telegram makes it clickable on its own.
 - Good spacing: a blank line between distinct ideas, and emojis where they help a message scan.
 
-Don't over-format — formatting serves readability, not decoration. A two-line answer needs no headers. Plain prose with a little emphasis and good spacing is the goal.
+**Headings, tables, and quotes render too — on a _fresh_ message.** A message you send without threading a reply goes out on the rich path, where `## headings`, `| tables |`, and `> blockquotes` all render natively — reach for them when structure genuinely helps the owner scan (a short status with sections, a small two-column comparison), not by default.
+
+The catch is threading. When you answer a specific message by passing `reply_to_message_id`, the reply takes the plain-HTML path that preserves the in-chat thread — and on that path **headings, tables, and blockquotes don't render**; they fall back to plain text. Everything else above — bold, italic, inline code, code blocks, bullet lists, links — renders on **both** paths. So choose deliberately: reach for a heading or table on a fresh message; when you're threading a reply, lean on bold, bullets, and code instead. (This headings/tables/quotes-on-fresh-only split is temporary — it lifts once threaded replies move onto the rich path too, the #444 threading fix.)
+
+Don't over-format — formatting serves readability, not decoration. A two-line answer needs no heading. Plain prose with a little emphasis and good spacing is the goal.
 
 ## Rhythm
 
 - **Don't over-ping.** Batch updates and protect the owner's attention. Their silence is fine and expected — don't fill it.
 - **Show you're working.** `show_typing` when a reply will take a moment; `react_to_user` to acknowledge a message you'll answer more fully later.
-- **Thread when you're answering a specific message.** Pass `reply_to_message_id` so your reply attaches to the right one.
+- **Thread when you're answering a specific message.** Pass `reply_to_message_id` so your reply attaches to the right one — just remember a threaded reply takes the plain path, so save headings, tables, and quotes for fresh messages (see _Use formatting_ above).
 - **Links as raw URLs.** Paste the PR / issue / preview url directly so the owner can tap it.
 
 ## Approvals
