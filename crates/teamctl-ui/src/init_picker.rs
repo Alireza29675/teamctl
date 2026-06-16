@@ -32,7 +32,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, Padding, Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 
 use team_core::compose::{Global, Project};
@@ -44,6 +44,9 @@ use crate::theme::{detect_capabilities, Capabilities};
 /// remote store (fast-follow #495) will have — without any network call.
 const FAKE_FETCH: Duration = Duration::from_millis(800);
 const SPINNER: [&str; 4] = ["⠋", "⠙", "⠹", "⠸"];
+
+/// The teamctl wordmark reduced to its "T" — shown atop the start screen.
+const WORDMARK_T: &str = "█████\n  █  \n  █  ";
 
 /// What the picker resolves to. The binary entry maps this to stdout + an
 /// exit code that `teamctl init` consumes.
@@ -219,20 +222,27 @@ fn render_branch(state: &PickerState, area: Rect, buf: &mut Buffer) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),    // top spacer
+            Constraint::Length(3), // "T" wordmark
+            Constraint::Length(1), // gap
             Constraint::Length(1), // title
             Constraint::Length(1), // gap
+            Constraint::Length(1), // option 0
             Constraint::Length(1), // option 1
-            Constraint::Length(1), // option 2
             Constraint::Length(1), // gap
             Constraint::Length(1), // hint
             Constraint::Min(0),    // bottom spacer
         ])
         .split(area);
 
-    Paragraph::new("Create a new team")
+    Paragraph::new(WORDMARK_T)
         .style(accent)
         .alignment(Alignment::Center)
         .render(rows[1], buf);
+
+    Paragraph::new("Create a new team")
+        .style(accent)
+        .alignment(Alignment::Center)
+        .render(rows[3], buf);
 
     let option = |idx: usize, label: &str, desc: &str| -> Line<'static> {
         let selected = state.branch_idx == idx;
@@ -253,21 +263,26 @@ fn render_branch(state: &PickerState, area: Rect, buf: &mut Buffer) {
         ])
     };
 
-    Paragraph::new(option(0, "Browse a template", "pick from ready-made teams"))
-        .alignment(Alignment::Center)
-        .render(rows[3], buf);
-    Paragraph::new(option(
-        1,
-        "Co-design with AI",
-        "let Claude Code shape it with you",
-    ))
-    .alignment(Alignment::Center)
-    .render(rows[4], buf);
+    // Both options share one left edge: render them left-aligned inside a
+    // horizontally-centered column so the labels line up, instead of each
+    // line centering on its own (which reads ragged-left).
+    let opt0 = option(0, "Browse a template", "pick from ready-made teams");
+    let opt1 = option(1, "Co-design with AI", "let Claude Code shape it with you");
+    let col_w = (opt0.width().max(opt1.width()) as u16).min(area.width);
+    let col_x = area.x + area.width.saturating_sub(col_w) / 2;
+    let line_area = |row: Rect| Rect {
+        x: col_x,
+        y: row.y,
+        width: col_w,
+        height: 1,
+    };
+    Paragraph::new(opt0).render(line_area(rows[5]), buf);
+    Paragraph::new(opt1).render(line_area(rows[6]), buf);
 
     Paragraph::new("↑/↓ select · Enter choose · Esc cancel")
         .style(muted)
         .alignment(Alignment::Center)
-        .render(rows[6], buf);
+        .render(rows[8], buf);
 }
 
 fn render_browse(state: &PickerState, area: Rect, buf: &mut Buffer) {
@@ -294,7 +309,8 @@ fn render_list(state: &PickerState, area: Rect, buf: &mut Buffer) {
     let block = Block::default()
         .title(" Templates ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(state.caps.muted()));
+        .border_style(Style::default().fg(state.caps.muted()))
+        .padding(Padding::horizontal(1));
     let inner = block.inner(area);
     block.render(area, buf);
 
@@ -339,7 +355,8 @@ fn render_detail(state: &PickerState, area: Rect, buf: &mut Buffer) {
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(state.caps.accent()));
+        .border_style(Style::default().fg(state.caps.accent()))
+        .padding(Padding::horizontal(1));
     let inner = block.inner(area);
     block.render(area, buf);
 

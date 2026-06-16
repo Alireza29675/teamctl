@@ -3,14 +3,14 @@ source: crates/teamctl-ui/src/init_picker.rs
 expression: "buf_to_string(&render_to_buffer(&state, 100, 20))"
 ---
 ┌ Templates ─────────────────────┐┌ Product Team ──────────────────────────────────────────────────┐
-│▸ Product Team                  ││product discovery while an engineering team builds              │
+│ ▸ Product Team                 ││ product discovery while an engineering team builds             │
 │                                ││                                                                │
-│                                ││4 agents · 10 sub-agents · 0 skills · 1 hook · 0 mcps           │
+│                                ││ 4 agents · 10 sub-agents · 0 skills · 1 hook · 0 mcps          │
 │                                ││                                                                │
-│                                ││You                                                             │
-│                                ││├── Product Manager  Claude Code · Opus 4.8 · 2×a 0×s 0×h 0×m   │
-│                                │││   └── Engineer (Claude)  Claude Code · Sonnet 4.6 · 6×a 0×s 1×│
-│                                ││└── Engineering Manager  Claude Code · Opus 4.8 · 2×a 0×s 0×h 0×│
+│                                ││ You                                                            │
+│                                ││ ├── Product Manager  Claude Code · Opus 4.8 · 2×a 0×s 0×h 0×m  │
+│                                ││ │   └── Engineer (Claude)  Claude Code · Sonnet 4.6 · 6×a 0×s  │
+│                                ││ └── Engineering Manager  Claude Code · Opus 4.8 · 2×a 0×s 0×h  │
 │                                ││                                                                │
 │                                ││                                                                │
 │                                ││                                                                │
