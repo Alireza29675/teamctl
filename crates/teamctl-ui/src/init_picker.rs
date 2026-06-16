@@ -45,8 +45,19 @@ use crate::theme::{detect_capabilities, Capabilities};
 const FAKE_FETCH: Duration = Duration::from_millis(800);
 const SPINNER: [&str; 4] = ["⠋", "⠙", "⠹", "⠸"];
 
-/// The teamctl wordmark reduced to its "T" — shown atop the start screen.
-const WORDMARK_T: &str = "█████\n  █  \n  █  ";
+/// The "t" lifted from teamctl-ui's splash wordmark (figlet isometric4) —
+/// shown atop the start screen so it matches the glyph `teamctl ui` opens
+/// with. Leading whitespace is load-bearing (the 3D slant); trailing is
+/// trimmed and the mark is rendered left-aligned in a centered column.
+const WORDMARK_T: &str = r"   ___
+  /\  \
+  \:\  \
+   \:\  \
+   /::\  \
+  /:/\:\__\
+ /:/  \/__/
+/:/  /
+\/__/";
 
 /// What the picker resolves to. The binary entry maps this to stdout + an
 /// exit code that `teamctl init` consumes.
@@ -222,7 +233,7 @@ fn render_branch(state: &PickerState, area: Rect, buf: &mut Buffer) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),    // top spacer
-            Constraint::Length(3), // "T" wordmark
+            Constraint::Length(9), // "t" splash glyph
             Constraint::Length(1), // gap
             Constraint::Length(1), // title
             Constraint::Length(1), // gap
@@ -234,10 +245,22 @@ fn render_branch(state: &PickerState, area: Rect, buf: &mut Buffer) {
         ])
         .split(area);
 
+    // Render the splash glyph left-aligned inside a horizontally-centered
+    // column so its diagonal stays intact (per-line centering would skew it).
+    let mark_w = WORDMARK_T
+        .lines()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0) as u16;
+    let mark_area = Rect {
+        x: area.x + area.width.saturating_sub(mark_w) / 2,
+        y: rows[1].y,
+        width: mark_w.min(area.width),
+        height: rows[1].height,
+    };
     Paragraph::new(WORDMARK_T)
         .style(accent)
-        .alignment(Alignment::Center)
-        .render(rows[1], buf);
+        .render(mark_area, buf);
 
     Paragraph::new("Create a new team")
         .style(accent)
@@ -746,7 +769,7 @@ mod tests {
     #[test]
     fn branch_screen_snapshot() {
         let state = PickerState::new(mono(), vec![]);
-        insta::assert_snapshot!(buf_to_string(&render_to_buffer(&state, 100, 16)));
+        insta::assert_snapshot!(buf_to_string(&render_to_buffer(&state, 100, 24)));
     }
 
     #[test]

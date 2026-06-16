@@ -1,13 +1,20 @@
 ---
 source: crates/teamctl-ui/src/init_picker.rs
-expression: "buf_to_string(&render_to_buffer(&state, 100, 16))"
+expression: "buf_to_string(&render_to_buffer(&state, 100, 24))"
 ---
                                                                                                     
                                                                                                     
                                                                                                     
-                                                █████                                               
-                                                  █                                                 
-                                                  █                                                 
+                                                                                                    
+                                               ___                                                  
+                                              /\  \                                                 
+                                              \:\  \                                                
+                                               \:\  \                                               
+                                               /::\  \                                              
+                                              /:/\:\__\                                             
+                                             /:/  \/__/                                             
+                                            /:/  /                                                  
+                                            \/__/                                                   
                                                                                                     
                                           Create a new team                                         
                                                                                                     
