@@ -40,9 +40,9 @@ pub struct SchemaVersion {
 
 impl SchemaVersion {
     // T-265: current compose schema version; bump on any schema-affecting type change.
-    // 2.0.1: doc-only — McpServer.env description now names the codex
-    // `${VAR}` interpolation gap (see McpEnvInterpolationUnsupported).
-    pub const CURRENT: &str = "2.0.1";
+    // 3.0.0 (MAJOR): T-493 removed `supervisor.drain_timeout_secs`, a field
+    // removal, which the drift gate flagged once #265's golden landed first.
+    pub const CURRENT: &str = "3.0.0";
 
     /// Construct directly from a semver-shaped string; for fixtures
     /// and tests + the in-memory legacy coercion.

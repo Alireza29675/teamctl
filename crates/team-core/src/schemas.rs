@@ -38,20 +38,22 @@ pub fn current_schema_json() -> String {
     s
 }
 
-// T-265: bundled golden schemas keyed by schema version, following the
-// `runtimes.rs` include_str! pattern. One entry per shipped schema
-// version; `SchemaVersion::CURRENT` always has a row here.
-// NOTE: `include_str!` needs a literal path, so the `2.0.1` below can't
-// be `SchemaVersion::CURRENT`. Keep this filename in sync with CURRENT on
-// every schema bump (add a new row; don't replace the old one — historical
-// schemas stay bundled for the migration skill). The drift gate fails
-// loudly if they desync, so a forgotten edit can't ship silently.
+// `runtimes.rs` include_str! pattern. One row per shipped schema version,
+// oldest first; the CURRENT row is last. Historical schemas stay bundled
+// so the migration skill can diff old vs new — so on a bump, ADD a row,
+// never replace one.
+// NOTE: `include_str!` needs a literal path, so the version in each path
+// can't be `SchemaVersion::CURRENT`. Keep the last row's filename in sync
+// with CURRENT on every bump. The drift gate fails loudly if the CURRENT
+// row's content desyncs from the derived schema, so a forgotten edit can't
+// ship silently.
 const EMBEDDED: &[(&str, &str)] = &[
+    ("2.0.0", include_str!("../schemas/compose-2.0.0.json")),
+    ("2.0.1", include_str!("../schemas/compose-2.0.1.json")),
     (
         SchemaVersion::CURRENT,
-        include_str!("../schemas/compose-2.0.1.json"),
+        include_str!("../schemas/compose-3.0.0.json"),
     ),
-    ("2.0.0", include_str!("../schemas/compose-2.0.0.json")),
 ];
 
 /// The bundled JSON Schema for a given schema version, or `None` when no
@@ -89,6 +91,12 @@ mod tests {
     #[test]
     fn bundled_lookup_resolves_current_and_misses_unknown() {
         assert!(bundled(SchemaVersion::CURRENT).is_some());
+        // Historical schemas stay bundled (the migration skill diffs them),
+        // so an older version still resolves after a bump.
+        assert!(
+            bundled("2.0.0").is_some(),
+            "historical schema must stay bundled after a version bump"
+        );
         assert!(bundled("0.0.0").is_none());
     }
 
