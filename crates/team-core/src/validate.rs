@@ -79,9 +79,6 @@ pub enum ValidationError {
         runtime: String,
     },
 
-    #[error("supervisor.drain_timeout_secs={0} is unreasonable; expected 0..=600")]
-    DrainTimeoutOutOfRange(u64),
-
     #[error(
         "compose schema `version: {got}` is not a valid semver string (expected e.g. `\"2.0.0\"`)"
     )]
@@ -154,11 +151,6 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
     match compose.global.supervisor.r#type.as_str() {
         "tmux" | "systemd" | "launchd" => {}
         other => errs.push(ValidationError::UnknownSupervisor(other.into())),
-    }
-    if compose.global.supervisor.drain_timeout_secs > 600 {
-        errs.push(ValidationError::DrainTimeoutOutOfRange(
-            compose.global.supervisor.drain_timeout_secs,
-        ));
     }
 
     // T-265 PR-a: compose schema version must be a valid semver
@@ -426,24 +418,6 @@ mod tests {
         assert!(validate(&c)
             .iter()
             .any(|e| matches!(e, ValidationError::UnknownBroker(_))));
-    }
-
-    #[test]
-    fn drain_timeout_above_600s_flags() {
-        let mut c = toy_compose("dev");
-        c.global.supervisor.drain_timeout_secs = 86_400;
-        assert!(validate(&c)
-            .iter()
-            .any(|e| matches!(e, ValidationError::DrainTimeoutOutOfRange(86_400))));
-    }
-
-    #[test]
-    fn drain_timeout_zero_is_valid() {
-        let mut c = toy_compose("dev");
-        c.global.supervisor.drain_timeout_secs = 0;
-        assert!(!validate(&c)
-            .iter()
-            .any(|e| matches!(e, ValidationError::DrainTimeoutOutOfRange(_))));
     }
 
     #[test]

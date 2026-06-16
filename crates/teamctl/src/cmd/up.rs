@@ -138,7 +138,7 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
     // unscoped reload while still recording what this scoped up
     // applied.
     let bin = super::team_mcp_bin().display().to_string();
-    let next = super::snapshot::compute(&compose, &bin);
+    let next = super::snapshot::compute(&compose, &bin, env!("TEAMCTL_BUILD_VERSION"));
     let snap = match scoped.as_deref() {
         Some(id) => {
             let prev = super::snapshot::read(&compose.root);
