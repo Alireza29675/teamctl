@@ -1,4 +1,4 @@
-//! Applied-state snapshot (`state/applied.json`) — schema v2.
+//! Applied-state snapshot (`state/applied.json`) — schema v3.
 //!
 //! The snapshot is the single source of truth for "what was applied to
 //! this teamctl root, last time `up` or `reload` ran". It is consumed by
@@ -7,10 +7,11 @@
 //! started — critical when global config (notably `tmux_prefix`) has
 //! drifted since the last apply.
 //!
-//! Schema v1 (legacy `{ agents: { id -> opaque-hash } }`) is treated as
-//! "no prior snapshot", which forces a clean re-apply on first reload
-//! after upgrade. That one-time mass-restart is the priced-in cost of
-//! moving to deterministic, content-stable fingerprints.
+//! Any older schema (v1 legacy `{ agents: { id -> opaque-hash } }`, or v2
+//! before per-agent hooks/subagents/skills and the teamctl-version global
+//! joined the fingerprint set) is treated as "no prior snapshot", which
+//! forces a clean re-apply on the first reload after upgrade. That
+//! one-time mass-restart is the priced-in cost of a schema bump.
 //!
 //! Hashing is `blake3` throughout — byte-stable across builds and
 //! toolchains, fixing the silent `applied.json`-invalidation that the
@@ -23,9 +24,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use team_core::compose::{Compose, RolePrompt};
-use team_core::render::{env_path, render_agent};
+use team_core::render::{env_path, render_agent, render_claude_settings, render_subagents};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -53,6 +54,12 @@ pub struct GlobalSnap {
     pub supervisor_type: String,
     pub tmux_prefix: String,
     pub broker_path: String,
+    /// The teamctl binary version (`TEAMCTL_BUILD_VERSION`) that last
+    /// applied this root. A mismatch on the next reload means a new
+    /// binary is on disk (the post-`update` trap: the file was swapped
+    /// but live agents still run the old wrapper/MCP/settings), so every
+    /// agent is force-restarted to pick the new binary up.
+    pub teamctl_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,11 +69,23 @@ pub struct AgentEntry {
     pub fingerprints: Fingerprints,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Fingerprints {
     pub env: String,
     pub mcp: String,
     pub role_prompt: PromptFingerprint,
+    /// Hash of the rendered Claude settings JSON (`render_claude_settings`)
+    /// — covers per-agent `hooks:` and `ultracode:`, which previously
+    /// flowed to disk but were never fingerprinted, so an edit to either
+    /// didn't trigger a restart. `"none"` for runtimes without settings.
+    pub settings: String,
+    /// Hash of the rendered sub-agents JSON (`render_subagents`) — covers
+    /// `subagents:` source content, not just the YAML path list. `"none"`
+    /// when the agent declares no sub-agents.
+    pub subagents: String,
+    /// Hash of the agent's declared `skills:` path list. Catches
+    /// add/remove/reorder; skill directory contents are not hashed.
+    pub skills: String,
 }
 
 /// `role_prompt` is a sum type so a missing file produces a stable
@@ -74,12 +93,17 @@ pub struct Fingerprints {
 /// present file. Hiding a missing path behind empty bytes (the prior
 /// behaviour) silently masked typo'd paths and deleted-underneath
 /// regressions.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PromptFingerprint {
+    #[default]
     None,
-    Missing { path: String },
-    Present { hash: String },
+    Missing {
+        path: String,
+    },
+    Present {
+        hash: String,
+    },
 }
 
 /// Snapshot path on disk.
@@ -90,10 +114,11 @@ pub fn snapshot_path(root: &Path) -> PathBuf {
 /// Read the previously-applied snapshot. Returns `None` when:
 /// - the file does not exist (first apply on this root),
 /// - the file is unparseable (corrupted), or
-/// - the file is schema v1 (the legacy `{ agents: { id -> hash } }`).
+/// - the file is an older schema (v1 legacy `{ agents: { id -> hash } }`,
+///   or v2 before the comprehensive-detection fields landed).
 ///
-/// In all three cases the next reload will treat every current agent as
-/// `add` and produce no `remove` entries — equivalent to the pre-v2
+/// In all these cases the next reload will treat every current agent as
+/// `add` and produce no `remove` entries — equivalent to the prior
 /// behaviour when `applied.json` was absent.
 pub fn read(root: &Path) -> Option<Snapshot> {
     let path = snapshot_path(root);
@@ -126,11 +151,23 @@ pub fn merge_project_into(prior: Option<&Snapshot>, next: &Snapshot, project_id:
             agents.insert(id.clone(), entry.clone());
         }
     }
+    // Global metadata reflects the YAML the operator just looked at, so it
+    // comes from `next` — EXCEPT `teamctl_version`. A scoped op only
+    // restarts one project; advancing the version here would make the next
+    // UNSCOPED reload believe the whole fleet is already on the new binary,
+    // so the projects this scoped run didn't touch would never restart
+    // after a `teamctl update` (T-493). Carry the prior version forward so
+    // that binary-swap signal survives until an unscoped reload bounces
+    // everyone. (No prior = first apply = nothing stale, so use next's.)
+    let mut global = next.global.clone();
+    if let Some(p) = prior {
+        global.teamctl_version = p.global.teamctl_version.clone();
+    }
     Snapshot {
         schema: SCHEMA_VERSION,
         applied_at: next.applied_at.clone(),
         compose_digest: next.compose_digest.clone(),
-        global: next.global.clone(),
+        global,
         agents,
     }
 }
@@ -150,7 +187,7 @@ pub fn write(root: &Path, snapshot: &Snapshot) -> Result<()> {
 /// stamped with RFC3339 UTC. Caller decides whether to persist it (via
 /// `write`) — `up` and `reload` both do, but only after their
 /// respective side effects have run successfully.
-pub fn compute(compose: &Compose, team_mcp_bin: &str) -> Snapshot {
+pub fn compute(compose: &Compose, team_mcp_bin: &str, teamctl_version: &str) -> Snapshot {
     let mut agents = BTreeMap::new();
     for h in compose.agents() {
         let (env, mcp) = render_agent(compose, h, team_mcp_bin);
@@ -159,6 +196,16 @@ pub fn compute(compose: &Compose, team_mcp_bin: &str) -> Snapshot {
             env: hash_str(&env),
             mcp: hash_str(&mcp),
             role_prompt,
+            // Hooks + ultracode ride the rendered settings JSON.
+            settings: hash_opt(render_claude_settings(compose, h)),
+            // A read/parse error inside render_subagents collapses to
+            // "no subagents" for the fingerprint; the real render step on
+            // apply surfaces the error and aborts before any restart.
+            subagents: hash_opt(render_subagents(compose, h).ok().flatten()),
+            // Skills has no "absent" state — an agent with none has an
+            // empty list — so it hashes the (possibly empty) path key
+            // directly rather than the `hash_opt` "none" sentinel.
+            skills: hash_str(&skills_key(&h.spec.skills)),
         };
         let tmux_session = format!(
             "{}{}-{}",
@@ -185,6 +232,7 @@ pub fn compute(compose: &Compose, team_mcp_bin: &str) -> Snapshot {
             supervisor_type: compose.global.supervisor.r#type.clone(),
             tmux_prefix: compose.global.supervisor.tmux_prefix.clone(),
             broker_path: compose.global.broker.path.display().to_string(),
+            teamctl_version: teamctl_version.to_string(),
         },
         agents,
     }
@@ -254,6 +302,29 @@ fn hash_str(s: &str) -> String {
     hash_bytes(s.as_bytes())
 }
 
+/// Hash an optional rendered artifact. `None` (a runtime with no settings
+/// file, or an agent with no sub-agents) gets a fixed sentinel distinct
+/// from any real `blake3:` hash, so "no artifact" is itself a stable,
+/// comparable fingerprint rather than colliding with empty content.
+fn hash_opt(v: Option<String>) -> String {
+    match v {
+        Some(s) => hash_str(&s),
+        None => "none".to_string(),
+    }
+}
+
+/// Stable key for an agent's declared `skills:`: the newline-joined
+/// relative paths. Catches add/remove/reorder of skill entries. Skill
+/// directory *contents* are intentionally not hashed (a `SKILL.md` edit
+/// isn't detected) — the path list is the cheap, common-case signal.
+fn skills_key(skills: &[PathBuf]) -> String {
+    skills
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn hash_bytes(bytes: &[u8]) -> String {
     format!("blake3:{}", blake3::hash(bytes).to_hex())
 }
@@ -263,12 +334,17 @@ fn now_rfc3339() -> String {
 }
 
 /// What changed for a single kept agent. All-false is a `keep` (not in
-/// the `change` list).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// the `change` list). `binary` is global (the teamctl version differs):
+/// it's set on every agent at once, so a binary swap restarts the fleet.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChangedInputs {
     pub env: bool,
     pub mcp: bool,
     pub role_prompt: bool,
+    pub settings: bool,
+    pub subagents: bool,
+    pub skills: bool,
+    pub binary: bool,
 }
 
 impl ChangedInputs {
@@ -279,15 +355,17 @@ impl ChangedInputs {
     /// `change` entry can only mean "forced" — which the preview/apply
     /// output renders as `(forced)` instead of a changed-inputs label.
     pub fn forced() -> Self {
-        Self {
-            env: false,
-            mcp: false,
-            role_prompt: false,
-        }
+        Self::default()
     }
 
     pub fn any(&self) -> bool {
-        self.env || self.mcp || self.role_prompt
+        self.env
+            || self.mcp
+            || self.role_prompt
+            || self.settings
+            || self.subagents
+            || self.skills
+            || self.binary
     }
 
     pub fn label(&self) -> String {
@@ -300,6 +378,18 @@ impl ChangedInputs {
         }
         if self.role_prompt {
             parts.push("role_prompt");
+        }
+        if self.settings {
+            parts.push("settings");
+        }
+        if self.subagents {
+            parts.push("subagents");
+        }
+        if self.skills {
+            parts.push("skills");
+        }
+        if self.binary {
+            parts.push("binary");
         }
         parts.join("+")
     }
@@ -340,8 +430,8 @@ impl ReloadPlan {
 pub fn plan(prev: Option<&Snapshot>, next: &Snapshot) -> ReloadPlan {
     let mut plan = ReloadPlan::default();
 
-    let prev_agents: &BTreeMap<String, AgentEntry> = match prev {
-        Some(s) => &s.agents,
+    let prev_snap = match prev {
+        Some(s) => s,
         None => {
             // No prior snapshot: every current agent is `add`. No `remove`.
             for id in next.agents.keys() {
@@ -350,6 +440,14 @@ pub fn plan(prev: Option<&Snapshot>, next: &Snapshot) -> ReloadPlan {
             return plan;
         }
     };
+    let prev_agents = &prev_snap.agents;
+
+    // A teamctl-binary swap is global: it forces every kept agent into the
+    // change set so the whole fleet restarts onto the new binary's
+    // wrapper/MCP/settings. This is the post-`update` trap — the on-disk
+    // file changed but live agents still run the old one. Added/removed
+    // agents are already handled by their own arms below.
+    let binary_changed = prev_snap.global.teamctl_version != next.global.teamctl_version;
 
     for (id, next_entry) in &next.agents {
         match prev_agents.get(id) {
@@ -360,6 +458,11 @@ pub fn plan(prev: Option<&Snapshot>, next: &Snapshot) -> ReloadPlan {
                     mcp: prev_entry.fingerprints.mcp != next_entry.fingerprints.mcp,
                     role_prompt: prev_entry.fingerprints.role_prompt
                         != next_entry.fingerprints.role_prompt,
+                    settings: prev_entry.fingerprints.settings != next_entry.fingerprints.settings,
+                    subagents: prev_entry.fingerprints.subagents
+                        != next_entry.fingerprints.subagents,
+                    skills: prev_entry.fingerprints.skills != next_entry.fingerprints.skills,
+                    binary: binary_changed,
                 };
                 if inputs.any() {
                     plan.change.push((id.clone(), inputs));
@@ -393,6 +496,7 @@ mod tests {
             env: env.into(),
             mcp: mcp.into(),
             role_prompt: prompt,
+            ..Default::default()
         }
     }
 
@@ -494,6 +598,228 @@ mod tests {
         assert_eq!(p.change_prior.get("p:a").unwrap().tmux_session, "OLD-p-a");
     }
 
+    // ── T-493: comprehensive change detection ────────────────────────
+
+    fn snap_ver(agents: Vec<(&str, AgentEntry)>, version: &str) -> Snapshot {
+        let mut s = snap(agents);
+        s.global.teamctl_version = version.into();
+        s
+    }
+
+    #[test]
+    fn binary_version_mismatch_restarts_all_kept_agents() {
+        // A teamctl binary swap (the global version differs) forces every
+        // otherwise-unchanged agent into the change set with the `binary`
+        // input set, so the whole fleet restarts onto the new binary's
+        // wrapper/MCP/settings. This is the post-`update` trap.
+        let agents = || {
+            vec![
+                (
+                    "p:a",
+                    entry("a-p-a", fp("e1", "m1", PromptFingerprint::None)),
+                ),
+                (
+                    "p:b",
+                    entry("a-p-b", fp("e2", "m2", PromptFingerprint::None)),
+                ),
+            ]
+        };
+        let prev = snap_ver(agents(), "0.10.0");
+        let next = snap_ver(agents(), "0.11.0");
+        let p = plan(Some(&prev), &next);
+        assert!(
+            p.keep.is_empty(),
+            "no agent stays kept across a binary swap"
+        );
+        assert_eq!(p.change.len(), 2);
+        for (id, inputs) in &p.change {
+            assert!(inputs.binary, "{id} flagged binary");
+            assert_eq!(
+                inputs.label(),
+                "binary",
+                "{id} restarted solely for the binary swap"
+            );
+            assert!(
+                p.change_prior.contains_key(id),
+                "prior carried for {id} so teardown hits the running session"
+            );
+        }
+    }
+
+    #[test]
+    fn same_binary_version_leaves_unchanged_agents_kept() {
+        let prev = snap_ver(
+            vec![(
+                "p:a",
+                entry("a-p-a", fp("e1", "m1", PromptFingerprint::None)),
+            )],
+            "0.10.0",
+        );
+        let next = snap_ver(
+            vec![(
+                "p:a",
+                entry("a-p-a", fp("e1", "m1", PromptFingerprint::None)),
+            )],
+            "0.10.0",
+        );
+        let p = plan(Some(&prev), &next);
+        assert_eq!(p.keep, vec!["p:a"]);
+        assert!(p.change.is_empty());
+    }
+
+    #[test]
+    fn settings_change_flags_settings() {
+        // hooks / ultracode ride the rendered settings JSON.
+        let prev = snap(vec![(
+            "p:a",
+            entry(
+                "a-p-a",
+                Fingerprints {
+                    settings: "blake3:s1".into(),
+                    ..Default::default()
+                },
+            ),
+        )]);
+        let next = snap(vec![(
+            "p:a",
+            entry(
+                "a-p-a",
+                Fingerprints {
+                    settings: "blake3:s2".into(),
+                    ..Default::default()
+                },
+            ),
+        )]);
+        let p = plan(Some(&prev), &next);
+        assert_eq!(p.change.len(), 1);
+        assert_eq!(p.change[0].1.label(), "settings");
+    }
+
+    #[test]
+    fn subagents_change_flags_subagents() {
+        let prev = snap(vec![(
+            "p:a",
+            entry(
+                "a-p-a",
+                Fingerprints {
+                    subagents: "blake3:x".into(),
+                    ..Default::default()
+                },
+            ),
+        )]);
+        let next = snap(vec![(
+            "p:a",
+            entry(
+                "a-p-a",
+                Fingerprints {
+                    subagents: "blake3:y".into(),
+                    ..Default::default()
+                },
+            ),
+        )]);
+        let p = plan(Some(&prev), &next);
+        assert_eq!(p.change[0].1.label(), "subagents");
+    }
+
+    #[test]
+    fn skills_change_flags_skills() {
+        let prev = snap(vec![(
+            "p:a",
+            entry(
+                "a-p-a",
+                Fingerprints {
+                    skills: "blake3:k1".into(),
+                    ..Default::default()
+                },
+            ),
+        )]);
+        let next = snap(vec![(
+            "p:a",
+            entry(
+                "a-p-a",
+                Fingerprints {
+                    skills: "blake3:k2".into(),
+                    ..Default::default()
+                },
+            ),
+        )]);
+        let p = plan(Some(&prev), &next);
+        assert_eq!(p.change[0].1.label(), "skills");
+    }
+
+    #[test]
+    fn binary_label_combines_with_other_inputs() {
+        let c = ChangedInputs {
+            env: true,
+            binary: true,
+            ..Default::default()
+        };
+        assert_eq!(c.label(), "env+binary");
+    }
+
+    #[test]
+    fn old_schema_v2_applied_json_is_rejected_as_no_prior() {
+        // A real v2 applied.json — schema 2, global WITHOUT
+        // teamctl_version, fingerprints WITHOUT settings/subagents/skills
+        // — must be treated as no-prior after the v3 bump, forcing the
+        // one-time full re-apply. Mirrors schema_v1_is_treated_as_no_prior
+        // but for the v2→v3 step, and exercises the realistic upgrade path
+        // (deserialization fails on the missing fields) rather than just
+        // the schema gate.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("state")).unwrap();
+        let v2_raw = r#"{
+            "schema": 2,
+            "applied_at": "2026-06-01T00:00:00Z",
+            "compose_digest": "blake3:abc",
+            "global": {"supervisor_type":"tmux","tmux_prefix":"a-","broker_path":"state/mailbox.db"},
+            "agents": {"p:a": {"tmux_session":"a-p-a","env_file":"state/envs/p-a.env","fingerprints":{"env":"blake3:e","mcp":"blake3:m","role_prompt":{"kind":"none"}}}}
+        }"#;
+        std::fs::write(snapshot_path(dir.path()), v2_raw).unwrap();
+        assert!(
+            read(dir.path()).is_none(),
+            "a real v2 applied.json must be no-prior after the v3 bump"
+        );
+    }
+
+    #[test]
+    fn scoped_merge_keeps_prior_binary_version() {
+        // T-493 finding: a scoped reload/up after `teamctl update` must NOT
+        // advance the global teamctl_version — otherwise the next unscoped
+        // reload thinks the whole fleet is already on the new binary and
+        // never bounces the projects the scoped run skipped.
+        let prior = snap_ver(
+            vec![("a:m", entry("a-a-m", fp("e", "m", PromptFingerprint::None)))],
+            "0.10.0",
+        );
+        let next = snap_ver(
+            vec![("a:m", entry("a-a-m", fp("e", "m", PromptFingerprint::None)))],
+            "0.11.0",
+        );
+        let merged = merge_project_into(Some(&prior), &next, "a");
+        assert_eq!(
+            merged.global.teamctl_version, "0.10.0",
+            "scoped merge carries the prior binary version forward"
+        );
+        // ...so a subsequent unscoped reload still detects the swap and
+        // flags every agent with `binary`.
+        let p = plan(Some(&merged), &next);
+        assert!(
+            p.change.iter().all(|(_, i)| i.binary),
+            "binary swap still detected after a scoped merge"
+        );
+        assert!(p.keep.is_empty());
+    }
+
+    #[test]
+    fn hash_opt_distinguishes_none_from_content() {
+        // "no artifact" must be a stable sentinel that never collides with
+        // a real blake3 hash of empty or any content.
+        assert_eq!(hash_opt(None), "none");
+        assert_ne!(hash_opt(Some(String::new())), hash_opt(None));
+        assert!(hash_opt(Some("x".into())).starts_with("blake3:"));
+    }
+
     #[test]
     fn schema_v1_is_treated_as_no_prior() {
         let v1_raw = r#"{"agents":{"p:a":"deadbeef"}}"#;
@@ -510,6 +836,7 @@ mod tests {
             env: true,
             mcp: false,
             role_prompt: true,
+            ..Default::default()
         };
         assert_eq!(c.label(), "env+role_prompt");
     }
