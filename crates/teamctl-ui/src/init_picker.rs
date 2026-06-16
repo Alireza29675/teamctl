@@ -362,8 +362,12 @@ fn render_detail(state: &PickerState, area: Rect, buf: &mut Buffer) {
     let c = entry.counts;
     lines.push(Line::styled(
         format!(
-            "{} agents · {} sub-agents · {} skills · {} hooks · {} mcps",
-            c.agents, c.subagents, c.skills, c.hooks, c.mcps
+            "{} · {} · {} · {} · {}",
+            plural(c.agents, "agent"),
+            plural(c.subagents, "sub-agent"),
+            plural(c.skills, "skill"),
+            plural(c.hooks, "hook"),
+            plural(c.mcps, "mcp"),
         ),
         Style::default().fg(state.caps.muted()),
     ));
@@ -606,6 +610,11 @@ fn humanize(key: &str) -> String {
         .join(" ")
 }
 
+/// Pluralize a count for the detail headline: `1 hook`, `2 hooks`, `0 mcps`.
+fn plural(n: usize, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,20 +656,15 @@ mod tests {
         out
     }
 
-    // Temporary visual smoke check (run with `--nocapture`); replaced by
-    // proper insta snapshots in tests/snapshots.rs before the PR.
-    #[test]
-    fn smoke_render_branch_and_browse() {
-        let caps = Capabilities {
+    fn mono() -> Capabilities {
+        Capabilities {
             color: crate::theme::ColorMode::Monochrome,
-        };
-        let branch = PickerState::new(caps, vec![]);
-        eprintln!(
-            "\n--- BRANCH 100x16 ---\n{}",
-            buf_to_string(&render_to_buffer(&branch, 100, 16))
-        );
+        }
+    }
 
-        let entry = Entry {
+    /// A deterministic two-manager / one-worker team for the browse snapshot.
+    fn fixture_entry() -> Entry {
+        Entry {
             key: "product-team".into(),
             name: "Product Team".into(),
             blurb: "product discovery while an engineering team builds".into(),
@@ -701,11 +705,55 @@ mod tests {
                 hooks: 1,
                 mcps: 0,
             },
-        };
-        let browse = PickerState::new(caps, vec![entry]).browsing();
-        eprintln!(
-            "\n--- BROWSE 100x20 ---\n{}",
-            buf_to_string(&render_to_buffer(&browse, 100, 20))
+        }
+    }
+
+    #[test]
+    fn branch_screen_snapshot() {
+        let state = PickerState::new(mono(), vec![]);
+        insta::assert_snapshot!(buf_to_string(&render_to_buffer(&state, 100, 16)));
+    }
+
+    #[test]
+    fn browse_screen_snapshot() {
+        let state = PickerState::new(mono(), vec![fixture_entry()]).browsing();
+        insta::assert_snapshot!(buf_to_string(&render_to_buffer(&state, 100, 20)));
+    }
+
+    #[test]
+    fn loading_screen_shows_spinner() {
+        // Browse before the faked fetch resolves: a spinner, no list yet.
+        let mut state = PickerState::new(mono(), vec![fixture_entry()]);
+        state.on_key(crossterm::event::KeyCode::Enter); // Branch → Browse (loading)
+        let out = buf_to_string(&render_to_buffer(&state, 100, 16));
+        assert!(out.contains("Fetching templates"), "spinner state:\n{out}");
+    }
+
+    #[test]
+    fn enter_on_browse_selects_current_entry() {
+        let mut state = PickerState::new(mono(), vec![fixture_entry()]).browsing();
+        assert_eq!(
+            state.on_key(crossterm::event::KeyCode::Enter),
+            Some(Outcome::Selected("product-team".into()))
+        );
+    }
+
+    #[test]
+    fn co_design_branch_returns_codesign() {
+        let mut state = PickerState::new(mono(), vec![]);
+        state.on_key(crossterm::event::KeyCode::Down); // → Co-design
+        assert_eq!(
+            state.on_key(crossterm::event::KeyCode::Enter),
+            Some(Outcome::CoDesign)
+        );
+    }
+
+    #[test]
+    fn esc_on_branch_cancels() {
+        let mut state = PickerState::new(mono(), vec![]);
+        assert_eq!(
+            state.on_key(crossterm::event::KeyCode::Esc),
+            Some(Outcome::Cancelled)
         );
     }
 }
