@@ -9,6 +9,7 @@
 pub mod attachments;
 pub mod compose;
 pub mod mailbox;
+pub mod preview;
 pub mod registry;
 pub mod render;
 pub mod runtimes;
