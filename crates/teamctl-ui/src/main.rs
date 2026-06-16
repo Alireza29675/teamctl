@@ -13,6 +13,13 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 fn main() -> Result<()> {
+    // `--init-picker` is the interactive `teamctl init` template picker,
+    // launched by `teamctl init`. It owns its own (stderr) terminal
+    // lifecycle and prints the chosen key to stdout, so dispatch it before
+    // the dashboard path.
+    if std::env::args().nth(1).as_deref() == Some("--init-picker") {
+        return run_init_picker();
+    }
     // Handle `--version` / `--help` before any terminal setup so the binary
     // is callable from non-TTY contexts (CI smoke tests, scripts) without
     // tripping `enable_raw_mode()`.
@@ -27,6 +34,28 @@ fn main() -> Result<()> {
     leave_terminal()?;
     terminal.show_cursor()?;
     result
+}
+
+/// `teamctl-ui --init-picker [examples_dir]` — the interactive `teamctl
+/// init` template picker. Renders to stderr and prints the chosen key to
+/// stdout (so the parent `teamctl init` can capture it): a template/example
+/// key, or `guided` for the co-design branch. Exits 130 on cancel.
+fn run_init_picker() -> Result<()> {
+    use teamctl_ui::init_picker::{run_standalone, Outcome};
+    let examples_dir = std::env::args()
+        .nth(2)
+        .unwrap_or_else(|| "examples".to_string());
+    match run_standalone(std::path::Path::new(&examples_dir))? {
+        Outcome::Selected(key) => {
+            println!("{key}");
+            Ok(())
+        }
+        Outcome::CoDesign => {
+            println!("guided");
+            Ok(())
+        }
+        Outcome::Cancelled => std::process::exit(130),
+    }
 }
 
 fn handle_info_flags() -> bool {

@@ -1,0 +1,24 @@
+---
+source: crates/teamctl-ui/src/init_picker.rs
+expression: "buf_to_string(&render_to_buffer(&state, 100, 24))"
+---
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                               ___                                                  
+                                              /\  \                                                 
+                                              \:\  \                                                
+                                               \:\  \                                               
+                                               /::\  \                                              
+                                              /:/\:\__\                                             
+                                             /:/  \/__/                                             
+                                            /:/  /                                                  
+                                            \/__/                                                   
+                                                                                                    
+                                          Create a new team                                         
+                                                                                                    
+                      ▸ Browse a template   pick from ready-made teams                              
+                        Co-design with AI   let Claude Code shape it with you                       
+                                                                                                    
+                               ↑/↓ select · Enter choose · Esc cancel

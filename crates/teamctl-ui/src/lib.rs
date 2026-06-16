@@ -8,6 +8,7 @@ pub mod approvals;
 pub mod compose;
 pub mod data;
 pub mod help;
+pub mod init_picker;
 pub mod keysender;
 pub mod layouts;
 pub mod mailbox;
