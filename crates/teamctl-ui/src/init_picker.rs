@@ -32,7 +32,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 
 use team_core::compose::{Global, Project};
@@ -155,6 +155,7 @@ impl PickerState {
                     return match code {
                         KeyCode::Esc | KeyCode::Left | KeyCode::Backspace => {
                             self.screen = Screen::Branch;
+                            self.loading = false;
                             None
                         }
                         _ => None,
@@ -374,9 +375,10 @@ fn render_detail(state: &PickerState, area: Rect, buf: &mut Buffer) {
     lines.push(Line::raw(""));
     lines.extend(shape_to_lines(&entry.rows, state.caps));
 
-    Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .render(inner, buf);
+    // No wrap: the tree lines are structured, so on a narrow terminal we
+    // truncate at the pane edge rather than wrap a descriptor onto a second
+    // line without its tree prefix (which reads as broken).
+    Paragraph::new(lines).render(inner, buf);
 }
 
 /// Turn the front-end-agnostic `ShapeRow`s into styled tree lines, mapping
@@ -481,30 +483,46 @@ pub fn run_standalone(examples_dir: &Path) -> Result<Outcome> {
 
     install_panic_hook();
     enter_terminal()?;
-    let backend = CrosstermBackend::new(io::stderr());
-    let mut terminal = Terminal::new(backend)?;
-    let result = run(&mut terminal, state);
-    leave_terminal()?;
-    let _ = terminal.show_cursor();
+    // Everything past raw-mode-on runs inside this closure so the
+    // unconditional `leave_terminal()` below restores the terminal on
+    // EVERY exit path — a `run` error, a `Terminal::new` failure, or a
+    // clean return. Panics are caught by the hook, which calls the same
+    // infallible teardown.
+    let result = (move || {
+        let backend = CrosstermBackend::new(io::stderr());
+        let mut terminal = Terminal::new(backend)?;
+        let outcome = run(&mut terminal, state);
+        let _ = terminal.show_cursor();
+        outcome
+    })();
+    leave_terminal();
     result
 }
 
 fn enter_terminal() -> Result<()> {
     enable_raw_mode()?;
-    execute!(io::stderr(), EnterAlternateScreen, EnableMouseCapture)?;
+    // If the alternate-screen step fails, undo raw mode before bailing so
+    // the caller never returns with the shell stranded in raw mode.
+    if let Err(e) = execute!(io::stderr(), EnterAlternateScreen, EnableMouseCapture) {
+        let _ = disable_raw_mode();
+        return Err(e.into());
+    }
     Ok(())
 }
 
-fn leave_terminal() -> Result<()> {
-    execute!(io::stderr(), DisableMouseCapture, LeaveAlternateScreen)?;
-    disable_raw_mode()?;
-    Ok(())
+/// Best-effort, unconditional teardown: every step runs regardless of an
+/// earlier failure, so `disable_raw_mode()` always fires (the step that
+/// actually un-wedges the operator's shell). Safe on any exit path,
+/// including the panic hook.
+fn leave_terminal() {
+    let _ = execute!(io::stderr(), DisableMouseCapture, LeaveAlternateScreen);
+    let _ = disable_raw_mode();
 }
 
 fn install_panic_hook() {
     let original = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
-        let _ = leave_terminal();
+        leave_terminal();
         original(info);
     }));
 }
