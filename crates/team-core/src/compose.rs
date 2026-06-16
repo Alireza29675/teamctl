@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// T-265 PR-a: compose schema version. Stored as a semver string;
@@ -38,6 +39,9 @@ pub struct SchemaVersion {
 }
 
 impl SchemaVersion {
+    // T-265: current compose schema version; bump on any schema-affecting type change.
+    pub const CURRENT: &str = "2.0.0";
+
     /// Construct directly from a semver-shaped string; for fixtures
     /// and tests + the in-memory legacy coercion.
     pub fn new(value: impl Into<String>) -> Self {
@@ -45,6 +49,19 @@ impl SchemaVersion {
             value: value.into(),
             from_legacy_int: false,
         }
+    }
+}
+
+// T-265: SchemaVersion has a custom Deserialize, so schemars can't
+// introspect its shape. Present it to JSON Schema consumers as the
+// thing a fresh compose file actually carries — a plain semver string.
+impl JsonSchema for SchemaVersion {
+    fn schema_name() -> String {
+        "SchemaVersion".to_string()
+    }
+
+    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        gen.subschema_for::<String>()
     }
 }
 
@@ -104,7 +121,7 @@ impl<'de> Deserialize<'de> for SchemaVersion {
 }
 
 /// Top-level `team-compose.yaml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Global {
     pub version: SchemaVersion,
 
@@ -139,7 +156,7 @@ pub struct Global {
     pub attachments: Attachments,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct Attachments {
     #[serde(default = "default_attachments_enabled")]
     pub enabled: bool,
@@ -182,7 +199,7 @@ impl Default for Attachments {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct AttachmentScanner {
     /// Operator-provided executable. Spawned per attempt with the
     /// resolved path as a single argument; non-zero exit → reject.
@@ -211,14 +228,18 @@ fn default_attachments_tempfile_ttl_seconds() -> u64 {
     6 * 60 * 60
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Interface {
     /// Adapter type: `telegram`, `discord`, `imessage`, `cli`, `webhook`, ...
     pub r#type: String,
     /// Free-form name; used in logs and to route approvals.
     pub name: String,
     /// Adapter-specific config (bot token, channel id, allowlist, …).
+    // T-265: serde_yaml::Value has no JsonSchema impl; render it as
+    // arbitrary JSON via serde_json::Value (which does), since the
+    // adapter config is intentionally free-form.
     #[serde(default)]
+    #[schemars(with = "serde_json::Value")]
     pub config: serde_yaml::Value,
 }
 
@@ -253,7 +274,7 @@ impl Interface {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct Budget {
     #[serde(default)]
     pub daily_usd_limit: Option<f64>,
@@ -266,7 +287,7 @@ pub struct Budget {
 }
 
 /// Rate-limit handling policy.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct RateLimits {
     /// Default hook-name chain to run on a hit. Empty means `[wait]`.
     #[serde(default)]
@@ -298,7 +319,7 @@ fn default_fallback_wait() -> u64 {
 /// Placeholders in `template` and `command` arguments:
 /// `{agent}`, `{runtime}`, `{hit_at}`, `{resets_at}`, `{resets_at_local}`,
 /// `{raw_match}`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RateLimitHook {
     pub name: String,
     pub action: String,
@@ -316,7 +337,7 @@ pub struct RateLimitHook {
     pub command: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Hitl {
     #[serde(default = "default_sensitive_actions")]
     pub globally_sensitive_actions: Vec<String>,
@@ -346,7 +367,7 @@ fn default_sensitive_actions() -> Vec<String> {
     ]
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AutoApprove {
     pub action: String,
     #[serde(default)]
@@ -359,12 +380,12 @@ pub struct AutoApprove {
     pub until: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectRef {
     pub file: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct Broker {
     #[serde(default = "default_broker_type")]
     pub r#type: String,
@@ -389,7 +410,7 @@ fn default_mailbox_path() -> PathBuf {
     PathBuf::from("state/mailbox.db")
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct SupervisorCfg {
     #[serde(default = "default_supervisor_type")]
     pub r#type: String,
@@ -428,7 +449,7 @@ fn default_tmux_prefix() -> String {
 }
 
 /// Per-project file, e.g. `projects/hello.yaml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Project {
     pub version: u32,
     pub project: ProjectMeta,
@@ -456,14 +477,14 @@ pub struct Project {
     pub interfaces: Option<ProjectInterfaces>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectMeta {
     pub id: String,
     pub name: String,
     pub cwd: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Channel {
     pub name: String,
     /// Either a list of agent ids or the literal string `"*"`.
@@ -471,7 +492,7 @@ pub struct Channel {
     pub members: ChannelMembers,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum ChannelMembers {
     All(String),
@@ -500,7 +521,7 @@ impl ChannelMembers {
 /// unchanged. List form lets a role compose from multiple files
 /// concatenated in declared order at boot — base + tweaks without
 /// duplicating shared role copy.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum RolePrompt {
     Single(PathBuf),
@@ -536,7 +557,7 @@ impl RolePrompt {
 /// `{ matcher, hooks: [{ type: "command", command }] }`. teamctl does not
 /// enumerate the runtime's event names — `event` is passed through
 /// verbatim so a new Claude Code event works without a teamctl release.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct HookSpec {
     /// Claude Code hook event the command fires on, e.g. `PreToolUse`.
     pub event: String,
@@ -561,7 +582,7 @@ pub struct HookSpec {
 /// `args` / `env` map onto the same shape the built-in `team` server
 /// emits. The HTTP (`url` / `headers`) transport variant is deferred
 /// (spike E2) until a concrete need lands.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct McpServer {
     /// Executable that launches the MCP server, resolved on `$PATH` by
     /// the runtime (e.g. `npx`, `docker`).
@@ -578,7 +599,7 @@ pub struct McpServer {
     pub env: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Agent {
     #[serde(default = "default_runtime")]
     pub runtime: String,
@@ -694,7 +715,7 @@ pub struct Agent {
 
 /// Container for per-manager interface adapters. Open shape so adding
 /// `discord:` / `imessage:` later is a strictly-additive YAML edit.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct AgentInterfaces {
     /// 1:1 Telegram bot for this manager. When set, `teamctl up`
     /// spawns a `team-bot` tmux session scoped to this manager so the
@@ -706,7 +727,7 @@ pub struct AgentInterfaces {
 
 /// Per-manager Telegram bot config. Both fields are env-var *names* —
 /// the actual token/chat-ids live in `.team/.env` (kept out of git).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TelegramConfig {
     /// Env var holding the BotFather token. Default chosen by
     /// `teamctl bot setup`: `TEAMCTL_TG_<MANAGER>_TOKEN`.
@@ -725,7 +746,7 @@ pub struct TelegramConfig {
 /// Speech-to-text settings for the per-manager Telegram bot. The provider
 /// arm is the only switch v1 needs (`groq`); adding OpenAI Whisper or
 /// whisper.cpp later is one match arm in `team-bot`'s transcribe function.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SttConfig {
     /// Provider arm. v1: `groq`.
     pub provider: String,
@@ -754,7 +775,7 @@ impl Agent {
 /// `AgentInterfaces`, same open-shape rationale — today's only adapter
 /// is `telegram`, future `discord:` / `imessage:` slot in as
 /// strictly-additive YAML edits.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct ProjectInterfaces {
     /// Project-scoped Telegram config: the manager bot that spawns
     /// per-agent children + default profile-picture rendering. Per-
@@ -771,7 +792,7 @@ pub struct ProjectInterfaces {
 /// managed-bots flow in `teamctl bot setup`. Absent / both fields
 /// absent → existing manual BotFather walkthrough runs verbatim for
 /// each per-agent `Agent.interfaces.telegram` block (zero-touch).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct ProjectTelegramConfig {
     /// Manager bot for the managed-bots flow. When set + its env var
     /// resolves, `teamctl bot setup` uses it to spawn per-agent child
@@ -792,7 +813,7 @@ pub struct ProjectTelegramConfig {
 /// #132 PR-1: manager-bot config. Mirrors the env-var-name pattern of
 /// `TelegramConfig.bot_token_env` — the actual BotFather token lives
 /// in `.team/.env`, this field names the env var that holds it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ManagerBotConfig {
     /// Env var holding the manager bot's BotFather token. The
     /// operator-facing setup steps (BotFather click path to enable the
@@ -806,7 +827,7 @@ pub struct ManagerBotConfig {
 /// names the rendering used when `image_model` is absent OR generation
 /// fails OR the API key is missing. Q3 (owner-ratified, tg 3445):
 /// initials-in-colored-circle, no embedded emoji-font binary growth.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct ProfilePictureConfig {
     /// AI image-generation config. When set + API key resolves, the
     /// wizard generates a square 512×512 image seeded from the agent's
@@ -828,7 +849,7 @@ pub struct ProfilePictureConfig {
 /// initials-in-colored-circle for v1. Enum-shaped so future variants
 /// (e.g. `Emoji`, `None`) land additively; current single variant is
 /// the default so omitting `fallback:` in YAML keeps the contract.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ProfilePictureFallback {
     /// Render a deterministic colored circle with the agent's
@@ -842,7 +863,7 @@ pub enum ProfilePictureFallback {
 /// pictures. Mirrors the `SttConfig` shape (provider / api_key_env /
 /// model). v1 provider is `openai`; adding a future provider is one
 /// match arm in the call site.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ImageModelConfig {
     /// Provider arm. v1: `openai`.
     pub provider: String,
@@ -868,7 +889,7 @@ impl Project {
 /// Reasoning-effort level forwarded to the runtime. Maps 1:1 to
 /// `claude --effort <value>` today; if the runtime taxonomy evolves we
 /// extend the enum and bump the schema version.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EffortLevel {
     Low,

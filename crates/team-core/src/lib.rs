@@ -12,6 +12,7 @@ pub mod mailbox;
 pub mod registry;
 pub mod render;
 pub mod runtimes;
+pub mod schemas;
 pub mod session;
 pub mod supervisor;
 pub mod validate;
