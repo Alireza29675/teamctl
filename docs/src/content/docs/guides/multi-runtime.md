@@ -27,6 +27,10 @@ workers:
 
 The `agent-wrapper.sh` dispatches on `$RUNTIME` and calls the matching binary with the right flags.
 
+## Delivery parity
+
+Agents on any runtime react to new mail on arrival — only the mechanism differs. Claude Code agents get each message pushed into their session as a `<channel source="team">` event; Codex and Gemini agents get a short `📬 N new team message(s)` note typed into their tmux pane by the team mailbox, which sends them to `inbox_peek` / `inbox_read` / `inbox_ack`. The mailbox is the source of truth in both cases, so mixing runtimes never changes what a message means — just how it knocks.
+
 ## When to pick which
 
 | Runtime | Strong at |

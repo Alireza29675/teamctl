@@ -839,3 +839,74 @@ fn inbox_read_rejects_ids_addressed_to_other_agents() {
     mgr.shutdown();
     other.shutdown();
 }
+
+/// Non-claude delivery: an agent registered with `runtime='codex'` gets
+/// its new mail announced by a tmux nudge into its pane. That pane does
+/// not exist in this harness, so every nudge dispatch fails — the
+/// watcher must log-and-drop and keep running (the failure mode is
+/// "missed nudge", never "dead watcher"). We can't observe the tmux
+/// side effect here; what we pin is that consecutive rows keep flowing
+/// (the stdout notification is still emitted for every runtime — see
+/// `spawn_channel_watcher` — which doubles as the liveness probe). The
+/// mode split itself is unit-tested in `main.rs::delivery_mode`.
+#[test]
+fn codex_runtime_agent_keeps_watcher_alive_across_failed_nudges() {
+    use rusqlite::Connection;
+
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("mailbox.db");
+    let bin = team_mcp_bin();
+
+    // Register dev as a codex agent before its process starts, mirroring
+    // `teamctl up`'s register-then-spawn ordering.
+    let conn = Connection::open(&mailbox).unwrap();
+    team_core::mailbox::ensure(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO projects (id, name) VALUES ('hello', 'hello')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO agents (id, project_id, role, runtime, is_manager)
+         VALUES ('hello:dev', 'hello', 'dev', 'codex', 0)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let mut dev = Peer::spawn(&bin, "hello:dev", &mailbox);
+    dev.write(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}));
+    let _ = dev.lines.recv_json(RPC_BUDGET);
+    dev.write(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    thread::sleep(Duration::from_millis(150));
+
+    let conn = Connection::open(&mailbox).unwrap();
+    conn.execute(
+        "INSERT INTO messages (project_id, sender, recipient, text, sent_at)
+         VALUES ('hello', 'hello:mgr', 'hello:dev', 'first for codex', strftime('%s','now'))",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    dev.lines
+        .wait_for_method("notifications/claude/channel", RPC_BUDGET)
+        .expect("codex-runtime agent must not break the watcher's first tick");
+
+    // Second row: the failed nudge from tick one must not have killed
+    // the watcher loop.
+    let conn = Connection::open(&mailbox).unwrap();
+    conn.execute(
+        "INSERT INTO messages (project_id, sender, recipient, text, sent_at)
+         VALUES ('hello', 'hello:mgr', 'hello:dev', 'second for codex', strftime('%s','now'))",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    dev.lines
+        .wait_for_method("notifications/claude/channel", RPC_BUDGET)
+        .expect("watcher must survive a failed nudge dispatch and keep delivering");
+
+    dev.shutdown();
+}

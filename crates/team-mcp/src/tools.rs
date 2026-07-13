@@ -999,11 +999,13 @@ fn compact_self_argv(session: &str) -> [&str; 5] {
 
 /// Compose the tmux session name for `agent_id` under `tmux_prefix`,
 /// matching the supervisor's canonical formula
-/// (`{tmux_prefix}{project}-{role}`).
-fn pane_session(tmux_prefix: &str, agent_id: &str) -> Result<String, String> {
-    let (project, role) = agent_id.split_once(':').ok_or_else(|| {
-        format!("compact_self: malformed agent id `{agent_id}` (expected `project:role`)")
-    })?;
+/// (`{tmux_prefix}{project}-{role}`). Shared by `compact_self` and the
+/// channel watcher's non-claude nudge path (`main.rs`), which both
+/// deliver keystrokes into the agent's own pane.
+pub(crate) fn pane_session(tmux_prefix: &str, agent_id: &str) -> Result<String, String> {
+    let (project, role) = agent_id
+        .split_once(':')
+        .ok_or_else(|| format!("malformed agent id `{agent_id}` (expected `project:role`)"))?;
     Ok(format!("{tmux_prefix}{project}-{role}"))
 }
 
