@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
 use team_core::render::{
-    boot_script_path, claude_settings_path, codex_home_dir, env_path, mcp_path, render_agent,
-    render_claude_settings, write_agent_skills, write_codex_config, write_role_prompt_concat,
-    write_subagents_json,
+    boot_script_path, claude_settings_path, codex_home_dir, env_path, mcp_path, opencode_home_dir,
+    render_agent, render_claude_settings, write_agent_skills, write_codex_config,
+    write_opencode_config, write_role_prompt_concat, write_subagents_json,
 };
 use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
@@ -307,6 +307,10 @@ pub(crate) enum FreshenAction {
     /// sessions dir aside (`.bak` recovery copy) so the wrapper's
     /// resume probe falls through to a fresh spawn.
     WipeCodexSessions,
+    /// `--fresh` on an opencode agent: move its per-agent session db
+    /// (plus -shm/-wal sidecars) into a `db.bak/` recovery copy so the
+    /// wrapper's resume probe falls through to a fresh spawn.
+    WipeOpencodeSessions,
 }
 
 /// Resolve `(runtime, fresh)` to a [`FreshenAction`]. Pure — no I/O.
@@ -317,6 +321,8 @@ pub(crate) fn freshen_action(runtime: &str, fresh: bool) -> FreshenAction {
         FreshenAction::Freshen
     } else if runtime == "codex" {
         FreshenAction::WipeCodexSessions
+    } else if runtime == "opencode" {
+        FreshenAction::WipeOpencodeSessions
     } else {
         FreshenAction::UnsupportedRuntime
     }
@@ -329,7 +335,10 @@ pub(crate) fn freshen_action(runtime: &str, fresh: bool) -> FreshenAction {
 /// move the per-agent CODEX_HOME `sessions/` subdir to `sessions.bak`
 /// (same recovery-copy parity) — the wrapper's resume probe then finds
 /// no rollout and boots fresh; config.toml and the auth.json symlink
-/// live at the codex-home root and survive.
+/// live at the codex-home root and survive. OpenCode: move the
+/// per-agent session db (+ -shm/-wal sidecars) into `db.bak/` (same
+/// parity) — the resume probe finds no db and boots fresh;
+/// opencode.json at the home root survives.
 /// Durable on-disk files are never touched.
 ///
 /// Gemini has no session resume, so we warn-and-skip rather than abort
@@ -377,6 +386,42 @@ pub(crate) fn freshen_for_spec(root: &Path, spec: &AgentSpec, runtime: &str, fre
                 eprintln!("warn · {id} (--fresh: could not move codex sessions aside: {e})");
             }
         }
+        FreshenAction::WipeOpencodeSessions => {
+            // Same move-aside parity as codex, adapted to opencode's
+            // session store: one sqlite db (plus optional -shm/-wal
+            // sidecars) instead of a directory tree. An absent db means
+            // "nothing to freshen" — silently keep any earlier backup.
+            // opencode.json at the home root is untouched.
+            let home = opencode_home_dir(root, &spec.project, &spec.agent);
+            // "Nothing to freshen" means db AND sidecars all absent —
+            // gating on the db alone would strand an orphan -wal/-shm
+            // left by a previous partial move.
+            if ["agent.db", "agent.db-shm", "agent.db-wal"]
+                .iter()
+                .all(|n| !home.join(n).exists())
+            {
+                return;
+            }
+            let bak = home.join("db.bak");
+            if let Err(e) = fs::remove_dir_all(&bak) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("warn · {id} (--fresh: could not clear old db backup: {e})");
+                }
+            }
+            if let Err(e) = fs::create_dir_all(&bak) {
+                eprintln!("warn · {id} (--fresh: could not create db backup dir: {e})");
+                return;
+            }
+            for name in ["agent.db", "agent.db-shm", "agent.db-wal"] {
+                let src = home.join(name);
+                if !src.exists() {
+                    continue; // sidecars only exist while WAL is active
+                }
+                if let Err(e) = fs::rename(&src, bak.join(name)) {
+                    eprintln!("warn · {id} (--fresh: could not move {name} aside: {e})");
+                }
+            }
+        }
     }
 }
 
@@ -422,6 +467,11 @@ pub fn render_project_public(compose: &Compose, project_id: &str) -> Result<()> 
         // that config.toml alongside the JSON.
         write_codex_config(compose, h, &bin)
             .with_context(|| format!("write codex config for {}:{}", h.project, h.agent))?;
+        // OpenCode reads MCP servers + instructions from the per-agent
+        // opencode.json its OPENCODE_CONFIG points at; render (or clear)
+        // it alongside the JSON, same lifecycle as the codex config.
+        write_opencode_config(compose, h, &bin)
+            .with_context(|| format!("write opencode config for {}:{}", h.project, h.agent))?;
         // Mirror render_all_public: the scoped path must also
         // re-materialize multi-file role_prompt concat or a scoped
         // reload after a source-file edit boots the agent against a
@@ -582,6 +632,11 @@ pub fn render_all_public(compose: &Compose) -> Result<()> {
         // that config.toml alongside the JSON.
         write_codex_config(compose, h, &bin)
             .with_context(|| format!("write codex config for {}:{}", h.project, h.agent))?;
+        // OpenCode reads MCP servers + instructions from the per-agent
+        // opencode.json its OPENCODE_CONFIG points at; render (or clear)
+        // it alongside the JSON, same lifecycle as the codex config.
+        write_opencode_config(compose, h, &bin)
+            .with_context(|| format!("write opencode config for {}:{}", h.project, h.agent))?;
         // Re-materialize multi-file role_prompt concat unconditionally
         // so any edit to a source file flows into the agent's prompt at
         // the next render — single-form is a no-op (back-compat).
@@ -912,14 +967,19 @@ mod tests {
     fn freshen_action_gates_on_fresh_and_runtime() {
         // Not fresh → nothing, regardless of runtime. Fresh → move
         // Claude's session aside, move codex's per-agent sessions dir
-        // aside; gemini stays a warn-and-skip (parity gap), never an
-        // abort.
+        // aside, move opencode's per-agent session db aside; gemini
+        // stays a warn-and-skip (parity gap), never an abort.
         assert_eq!(freshen_action("claude-code", false), FreshenAction::Skip);
         assert_eq!(freshen_action("codex", false), FreshenAction::Skip);
+        assert_eq!(freshen_action("opencode", false), FreshenAction::Skip);
         assert_eq!(freshen_action("claude-code", true), FreshenAction::Freshen);
         assert_eq!(
             freshen_action("codex", true),
             FreshenAction::WipeCodexSessions
+        );
+        assert_eq!(
+            freshen_action("opencode", true),
+            FreshenAction::WipeOpencodeSessions
         );
         assert_eq!(
             freshen_action("gemini", true),
@@ -1161,6 +1221,15 @@ mod tests {
             DEFAULT_WRAPPER.contains("Do you trust the contents of this directory"),
             "auto-confirm watcher must match codex 0.144's trust-dialog wording",
         );
+        // Co-occurrence guard: the codex wordings must only fire alongside
+        // dialog chrome, or an agent that merely PRINTS a wording in prose
+        // (this team discusses these dialogs constantly) triggers a stray
+        // Enter. "Yes, I trust this folder" doubles as claude's own trust
+        // option label, which makes the single-string form doubly unsafe.
+        assert!(
+            DEFAULT_WRAPPER.contains("Press enter to continue|2\\. No"),
+            "codex trust match must require dialog chrome co-occurrence",
+        );
         assert!(
             wrapper_codex_branch().contains("AUTO_CONFIRM=1"),
             "codex branch must opt into the auto-confirm watcher",
@@ -1188,36 +1257,162 @@ mod tests {
             "codex resume probe must glob the sessions/YYYY/MM/DD rollout layout",
         );
         assert!(
-            codex.contains("[ \"$CODEX_RESUME\" = 0 ] && set -- \"$@\" \"$BOOTSTRAP_PROMPT\""),
+            codex.contains("[ \"$RESUMED\" = 0 ] && set -- \"$@\" \"$BOOTSTRAP_PROMPT\""),
             "codex must pass the bootstrap positional on fresh spawns only",
         );
         assert!(
-            DEFAULT_WRAPPER.contains("nudge_resumed_codex"),
-            "wrapper must define the resumed-codex wake-up nudge",
+            DEFAULT_WRAPPER.contains("nudge_resumed_session"),
+            "wrapper must define the resumed-session wake-up nudge",
         );
         assert!(
             DEFAULT_WRAPPER.contains("Restarted mid-shift: call inbox_peek"),
             "nudge must point the resumed agent at inbox_peek catch-up",
         );
+        // The nudge must re-fire Enter after a beat: a resumed codex TUI
+        // loads history before the composer goes live, so the first Enter
+        // can be eaten mid-boot and the text strands unsubmitted (observed
+        // live on codex 0.144.3).
+        let nudge_start = DEFAULT_WRAPPER
+            .find("nudge_resumed_session() {")
+            .expect("nudge helper present");
+        let nudge = &DEFAULT_WRAPPER[nudge_start..nudge_start + 700];
+        assert!(
+            nudge.matches("send-keys").count() >= 2,
+            "nudge must send a trailing bare Enter to beat the resume-boot race",
+        );
     }
 
-    /// Codex resume crash-loop self-heal: a corrupt rollout makes
-    /// `codex resume --last` die instantly on every boot, and the
-    /// resume probe re-matches it forever. The wrapper counts
-    /// consecutive fast resume-path exits and moves the sessions dir
-    /// to `sessions.crash-bak` after the third, so the next boot is
-    /// fresh. Pin the counter, the threshold, and the move-aside path
-    /// so a silent edit can't reintroduce the infinite crash loop.
+    /// Resume crash-loop self-heal: a corrupt session store makes the
+    /// resume path (`codex resume --last`, `opencode -c`) die instantly
+    /// on every boot, and the resume probe re-matches it forever. The
+    /// wrapper counts consecutive fast resume-path exits (a single
+    /// counter shared by both runtimes — the probes set the shared
+    /// RESUMED flag) and moves the runtime's session store aside after
+    /// the third, so the next boot is fresh. Pin the counter, the
+    /// threshold, and both move-aside paths so a silent edit can't
+    /// reintroduce the infinite crash loop for either runtime.
     #[test]
-    fn wrapper_codex_resume_crash_loop_self_heal_present() {
+    fn wrapper_resume_crash_loop_self_heal_present() {
         for marker in [
-            "CODEX_FAST_FAILS=$((CODEX_FAST_FAILS + 1))",
-            "[ \"$CODEX_FAST_FAILS\" -ge 3 ]",
+            "RESUME_FAST_FAILS=$((RESUME_FAST_FAILS + 1))",
+            "[ \"$RESUME_FAST_FAILS\" -ge 3 ]",
             "$CODEX_HOME/sessions.crash-bak",
+            "$OC_HOME/db.crash-bak",
+            "mv \"$OPENCODE_DB\" \"$OPENCODE_DB-shm\" \"$OPENCODE_DB-wal\" \"$OC_HOME/db.crash-bak/\"",
         ] {
             assert!(
                 DEFAULT_WRAPPER.contains(marker),
                 "DEFAULT_WRAPPER missing marker: {marker}",
+            );
+        }
+    }
+
+    /// The opencode case body of the wrapper, sliced between the case
+    /// label and its `;;` terminator — same trap as
+    /// [`wrapper_codex_branch`]: negative assertions must not be fouled
+    /// by other branches' legitimate use of the same flags. (The
+    /// wrapper itself never writes the literal case-label string in
+    /// comments outside the branch, so `find` lands on the real label.)
+    fn wrapper_opencode_branch() -> &'static str {
+        let start = DEFAULT_WRAPPER
+            .find("opencode)")
+            .expect("DEFAULT_WRAPPER has an opencode case");
+        let body = &DEFAULT_WRAPPER[start..];
+        let end = body.find(";;").expect("opencode case terminated by ;;");
+        &body[..end]
+    }
+
+    /// OpenCode launch correctness: MCP + instructions ride the
+    /// per-agent OPENCODE_CONFIG json (no --mcp-config flag), the TUI
+    /// auto-upgrades the shared binary in place unless
+    /// OPENCODE_DISABLE_AUTOUPDATE=1 is exported (verified
+    /// 1.17.13→1.17.18 mid-run), missing auth silently falls back to
+    /// free anonymous models (so the wrapper must warn), and `effort:`
+    /// has no TUI mapping (`--variant` is run-subcommand only). Pin all
+    /// four so a silent wrapper edit can't regress any of them.
+    #[test]
+    fn wrapper_opencode_launch_shape_present() {
+        let opencode = wrapper_opencode_branch();
+        assert!(
+            opencode.contains("export OPENCODE_DISABLE_AUTOUPDATE=1"),
+            "opencode branch must disable the in-place binary autoupdate",
+        );
+        assert!(
+            opencode.contains("$HOME/.local/share/opencode/auth.json")
+                && opencode.contains("free anonymous models"),
+            "opencode branch must warn when auth.json is absent (silent free-tier fallback)",
+        );
+        assert!(
+            opencode.contains("--model \"$MODEL\""),
+            "opencode branch must thread model (provider/model form)",
+        );
+        assert!(
+            !opencode.contains("--mcp-config \"$MCP_CONFIG\""),
+            "opencode has no --mcp-config flag — MCP goes through OPENCODE_CONFIG json",
+        );
+        assert!(
+            !opencode.contains("--effort") && !opencode.contains("--variant \""),
+            "effort is unsupported on opencode v1 — no flag may be wired",
+        );
+        assert!(
+            !opencode.contains("AUTO_CONFIRM=1"),
+            "opencode boots straight to the composer — no dialogs to auto-confirm",
+        );
+    }
+
+    /// OpenCode permission mapping: attended keeps opencode's own
+    /// interactive ask-prompts; everything else — including
+    /// bypassPermissions, since opencode has no full-bypass equivalent
+    /// (--yolo closed not-planned upstream) — maps to `--auto`
+    /// (auto-approve anything not explicitly denied).
+    #[test]
+    fn wrapper_opencode_permission_mapping_present() {
+        let opencode = wrapper_opencode_branch();
+        assert!(
+            opencode.contains("set -- \"$@\" --auto"),
+            "opencode headless default must be --auto",
+        );
+        // Match the full flag usage, not the bare flag name — the
+        // branch's comments legitimately name codex's --yolo to explain
+        // why bypassPermissions downgrades to --auto here.
+        assert!(
+            !opencode.contains("set -- \"$@\" --yolo"),
+            "opencode has no full-bypass flag — bypassPermissions downgrades to --auto",
+        );
+        assert!(
+            opencode.contains("[ \"${PERMISSION_MODE:-}\" = \"attended\" ]"),
+            "opencode branch must keep the set -u-safe attended opt-out",
+        );
+    }
+
+    /// OpenCode session resume: the per-agent OPENCODE_DB isolates the
+    /// session store, so the wrapper probes for the db file and
+    /// continues the prior conversation with `-c` — scoped to the cwd
+    /// within that db, which is exact per agent. The resume path must
+    /// NOT pass `--prompt` (the one-shot nudge re-grounds the agent);
+    /// fresh spawns pass the bootstrap via `--prompt`, a flag, not a
+    /// positional. Pin the probe, the flag selection, and the set -u
+    /// defaults for the env-file-rendered vars.
+    #[test]
+    fn wrapper_opencode_resume_branch_present() {
+        let opencode = wrapper_opencode_branch();
+        assert!(
+            opencode.contains("[ -n \"$OPENCODE_DB\" ] && [ -f \"$OPENCODE_DB\" ]"),
+            "opencode resume probe must check the per-agent db file",
+        );
+        assert!(
+            opencode.contains("set -- \"$@\" -c"),
+            "opencode resume path must continue via -c",
+        );
+        assert!(
+            opencode
+                .contains("[ \"$RESUMED\" = 0 ] && set -- \"$@\" --prompt \"$BOOTSTRAP_PROMPT\""),
+            "opencode must pass the bootstrap via --prompt on fresh spawns only",
+        );
+        for marker in [": \"${OPENCODE_DB:=}\"", ": \"${OPENCODE_CONFIG:=}\""] {
+            assert!(
+                DEFAULT_WRAPPER.contains(marker),
+                "DEFAULT_WRAPPER missing set -u default: {marker}",
             );
         }
     }
@@ -1829,6 +2024,59 @@ managers:
         assert_eq!(
             std::fs::read_to_string(bak.join("2026/07/02/rollout-2.jsonl")).unwrap(),
             "v2",
+        );
+    }
+
+    /// OpenCode `--fresh` parity: the session db moves into a `db.bak/`
+    /// recovery copy together with its -shm/-wal sidecars (absent
+    /// sidecars skipped), opencode.json at the home root is untouched,
+    /// a missing db is a silent no-op (keeping any earlier backup),
+    /// and a later `--fresh` replaces a stale backup wholesale.
+    #[test]
+    fn freshen_opencode_moves_db_aside_keeping_home_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let spec = spec_for(root, "hello", "dev");
+        let home = team_core::render::opencode_home_dir(root, "hello", "dev");
+        let bak = home.join("db.bak");
+
+        // Stage the db + one sidecar plus the managed config the
+        // wrapper relies on (the -shm sidecar is deliberately absent —
+        // WAL sidecars only exist while sqlite holds the db open).
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("agent.db"), "v1").unwrap();
+        std::fs::write(home.join("agent.db-wal"), "wal1").unwrap();
+        std::fs::write(home.join("opencode.json"), "{}").unwrap();
+
+        freshen_for_spec(root, &spec, "opencode", true);
+        assert!(!home.join("agent.db").exists(), "db must be moved aside");
+        assert!(!home.join("agent.db-wal").exists(), "sidecar moves too");
+        assert_eq!(std::fs::read_to_string(bak.join("agent.db")).unwrap(), "v1");
+        assert_eq!(
+            std::fs::read_to_string(bak.join("agent.db-wal")).unwrap(),
+            "wal1",
+        );
+        assert!(
+            home.join("opencode.json").is_file(),
+            "managed config survives"
+        );
+
+        // Missing db: silent no-op that keeps the backup.
+        freshen_for_spec(root, &spec, "opencode", true);
+        assert_eq!(
+            std::fs::read_to_string(bak.join("agent.db")).unwrap(),
+            "v1",
+            "no-op freshen must not clobber the existing backup",
+        );
+
+        // A newer session replaces the pre-existing db.bak wholesale.
+        std::fs::write(home.join("agent.db"), "v2").unwrap();
+        freshen_for_spec(root, &spec, "opencode", true);
+        assert!(!home.join("agent.db").exists());
+        assert_eq!(std::fs::read_to_string(bak.join("agent.db")).unwrap(), "v2");
+        assert!(
+            !bak.join("agent.db-wal").exists(),
+            "stale backup must be replaced, not merged into",
         );
     }
 }

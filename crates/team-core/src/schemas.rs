@@ -41,15 +41,18 @@ pub fn current_schema_json() -> String {
 // T-265: bundled golden schemas keyed by schema version, following the
 // `runtimes.rs` include_str! pattern. One entry per shipped schema
 // version; `SchemaVersion::CURRENT` always has a row here.
-// NOTE: `include_str!` needs a literal path, so the `2.0.0` below can't
+// NOTE: `include_str!` needs a literal path, so the `2.0.1` below can't
 // be `SchemaVersion::CURRENT`. Keep this filename in sync with CURRENT on
 // every schema bump (add a new row; don't replace the old one — historical
 // schemas stay bundled for the migration skill). The drift gate fails
 // loudly if they desync, so a forgotten edit can't ship silently.
-const EMBEDDED: &[(&str, &str)] = &[(
-    SchemaVersion::CURRENT,
-    include_str!("../schemas/compose-2.0.0.json"),
-)];
+const EMBEDDED: &[(&str, &str)] = &[
+    (
+        SchemaVersion::CURRENT,
+        include_str!("../schemas/compose-2.0.1.json"),
+    ),
+    ("2.0.0", include_str!("../schemas/compose-2.0.0.json")),
+];
 
 /// The bundled JSON Schema for a given schema version, or `None` when no
 /// golden ships for it.

@@ -40,7 +40,9 @@ pub struct SchemaVersion {
 
 impl SchemaVersion {
     // T-265: current compose schema version; bump on any schema-affecting type change.
-    pub const CURRENT: &str = "2.0.0";
+    // 2.0.1: doc-only — McpServer.env description now names the codex
+    // `${VAR}` interpolation gap (see McpEnvInterpolationUnsupported).
+    pub const CURRENT: &str = "2.0.1";
 
     /// Construct directly from a semver-shaped string; for fixtures
     /// and tests + the in-memory legacy coercion.
@@ -593,8 +595,10 @@ pub struct McpServer {
     pub args: Vec<String>,
 
     /// Environment variables for the server process. Values pass through
-    /// verbatim — the runtime performs any `${VAR}` expansion, matching
-    /// how teamctl treats env elsewhere (render does no interpolation).
+    /// verbatim — render does no interpolation, matching how teamctl
+    /// treats env elsewhere. `${VAR}` placeholders are expanded by Claude
+    /// Code at launch; codex does NOT interpolate them (validate warns —
+    /// see `ValidationWarning::McpEnvInterpolationUnsupported`).
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }

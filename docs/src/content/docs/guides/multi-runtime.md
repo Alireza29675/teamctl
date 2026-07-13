@@ -2,7 +2,7 @@
 title: Multi-runtime teams
 ---
 
-Mix Claude Code, Codex, and Gemini freely inside one team. They all speak MCP over stdio against the same mailbox; the manager doesn't know or care which CLI a worker happens to be running.
+Mix Claude Code, Codex, OpenCode, and Gemini freely inside one team. They all speak MCP over stdio against the same mailbox; the manager doesn't know or care which CLI a worker happens to be running.
 
 ## Declaring runtimes
 
@@ -29,7 +29,29 @@ The `agent-wrapper.sh` dispatches on `$RUNTIME` and calls the matching binary wi
 
 ## Delivery parity
 
-Agents on any runtime react to new mail on arrival — only the mechanism differs. Claude Code agents get each message pushed into their session as a `<channel source="team">` event; Codex and Gemini agents get a short note typed into their tmux pane by the team mailbox — `📬 sender: "short preview…" (+N more)` — which sends them to `inbox_peek` / `inbox_read` / `inbox_ack`. Because the note is typed as keystrokes, the preview is sanitized: collapsed to a single line with all control characters stripped, so a message body can never submit input or drive the agent's TUI. The mailbox is the source of truth in both cases, so mixing runtimes never changes what a message means — just how it knocks.
+Agents on any runtime react to new mail on arrival — only the mechanism differs. Claude Code agents get each message pushed into their session as a `<channel source="team">` event; Codex, OpenCode, and Gemini agents get a short note typed into their tmux pane by the team mailbox — `📬 sender: "short preview…" (+N more)` — which sends them to `inbox_peek` / `inbox_read` / `inbox_ack`. Because the note is typed as keystrokes, the preview is sanitized: collapsed to a single line with all control characters stripped, so a message body can never submit input or drive the agent's TUI. The mailbox is the source of truth in both cases, so mixing runtimes never changes what a message means — just how it knocks.
+
+## What each runtime supports
+
+Not every agent-spec field applies to every runtime:
+
+| Capability | Claude Code | Codex | OpenCode | Gemini |
+|---|---|---|---|---|
+| MCP (`mcps:` + built-in `team` mailbox) | ✓ | ✓ | ✓ | ✓ |
+| `model` | ✓ | ✓ | ✓ | ✓ |
+| `effort` | ✓ | ✓ | — | — |
+| `permission_mode` (incl. `attended`, `bypassPermissions`) | ✓ | ✓ | ✓ \* | — |
+| Compaction on rate limit | ✓ | ✓ | — | — |
+| Telegram slash passthrough | ✓ | ✓ | ✓ | — |
+| `hooks` | ✓ | — | — | — |
+| `subagents` | ✓ | — | — | — |
+| `skills` | ✓ | — | — | — |
+
+\* `permission_mode: bypassPermissions` on opencode degrades to `--auto` — opencode has no full-bypass upstream, so deny rules stay enforced; `teamctl validate` prints a warning naming the downgrade.
+
+A capability declared on a runtime that doesn't support it is ignored at render time. `teamctl validate` prints a warning for each such mismatch (validation still succeeds).
+
+One subtlety on MCP env: `${VAR}` placeholders in `mcps:` env values are Claude-Code-only — Claude Code expands them at launch, but Codex and OpenCode pass the literal `${VAR}` string to the server. For codex and opencode agents, give servers literal values or put the secret in the operator environment the MCP server process inherits.
 
 ## When to pick which
 
@@ -39,6 +61,7 @@ Agents on any runtime react to new mail on arrival — only the mechanism differ
 | Claude Code · Sonnet | fast, cheap tool use; frontend refactors |
 | Codex · GPT-5 | deep reasoning on complex backend patches |
 | Gemini · 3.0 Pro | 1M-token context for research / large-corpus reads |
+| OpenCode · any provider | provider-agnostic mixing; always pin `model:` (`provider/model`) — its own default is the priciest authed model |
 
 ## Cost
 

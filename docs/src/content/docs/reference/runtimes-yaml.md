@@ -10,7 +10,7 @@ Each YAML file under `runtimes/` defines one runtime adapter. File stem = runtim
 |---|---|---|---|
 | `binary` | string | yes | CLI binary name (resolved on `$PATH`) or absolute path. |
 | `supports_mcp` | bool | no, default `false` | Must be `true` for participation in the mailbox. All shipped runtimes set this. |
-| `session_resume` | string | no | Parsed-but-inert metadata, kept for back-compat. The actual resume strategy is hard-coded per runtime in `agent-wrapper.sh`: claude-code spawns with a deterministic UUIDv5 derived from `teamctl:<project>:<agent>` (`--session-id` to create, `--resume` to attach existing); codex reopens its newest session via `resume --last` scoped to the per-agent `CODEX_HOME`; gemini has no equivalent. Setting this in a custom adapter is a no-op today. |
+| `session_resume` | string | no | Parsed-but-inert metadata, kept for back-compat. The actual resume strategy is hard-coded per runtime in `agent-wrapper.sh`: claude-code spawns with a deterministic UUIDv5 derived from `teamctl:<project>:<agent>` (`--session-id` to create, `--resume` to attach existing); codex reopens its newest session via `resume --last` scoped to the per-agent `CODEX_HOME`; opencode continues via `-c` scoped to the per-agent `OPENCODE_DB`; gemini has no equivalent. Setting this in a custom adapter is a no-op today. |
 | `default_model` | string | no | Used when an agent doesn't set its own `model:`. |
 | `env` | map<string,string> | no | Merged into the agent's environment on launch. |
 
@@ -19,6 +19,7 @@ Each YAML file under `runtimes/` defines one runtime adapter. File stem = runtim
 - `claude-code.yaml`: Anthropic's Claude Code CLI.
 - `codex.yaml`: OpenAI's Codex CLI.
 - `gemini.yaml`: Google's Gemini CLI.
+- `opencode.yaml`: OpenCode, the provider-agnostic terminal agent.
 
 ## Example
 
@@ -36,4 +37,4 @@ env:
 > adapters. claude-code agents now auto-resume via deterministic
 > UUIDv5 session ids; other runtimes either resume natively or don't.
 
-You'd also need an `aider)` case in `bin/agent-wrapper.sh` that knows how to pass `aider`'s own MCP-config and system-instruction flags. The shipped cases show the range: claude-code and gemini take the rendered JSON via `--mcp-config`, while codex has no such flag — its MCP servers are rendered as `[mcp_servers.*]` tables into a per-agent `CODEX_HOME/config.toml`.
+You'd also need an `aider)` case in `bin/agent-wrapper.sh` that knows how to pass `aider`'s own MCP-config and system-instruction flags. The shipped cases show the range: claude-code and gemini take the rendered JSON via `--mcp-config`, while codex and opencode have no such flag — codex's MCP servers are rendered as `[mcp_servers.*]` tables into a per-agent `CODEX_HOME/config.toml`, and opencode's ride the `mcp` block of a per-agent `OPENCODE_CONFIG` json.

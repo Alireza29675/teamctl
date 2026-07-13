@@ -1,7 +1,7 @@
 //! Runtime adapter descriptors.
 //!
 //! Canonical descriptors for the runtimes teamctl ships with (Claude Code,
-//! Codex, Gemini) are baked into the binary via [`embedded_defaults`]. Users
+//! Codex, OpenCode, Gemini) are baked into the binary via [`embedded_defaults`]. Users
 //! can override or extend them by dropping their own `<root>/runtimes/<id>.yaml`
 //! into the compose tree -- file-based descriptors win on key collision.
 
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 const EMBEDDED: &[(&str, &str)] = &[
     ("claude-code", include_str!("../runtimes/claude-code.yaml")),
     ("codex", include_str!("../runtimes/codex.yaml")),
+    ("opencode", include_str!("../runtimes/opencode.yaml")),
     ("gemini", include_str!("../runtimes/gemini.yaml")),
 ];
 
@@ -30,7 +31,9 @@ pub struct Runtime {
     /// strategy is hard-coded per-runtime in `agent-wrapper.sh`:
     /// claude-code uses deterministic UUIDv5 `--session-id` (T-118),
     /// codex reopens its newest rollout via `codex resume --last`
-    /// scoped to the per-agent CODEX_HOME, gemini has no equivalent.
+    /// scoped to the per-agent CODEX_HOME, opencode continues the last
+    /// session via `-c` scoped to the per-agent OPENCODE_DB, gemini has
+    /// no equivalent.
     /// Kept to avoid breaking any operator-authored `runtimes/*.yaml`
     /// override that still names the field.
     #[serde(default)]
@@ -78,8 +81,8 @@ pub fn embedded_defaults() -> Result<BTreeMap<String, Runtime>> {
 
 /// Resolve the runtime adapter map for a compose tree.
 ///
-/// Starts from the [`embedded_defaults`] (Claude Code / Codex / Gemini) and
-/// overlays any `<root>/runtimes/<name>.yaml` files. File-based descriptors
+/// Starts from the [`embedded_defaults`] (Claude Code / Codex / OpenCode /
+/// Gemini) and overlays any `<root>/runtimes/<name>.yaml` files. File-based descriptors
 /// override the embedded ones when keys collide and can introduce new
 /// runtimes the binary has never heard of.
 pub fn load_all(root: &Path) -> Result<BTreeMap<String, Runtime>> {
@@ -117,9 +120,18 @@ mod tests {
         let m = embedded_defaults().unwrap();
         assert!(m.contains_key("claude-code"));
         assert!(m.contains_key("codex"));
+        assert!(m.contains_key("opencode"));
         assert!(m.contains_key("gemini"));
         assert_eq!(m["claude-code"].binary, "claude");
         assert!(m["claude-code"].supports_mcp);
+        // OpenCode: MCP rides the per-agent OPENCODE_CONFIG json, and the
+        // wrapper resumes via `-c` scoped to the per-agent OPENCODE_DB.
+        // No default_model on purpose — opencode defaults to the priciest
+        // authed model, so operators must pin `model:` themselves.
+        assert_eq!(m["opencode"].binary, "opencode");
+        assert!(m["opencode"].supports_mcp);
+        assert_eq!(m["opencode"].session_resume.as_deref(), Some("continue"));
+        assert!(m["opencode"].default_model.is_none());
     }
 
     #[test]
@@ -129,6 +141,7 @@ mod tests {
         // No files on disk, but the embedded defaults must still be there.
         assert!(m.contains_key("claude-code"));
         assert!(m.contains_key("codex"));
+        assert!(m.contains_key("opencode"));
         assert!(m.contains_key("gemini"));
     }
 
