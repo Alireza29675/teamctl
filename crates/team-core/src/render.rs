@@ -920,6 +920,32 @@ fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> Stri
     serde_json::to_string_pretty(&v).expect("json")
 }
 
+/// Team-mcp tool names pre-approved in the rendered codex config. Codex
+/// prompts per MCP tool on first call — even under `-a never` — and
+/// persists an "Always allow" answer INTO `config.toml`, which teamctl
+/// rewrites on every `up`/`reload`. So the render must seed the approvals
+/// or an unattended codex pane strands on its very first `inbox_peek`
+/// (observed live on codex-cli 0.144.3). Keep in sync with team-mcp's
+/// `schema()` tool list; a missing entry means one interactive prompt on
+/// that tool's first use.
+const CODEX_PREAPPROVED_TEAM_TOOLS: &[&str] = &[
+    "broadcast",
+    "compact_self",
+    "dm",
+    "inbox_ack",
+    "inbox_peek",
+    "inbox_read",
+    "inbox_watch",
+    "list_team",
+    "org_chart",
+    "react_to_user",
+    "read_attachment",
+    "reply_to_user",
+    "request_approval",
+    "show_typing",
+    "whoami",
+];
+
 /// Per-agent Codex `config.toml` for `runtime: codex` agents. Returns
 /// `None` for every other runtime. Codex has no `--mcp-config` flag —
 /// MCP servers are read from `[mcp_servers.<name>]` tables in
@@ -929,6 +955,18 @@ fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> Stri
 /// when the gate drops them, so this stays quiet). TOML is hand-rendered
 /// with proper string escaping — team-core carries no toml crate and one
 /// table shape doesn't earn the dependency.
+///
+/// Two extra seeded tables, both in the exact shape codex 0.144.3 itself
+/// persists when a human answers its dialogs (verified live):
+/// `[projects."<cwd>"] trust_level = "trusted"` skips the boot-time
+/// trust dialog — whose wording has shifted across codex releases, so
+/// pre-seeding beats pane-text matching (the wrapper's auto-confirm
+/// patterns stay as a backstop) — and per-tool
+/// `[mcp_servers.team.tools.<name>] approval_mode = "approve"` entries
+/// cover the team bus. Declared `mcps:` tools are NOT pre-approved (their
+/// tool lists are unknown at render time): they prompt once per tool, and
+/// an attached operator's "Always allow" survives only until the next
+/// render — documented limitation, follow-up ticket.
 pub fn render_codex_config(
     compose: &Compose,
     h: AgentHandle<'_>,
@@ -948,6 +986,11 @@ pub fn render_codex_config(
         &team_server_args(compose, h),
         &Default::default(),
     );
+    for tool in CODEX_PREAPPROVED_TEAM_TOOLS {
+        s.push_str(&format!(
+            "\n[mcp_servers.team.tools.{tool}]\napproval_mode = \"approve\"\n"
+        ));
+    }
     if !h.spec.mcps.is_empty() && runtime_supports_mcp(compose, h) {
         for (name, server) in &h.spec.mcps {
             if name == "team" {
@@ -956,6 +999,22 @@ pub fn render_codex_config(
             push_mcp_server_table(&mut s, name, &server.command, &server.args, &server.env);
         }
     }
+    // Trust the project cwd so the boot dialog never renders. Codex keys
+    // the table on the canonical absolute path of the directory it starts
+    // in; fall back to the plain join when canonicalize fails (cwd not
+    // yet created — the dialog would then appear and the wrapper's
+    // auto-confirm backstop handles it).
+    let project = compose
+        .projects
+        .iter()
+        .find(|p| p.project.id == h.project)
+        .expect("agent belongs to a loaded project");
+    let cwd = compose.root.join(&project.project.cwd);
+    let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    s.push_str(&format!(
+        "\n[projects.{}]\ntrust_level = \"trusted\"\n",
+        toml_str(&cwd.display().to_string())
+    ));
     Some(s)
 }
 
@@ -1411,6 +1470,35 @@ mod tests {
         let c = fixture();
         let h = c.agents().next().unwrap();
         assert!(render_codex_config(&c, h, "/usr/local/bin/team-mcp").is_none());
+    }
+
+    #[test]
+    fn codex_config_preapproves_team_tools_and_trusts_cwd() {
+        // Codex prompts per MCP tool even under `-a never`, and persists
+        // human answers INTO config.toml — which this render rewrites on
+        // every up/reload. Without these seeded tables an unattended
+        // codex pane strands on its first inbox_peek (observed live on
+        // codex-cli 0.144.3). Shapes verbatim-match what codex itself
+        // writes.
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "codex".into();
+        let h = c.agents().next().unwrap();
+        let toml = render_codex_config(&c, h, "/usr/local/bin/team-mcp").unwrap();
+        for tool in super::CODEX_PREAPPROVED_TEAM_TOOLS {
+            assert!(
+                toml.contains(&format!("[mcp_servers.team.tools.{tool}]")),
+                "missing pre-approval table for {tool}: {toml}"
+            );
+        }
+        assert!(
+            toml.contains("approval_mode = \"approve\""),
+            "toml was: {toml}"
+        );
+        assert!(toml.contains("[projects."), "toml was: {toml}");
+        assert!(
+            toml.contains("trust_level = \"trusted\""),
+            "toml was: {toml}"
+        );
     }
 
     #[test]

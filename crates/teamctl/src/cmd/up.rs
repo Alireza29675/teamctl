@@ -1126,6 +1126,10 @@ mod tests {
             "auto-confirm watcher must match codex's newer trust-folder wording",
         );
         assert!(
+            DEFAULT_WRAPPER.contains("Do you trust the contents of this directory"),
+            "auto-confirm watcher must match codex 0.144's trust-dialog wording",
+        );
+        assert!(
             wrapper_codex_branch().contains("AUTO_CONFIRM=1"),
             "codex branch must opt into the auto-confirm watcher",
         );

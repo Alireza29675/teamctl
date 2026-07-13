@@ -116,9 +116,12 @@ log() {
 #     stall; the general fix for the whole prompt class is #421.
 #   - codex's first-run trust dialog    — once per directory. The exact
 #     wording has drifted across codex releases ("Yes, I trust this
-#     folder", "Yes, allow Codex to work in this folder"), so the
-#     pattern matches both observed variants. The trust option is the
-#     default, so a single Enter accepts it — running `teamctl up` is
+#     folder", "Yes, allow Codex to work in this folder", and 0.144's
+#     "Do you trust the contents of this directory?"), so the pattern
+#     matches all observed variants. This is a BACKSTOP: the rendered
+#     config.toml pre-seeds `[projects."<cwd>"] trust_level = "trusted"`
+#     so the dialog normally never renders at all. The trust option is
+#     the default, so a single Enter accepts it — running `teamctl up` is
 #     itself the "I trust this directory" signal (same rationale as the
 #     claude-code trust pre-acceptance in `teamctl up`). Codex's "Hooks
 #     need review" prompt is deliberately NOT auto-accepted: that's a
@@ -149,7 +152,7 @@ auto_confirm_known_dialogs() {
     while :; do
         frame=$(tmux capture-pane -t "$pane" -p 2>/dev/null)
         if printf '%s\n' "$frame" \
-            | grep -qE 'Loading development channels|Bypass Permissions mode|Stop and wait for limit to reset|Yes, I trust this folder|Yes, allow Codex to work in this folder' \
+            | grep -qE 'Loading development channels|Bypass Permissions mode|Stop and wait for limit to reset|Yes, I trust this folder|Yes, allow Codex to work in this folder|Do you trust the contents of this directory' \
             || { printf '%s\n' "$frame" | grep -q 'Quick safety check:' \
                  && printf '%s\n' "$frame" | grep -q 'trust this folder'; } \
             || { printf '%s\n' "$frame" | grep -q 'MCP servers may execute code' \
