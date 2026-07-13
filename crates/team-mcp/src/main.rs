@@ -445,7 +445,8 @@ fn inbox_nudge_argv(session: &str, sender: &str, body: &str, new_rows: usize) ->
 
 /// Sanitize untrusted text for a line *typed* into a tmux pane: collapse
 /// every whitespace run (`\n`, `\r`, `\t`, …) to a single space and drop
-/// all other ASCII control chars (< 0x20 and DEL), ESC included.
+/// all other control chars — ASCII C0 + DEL (ESC included) and the
+/// Unicode C1 range (U+0080–U+009F, the 8-bit escape equivalents).
 ///
 /// Deliberately separate from `notification_stub`'s preview: that one
 /// travels as JSON and lands inside a `<channel>` event where newlines
@@ -456,8 +457,8 @@ fn inbox_nudge_argv(session: &str, sender: &str, body: &str, new_rows: usize) ->
 fn pane_safe_line(text: &str) -> String {
     text.chars()
         // Keep whitespace controls (\n, \r, \t) for the collapse below;
-        // drop every other ASCII control outright.
-        .filter(|c| !c.is_ascii_control() || c.is_whitespace())
+        // drop every other control (C0 + DEL + C1) outright.
+        .filter(|c| !c.is_control() || c.is_whitespace())
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -629,6 +630,10 @@ mod tests {
         // ESC (and every other non-whitespace ASCII control, DEL
         // included) is dropped so bodies can't drive the runtime's TUI.
         assert_eq!(pane_safe_line("red\x1b[31malert\x07\x7f"), "red[31malert");
+        // Unicode C1 controls (8-bit escape equivalents like CSI U+009B)
+        // are dropped too — `is_control` covers them where
+        // `is_ascii_control` would let them through.
+        assert_eq!(pane_safe_line("a\u{009b}31mb\u{0085}c"), "a31mb c");
         // Tabs, CRs, and runs of mixed whitespace collapse to single spaces.
         assert_eq!(pane_safe_line("a\t\tb\r\n  c"), "a b c");
     }
