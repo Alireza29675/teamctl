@@ -12,6 +12,7 @@
 //! because the skill itself is interactive — accepting it would just
 //! defer the surprise to the picker inside Claude Code (#206 Q3 stance).
 
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
@@ -31,8 +32,10 @@ pub trait AdjustHost {
     /// Read a Y/n answer (Yes is the empty-input default). Caller wraps
     /// in the prompt text.
     fn prompt_yes_no(&self, question: &str) -> Result<bool>;
-    /// Hand control to `claude` with the forwarded argv.
-    fn exec_claude(&self, args: &[&str]) -> Result<()>;
+    /// Hand control to `claude` with the forwarded argv. `cwd` is set by
+    /// callers that just scaffolded a team outside the current directory;
+    /// the standalone `teamctl adjust` path inherits the current directory.
+    fn exec_claude(&self, args: &[&str], cwd: Option<&Path>) -> Result<()>;
 }
 
 pub fn run(yes: bool) -> Result<()> {
@@ -65,7 +68,20 @@ pub fn run_with(host: &dyn AdjustHost) -> Result<()> {
         // pattern this ticket inherits.
         return Ok(());
     }
-    host.exec_claude(&[SKILL_ARG])
+    launch_with(host, None)
+}
+
+/// Launch the adjust skill for a team that has already been confirmed and
+/// scaffolded by another interactive flow. The caller's confirmation replaces
+/// this command's normal Y/n prompt, and `root` becomes Claude Code's working
+/// directory so the skill's `.team/` pre-flight sees the new team.
+pub(super) fn run_confirmed_at(root: &Path) -> Result<()> {
+    let host = RealHost;
+    launch_with(&host, Some(root))
+}
+
+fn launch_with(host: &dyn AdjustHost, cwd: Option<&Path>) -> Result<()> {
+    host.exec_claude(&[SKILL_ARG], cwd)
 }
 
 /// Parse a Y/n answer with **Yes** as the empty-input default: a bare
@@ -91,14 +107,16 @@ impl AdjustHost for RealHost {
         Ok(answer_is_yes(&line))
     }
 
-    fn exec_claude(&self, args: &[&str]) -> Result<()> {
-        let status = Command::new("claude")
-            .args(args)
-            .status()
-            .with_context(|| {
-                "failed to launch `claude` — is Claude Code installed and on PATH? See \
+    fn exec_claude(&self, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+        let mut command = Command::new("claude");
+        command.args(args);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
+        let status = command.status().with_context(|| {
+            "failed to launch `claude` — is Claude Code installed and on PATH? See \
                  https://code.claude.com/docs"
-            })?;
+        })?;
         if !status.success() {
             bail!(
                 "`claude {}` exited with status {status} — see the Claude Code output above \
@@ -114,12 +132,19 @@ impl AdjustHost for RealHost {
 pub mod test_support {
     use super::*;
     use std::cell::RefCell;
+    use std::path::PathBuf;
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct ExecCall {
+        pub args: Vec<String>,
+        pub cwd: Option<PathBuf>,
+    }
 
     /// Recorder + scripted-answer `AdjustHost`. Pins every branch of
     /// `run_with` without touching stdin or `$PATH`.
     pub struct MockHost {
         pub answer: bool,
-        pub exec_calls: RefCell<Vec<Vec<String>>>,
+        pub exec_calls: RefCell<Vec<ExecCall>>,
         pub prompt_calls: RefCell<u32>,
     }
 
@@ -142,10 +167,11 @@ pub mod test_support {
             *self.prompt_calls.borrow_mut() += 1;
             Ok(self.answer)
         }
-        fn exec_claude(&self, args: &[&str]) -> Result<()> {
-            self.exec_calls
-                .borrow_mut()
-                .push(args.iter().map(|s| s.to_string()).collect());
+        fn exec_claude(&self, args: &[&str], cwd: Option<&Path>) -> Result<()> {
+            self.exec_calls.borrow_mut().push(ExecCall {
+                args: args.iter().map(|s| s.to_string()).collect(),
+                cwd: cwd.map(Path::to_path_buf),
+            });
             Ok(())
         }
     }
@@ -166,10 +192,11 @@ mod tests {
         let calls = host.exec_calls.borrow();
         assert_eq!(calls.len(), 1, "single exec on accept");
         assert_eq!(
-            calls[0],
+            calls[0].args,
             vec![SKILL_ARG.to_string()],
             "argv must be exactly the skill invocation"
         );
+        assert_eq!(calls[0].cwd, None, "standalone adjust inherits cwd");
         assert_eq!(*host.prompt_calls.borrow(), 1);
     }
 
@@ -189,12 +216,29 @@ mod tests {
         // `y_execs_claude_with_skill_arg_only`.
         let host = MockHost::new().with_answer(answer_is_yes(""));
         run_with(&host).unwrap();
-        assert_eq!(
-            *host.exec_calls.borrow(),
-            vec![vec![SKILL_ARG.to_string()]],
-            "empty Enter must open Claude Code"
-        );
+        let calls = host.exec_calls.borrow();
+        assert_eq!(calls.len(), 1, "empty Enter must open Claude Code");
+        assert_eq!(calls[0].args, vec![SKILL_ARG.to_string()]);
+        assert_eq!(calls[0].cwd, None, "standalone adjust inherits cwd");
         assert_eq!(*host.prompt_calls.borrow(), 1);
+    }
+
+    #[test]
+    fn confirmed_launch_skips_prompt_and_sets_scaffold_root() {
+        let host = MockHost::new();
+        let root = Path::new("/tmp/new-team");
+
+        launch_with(&host, Some(root)).unwrap();
+
+        assert_eq!(
+            *host.prompt_calls.borrow(),
+            0,
+            "confirmation already happened"
+        );
+        let calls = host.exec_calls.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].args, vec![SKILL_ARG.to_string()]);
+        assert_eq!(calls[0].cwd.as_deref(), Some(root));
     }
 
     #[test]

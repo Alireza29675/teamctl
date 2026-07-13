@@ -1,27 +1,28 @@
 //! Interactive `teamctl init` picker — a two-pane ratatui screen launched
 //! by `teamctl init` (via `teamctl-ui --init-picker`). Branch-first:
 //! **Browse a template** vs **Co-design with AI**; choosing Browse opens a
-//! list ↔ live-detail view of the on-disk example teams, with a team-shape
+//! list ↔ live-detail view of a precomputed catalog, with a team-shape
 //! preview (the reporting tree + per-agent capability counts) drawn from
-//! `team_core::preview`.
+//! `team_core::preview`. `teamctl` owns template parsing and hands this
+//! binary ready-to-render catalog entries over the versioned JSON contract.
 //!
 //! Self-contained on purpose: it shares teamctl-ui's theme + terminal
 //! lifecycle but NOT the dashboard `app::run` loop, which is wired to tmux
 //! panes / mailbox.db / a file-watcher. This is a small standalone app.
 //!
 //! The binary entry (`--init-picker` in `main.rs`) renders to **stderr** and
-//! prints the chosen key to **stdout**, so `teamctl init` can capture the
-//! selection while the UI still shows on the operator's terminal (the fzf
-//! pattern). `run_standalone` owns that stderr terminal lifecycle.
+//! prints one `PickerResponse` JSON line to **stdout**, so `teamctl init`
+//! can capture the selection while the UI still shows on the operator's
+//! terminal (the fzf pattern). `run_standalone` owns that stderr terminal
+//! lifecycle.
 
 use std::io;
 use std::panic;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -32,18 +33,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Padding, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Widget};
 use ratatui::{Frame, Terminal};
 
-use team_core::compose::{Global, Project};
-use team_core::preview::{team_shape, ShapeKind, ShapeRow};
+use team_core::preview::{PickerCatalogEntry, PickerResponse, ShapeKind, ShapeRow};
 
 use crate::theme::{detect_capabilities, Capabilities};
-
-/// Artificial fetch delay so the operator sees the lazy/loading UX the real
-/// remote store (fast-follow #495) will have — without any network call.
-const FAKE_FETCH: Duration = Duration::from_millis(800);
-const SPINNER: [&str; 4] = ["⠋", "⠙", "⠹", "⠸"];
 
 /// The "t" lifted from teamctl-ui's splash wordmark (figlet isometric4) —
 /// shown atop the start screen so it matches the glyph `teamctl ui` opens
@@ -63,38 +58,16 @@ const WORDMARK_T: &str = r"   ___
 /// exit code that `teamctl init` consumes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// An example/template key the operator chose (Browse → Enter).
-    Selected(String),
-    /// The "Co-design with AI" branch — `teamctl init` runs the guided flow.
-    CoDesign,
-    /// Esc / `q` without a choice.
+    /// A machine-readable selection for the parent `teamctl init` process.
+    Selected(PickerResponse),
+    /// Esc / `q` / Ctrl-C without a choice.
     Cancelled,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Branch,
     Browse,
-}
-
-/// Aggregate per-team capability counts, for the detail headline.
-#[derive(Default, Clone, Copy)]
-pub struct Counts {
-    pub agents: usize,
-    pub subagents: usize,
-    pub skills: usize,
-    pub hooks: usize,
-    pub mcps: usize,
-}
-
-/// One browsable catalog entry — an example team, already parsed into its
-/// reporting shape so the detail pane is a pure render.
-pub struct Entry {
-    pub key: String,
-    pub name: String,
-    pub blurb: String,
-    pub rows: Vec<ShapeRow>,
-    pub counts: Counts,
 }
 
 /// The picker's full state. Deterministic and terminal-free, so
@@ -103,42 +76,62 @@ pub struct PickerState {
     caps: Capabilities,
     screen: Screen,
     branch_idx: usize, // 0 = Browse, 1 = Co-design
-    entries: Vec<Entry>,
+    entries: Vec<PickerCatalogEntry>,
     list_idx: usize,
-    loading: bool, // faked-fetch spinner gate (Browse first paint)
-    spinner: usize,
+    /// Selected row in the create-mode modal (`0` = as-is, `1` = customize).
+    create_idx: Option<usize>,
 }
 
 impl PickerState {
     /// Build a picker over the given catalog entries, starting on the
     /// branch screen.
-    pub fn new(caps: Capabilities, entries: Vec<Entry>) -> Self {
+    pub fn new(caps: Capabilities, entries: Vec<PickerCatalogEntry>) -> Self {
         Self {
             caps,
             screen: Screen::Branch,
             branch_idx: 0,
             entries,
             list_idx: 0,
-            loading: false,
-            spinner: 0,
+            create_idx: None,
         }
-    }
-
-    /// Load the catalog from a directory of example teams (each an
-    /// `<name>/.team/team-compose.yaml` tree) and build a fresh picker.
-    pub fn load(caps: Capabilities, examples_dir: &Path) -> Self {
-        Self::new(caps, load_entries(examples_dir))
     }
 
     /// Jump straight to the Browse screen (used by snapshot tests).
     pub fn browsing(mut self) -> Self {
         self.screen = Screen::Browse;
-        self.loading = false;
         self
     }
 
     /// Handle one key; returns `Some(outcome)` when the picker should exit.
     fn on_key(&mut self, code: KeyCode) -> Option<Outcome> {
+        if let Some(idx) = self.create_idx.as_mut() {
+            return match code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    *idx = idx.saturating_sub(1);
+                    None
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    *idx = (*idx + 1).min(1);
+                    None
+                }
+                KeyCode::Enter => {
+                    let key = self.entries.get(self.list_idx)?.key.clone();
+                    let response = if *idx == 0 {
+                        PickerResponse::Create { key }
+                    } else {
+                        PickerResponse::Customize { key }
+                    };
+                    Some(Outcome::Selected(response))
+                }
+                KeyCode::Esc | KeyCode::Left | KeyCode::Backspace => {
+                    self.create_idx = None;
+                    None
+                }
+                KeyCode::Char('q') => Some(Outcome::Cancelled),
+                _ => None,
+            };
+        }
+
         match self.screen {
             Screen::Branch => match code {
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -152,53 +145,46 @@ impl PickerState {
                 KeyCode::Enter => {
                     if self.branch_idx == 0 {
                         self.screen = Screen::Browse;
-                        self.loading = true;
-                        self.spinner = 0;
                         None
                     } else {
-                        Some(Outcome::CoDesign)
+                        Some(Outcome::Selected(PickerResponse::CoDesign))
                     }
                 }
                 KeyCode::Esc | KeyCode::Char('q') => Some(Outcome::Cancelled),
                 _ => None,
             },
-            Screen::Browse => {
-                if self.loading {
-                    // Only let the operator back out while the (faked) fetch
-                    // is in flight; nav/select waits for the list to land.
-                    return match code {
-                        KeyCode::Esc | KeyCode::Left | KeyCode::Backspace => {
-                            self.screen = Screen::Branch;
-                            self.loading = false;
-                            None
-                        }
-                        _ => None,
-                    };
+            Screen::Browse => match code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.list_idx = self.list_idx.saturating_sub(1);
+                    None
                 }
-                match code {
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        self.list_idx = self.list_idx.saturating_sub(1);
-                        None
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.list_idx + 1 < self.entries.len() {
+                        self.list_idx += 1;
                     }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if self.list_idx + 1 < self.entries.len() {
-                            self.list_idx += 1;
-                        }
-                        None
-                    }
-                    KeyCode::Enter => self
-                        .entries
-                        .get(self.list_idx)
-                        .map(|e| Outcome::Selected(e.key.clone())),
-                    KeyCode::Esc | KeyCode::Left | KeyCode::Backspace => {
-                        self.screen = Screen::Branch;
-                        None
-                    }
-                    KeyCode::Char('q') => Some(Outcome::Cancelled),
-                    _ => None,
+                    None
                 }
-            }
+                KeyCode::Enter => {
+                    if self.entries.get(self.list_idx).is_some() {
+                        self.create_idx = Some(0);
+                    }
+                    None
+                }
+                KeyCode::Esc | KeyCode::Left | KeyCode::Backspace => {
+                    self.screen = Screen::Branch;
+                    None
+                }
+                KeyCode::Char('q') => Some(Outcome::Cancelled),
+                _ => None,
+            },
         }
+    }
+
+    fn on_event(&mut self, key: KeyEvent) -> Option<Outcome> {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return Some(Outcome::Cancelled);
+        }
+        self.on_key(key.code)
     }
 }
 
@@ -208,6 +194,9 @@ fn render(state: &PickerState, area: Rect, buf: &mut Buffer) {
     match state.screen {
         Screen::Branch => render_branch(state, area, buf),
         Screen::Browse => render_browse(state, area, buf),
+    }
+    if state.create_idx.is_some() {
+        render_create_modal(state, area, buf);
     }
 }
 
@@ -337,13 +326,6 @@ fn render_list(state: &PickerState, area: Rect, buf: &mut Buffer) {
     let inner = block.inner(area);
     block.render(area, buf);
 
-    if state.loading {
-        Paragraph::new(format!("{} Fetching templates…", spinner_glyph(state)))
-            .style(Style::default().fg(state.caps.muted()))
-            .alignment(Alignment::Center)
-            .render(inner, buf);
-        return;
-    }
     if state.entries.is_empty() {
         Paragraph::new("(no templates found)")
             .style(Style::default().fg(state.caps.muted()))
@@ -383,19 +365,12 @@ fn render_detail(state: &PickerState, area: Rect, buf: &mut Buffer) {
     let inner = block.inner(area);
     block.render(area, buf);
 
-    if state.loading {
-        Paragraph::new(format!("{} loading…", spinner_glyph(state)))
-            .style(Style::default().fg(state.caps.muted()))
-            .alignment(Alignment::Center)
-            .render(inner, buf);
-        return;
-    }
     let Some(entry) = entry else { return };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    if !entry.blurb.is_empty() {
+    if !entry.description.is_empty() {
         lines.push(Line::styled(
-            entry.blurb.clone(),
+            entry.description.clone(),
             Style::default().fg(state.caps.muted()),
         ));
         lines.push(Line::raw(""));
@@ -419,6 +394,83 @@ fn render_detail(state: &PickerState, area: Rect, buf: &mut Buffer) {
     // truncate at the pane edge rather than wrap a descriptor onto a second
     // line without its tree prefix (which reads as broken).
     Paragraph::new(lines).render(inner, buf);
+}
+
+fn render_create_modal(state: &PickerState, area: Rect, buf: &mut Buffer) {
+    let selected = state.create_idx.unwrap_or_default();
+    let popup = centered_rect(68, 10, area);
+    Clear.render(popup, buf);
+
+    let block = Block::default()
+        .title(" Create template ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(state.caps.accent()))
+        .padding(Padding::horizontal(1));
+    let inner = block.inner(popup);
+    block.render(popup, buf);
+
+    let entry_name = state
+        .entries
+        .get(state.list_idx)
+        .map(|entry| entry.name.as_str())
+        .unwrap_or("this template");
+    let option = |idx: usize, label: &str, detail: &str| {
+        let is_selected = selected == idx;
+        let style = if is_selected {
+            Style::default()
+                .fg(state.caps.accent())
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        Line::from(vec![
+            Span::styled(
+                format!("{} {label}", if is_selected { "▸" } else { " " }),
+                style,
+            ),
+            Span::styled(
+                format!("  {detail}"),
+                Style::default().fg(state.caps.muted()),
+            ),
+        ])
+    };
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    Paragraph::new(format!("How should teamctl create {entry_name}?"))
+        .style(Style::default().add_modifier(Modifier::BOLD))
+        .render(rows[0], buf);
+    Paragraph::new(option(0, "Create as-is", "scaffold the ready-made team")).render(rows[2], buf);
+    Paragraph::new(option(
+        1,
+        "Create and customize",
+        "scaffold, then open teamctl adjust",
+    ))
+    .render(rows[3], buf);
+    Paragraph::new("↑/↓ select · Enter confirm · Esc back")
+        .style(Style::default().fg(state.caps.muted()))
+        .alignment(Alignment::Center)
+        .render(rows[6], buf);
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
 }
 
 /// Turn the front-end-agnostic `ShapeRow`s into styled tree lines, mapping
@@ -473,53 +525,29 @@ fn shape_to_lines(rows: &[ShapeRow], caps: Capabilities) -> Vec<Line<'static>> {
     out
 }
 
-fn spinner_glyph(state: &PickerState) -> &'static str {
-    SPINNER[state.spinner % SPINNER.len()]
-}
-
 /// Drive the picker against `terminal` until the operator chooses or
-/// cancels. Polls on a short timeout so the faked-fetch spinner animates
-/// and the loading deadline resolves.
+/// cancels.
 fn run<B: Backend>(terminal: &mut Terminal<B>, mut state: PickerState) -> Result<Outcome> {
-    let mut fetch_deadline: Option<Instant> = None;
     loop {
-        if state.loading && fetch_deadline.is_none() {
-            fetch_deadline = Some(Instant::now() + FAKE_FETCH);
-        }
-        if let Some(dl) = fetch_deadline {
-            if Instant::now() >= dl {
-                state.loading = false;
-                fetch_deadline = None;
-            }
-        }
-
         terminal.draw(|f| draw(f, &state))?;
 
-        if event::poll(Duration::from_millis(120))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                if let Some(outcome) = state.on_key(key.code) {
-                    return Ok(outcome);
-                }
-                // Leaving Browse cancels any in-flight fetch timer.
-                if !state.loading {
-                    fetch_deadline = None;
-                }
+        if let Event::Key(key) = event::read()? {
+            if key.kind != KeyEventKind::Press {
+                continue;
             }
-        } else if state.loading {
-            state.spinner = state.spinner.wrapping_add(1);
+            if let Some(outcome) = state.on_event(key) {
+                return Ok(outcome);
+            }
         }
     }
 }
 
 /// Binary entry: own the **stderr** terminal lifecycle (so stdout stays
-/// clean for the selection token), run the picker, and restore the terminal
-/// on every exit path including panics.
-pub fn run_standalone(examples_dir: &Path) -> Result<Outcome> {
+/// clean for the JSON response), run the picker, and restore the terminal on
+/// every exit path including panics.
+pub fn run_standalone(entries: Vec<PickerCatalogEntry>) -> Result<Outcome> {
     let caps = detect_capabilities();
-    let state = PickerState::load(caps, examples_dir);
+    let state = PickerState::new(caps, entries);
 
     install_panic_hook();
     enter_terminal()?;
@@ -567,107 +595,6 @@ fn install_panic_hook() {
     }));
 }
 
-// ── catalog loading ────────────────────────────────────────────────
-
-/// Scan `examples_dir` for `<name>/.team/team-compose.yaml` teams, parse
-/// each into its reporting shape, and return the catalog (dir-name sorted).
-/// Unparseable or agent-less examples are skipped — the picker never fails
-/// on a bad example.
-fn load_entries(examples_dir: &Path) -> Vec<Entry> {
-    let Ok(read) = std::fs::read_dir(examples_dir) else {
-        return Vec::new();
-    };
-    let mut dirs: Vec<PathBuf> = read
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    dirs.sort();
-    dirs.iter().filter_map(|d| load_entry(d)).collect()
-}
-
-fn load_entry(dir: &Path) -> Option<Entry> {
-    let team_dir = dir.join(".team");
-    let compose_str = std::fs::read_to_string(team_dir.join("team-compose.yaml")).ok()?;
-    let global: Global = serde_yaml::from_str(&compose_str).ok()?;
-
-    let mut projects: Vec<Project> = Vec::new();
-    for p in &global.projects {
-        if let Ok(s) = std::fs::read_to_string(team_dir.join(&p.file)) {
-            if let Ok(project) = serde_yaml::from_str::<Project>(&s) {
-                projects.push(project);
-            }
-        }
-    }
-    if projects.is_empty() {
-        return None;
-    }
-
-    let refs: Vec<&Project> = projects.iter().collect();
-    let rows = team_shape(&refs);
-    let counts = counts_of(&projects);
-    let key = dir.file_name()?.to_string_lossy().into_owned();
-    let name = humanize(&key);
-    let blurb = first_comment_blurb(&compose_str).unwrap_or_default();
-
-    Some(Entry {
-        key,
-        name,
-        blurb,
-        rows,
-        counts,
-    })
-}
-
-fn counts_of(projects: &[Project]) -> Counts {
-    let mut c = Counts::default();
-    for p in projects {
-        for agent in p.managers.values().chain(p.workers.values()) {
-            c.agents += 1;
-            c.subagents += agent.subagents.len();
-            c.skills += agent.skills.len();
-            c.hooks += agent.hooks.len();
-            c.mcps += agent.mcps.len();
-        }
-    }
-    c
-}
-
-/// First comment line of a compose file, as a one-line blurb. Prefers the
-/// text after an em-dash (`# product-team — does X` → `does X`).
-fn first_comment_blurb(compose: &str) -> Option<String> {
-    for line in compose.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix('#') {
-            let rest = rest.trim();
-            if rest.is_empty() {
-                continue;
-            }
-            let blurb = rest.split('—').nth(1).map(str::trim).unwrap_or(rest);
-            return Some(blurb.to_string());
-        }
-        if !trimmed.is_empty() {
-            break;
-        }
-    }
-    None
-}
-
-/// `product-team` → `Product Team`.
-fn humanize(key: &str) -> String {
-    key.split(['-', '_'])
-        .filter(|w| !w.is_empty())
-        .map(|w| {
-            let mut chars = w.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// Pluralize a count for the detail headline: `1 hook`, `2 hooks`, `0 mcps`.
 fn plural(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
@@ -676,31 +603,6 @@ fn plural(n: usize, noun: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn humanize_splits_and_titlecases() {
-        assert_eq!(humanize("product-team"), "Product Team");
-        assert_eq!(humanize("oss_maintainer"), "Oss Maintainer");
-        assert_eq!(humanize("blank"), "Blank");
-    }
-
-    #[test]
-    fn blurb_prefers_text_after_em_dash() {
-        let compose = "# product-team — discovery while a team builds.\nversion: \"2.0.0\"\n";
-        assert_eq!(
-            first_comment_blurb(compose).as_deref(),
-            Some("discovery while a team builds.")
-        );
-    }
-
-    #[test]
-    fn blurb_falls_back_to_whole_comment() {
-        assert_eq!(
-            first_comment_blurb("# a tidy little team\n").as_deref(),
-            Some("a tidy little team")
-        );
-        assert_eq!(first_comment_blurb("version: 2\n"), None);
-    }
 
     fn buf_to_string(buf: &Buffer) -> String {
         let a = buf.area();
@@ -721,11 +623,11 @@ mod tests {
     }
 
     /// A deterministic two-manager / one-worker team for the browse snapshot.
-    fn fixture_entry() -> Entry {
-        Entry {
+    fn fixture_entry() -> PickerCatalogEntry {
+        PickerCatalogEntry {
             key: "product-team".into(),
             name: "Product Team".into(),
-            blurb: "product discovery while an engineering team builds".into(),
+            description: "product discovery while an engineering team builds".into(),
             rows: vec![
                 ShapeRow {
                     depth: 0,
@@ -756,8 +658,8 @@ mod tests {
                     is_last: true,
                 },
             ],
-            counts: Counts {
-                agents: 4,
+            counts: team_core::preview::PreviewCounts {
+                agents: 3,
                 subagents: 10,
                 skills: 0,
                 hooks: 1,
@@ -779,21 +681,85 @@ mod tests {
     }
 
     #[test]
-    fn loading_screen_shows_spinner() {
-        // Browse before the faked fetch resolves: a spinner, no list yet.
+    fn browse_is_immediate_over_precomputed_catalog() {
         let mut state = PickerState::new(mono(), vec![fixture_entry()]);
-        state.on_key(crossterm::event::KeyCode::Enter); // Branch → Browse (loading)
+        assert_eq!(state.on_key(KeyCode::Enter), None); // Branch → Browse
         let out = buf_to_string(&render_to_buffer(&state, 100, 16));
-        assert!(out.contains("Fetching templates"), "spinner state:\n{out}");
+        assert!(
+            out.contains("Product Team"),
+            "catalog should render immediately:\n{out}"
+        );
+        assert!(
+            !out.contains("Fetching templates"),
+            "no fake loading state:\n{out}"
+        );
     }
 
     #[test]
-    fn enter_on_browse_selects_current_entry() {
+    fn enter_on_browse_opens_create_modal_with_as_is_default() {
         let mut state = PickerState::new(mono(), vec![fixture_entry()]).browsing();
+        assert_eq!(state.on_key(KeyCode::Enter), None);
+        assert_eq!(state.create_idx, Some(0));
+    }
+
+    #[test]
+    fn enter_on_create_modal_returns_create_as_is_for_current_entry() {
+        let mut state = PickerState::new(mono(), vec![fixture_entry()]).browsing();
+        state.on_key(KeyCode::Enter);
         assert_eq!(
-            state.on_key(crossterm::event::KeyCode::Enter),
-            Some(Outcome::Selected("product-team".into()))
+            state.on_key(KeyCode::Enter),
+            Some(Outcome::Selected(PickerResponse::Create {
+                key: "product-team".into()
+            }))
         );
+    }
+
+    #[test]
+    fn down_then_enter_on_create_modal_returns_customize_for_current_entry() {
+        let mut state = PickerState::new(mono(), vec![fixture_entry()]).browsing();
+        state.on_key(KeyCode::Enter);
+        state.on_key(KeyCode::Down);
+        assert_eq!(
+            state.on_key(KeyCode::Enter),
+            Some(Outcome::Selected(PickerResponse::Customize {
+                key: "product-team".into()
+            }))
+        );
+    }
+
+    #[test]
+    fn escape_closes_create_modal_without_leaving_browse() {
+        let mut state = PickerState::new(mono(), vec![fixture_entry()]).browsing();
+        state.on_key(KeyCode::Enter);
+        assert_eq!(state.on_key(KeyCode::Esc), None);
+        assert_eq!(state.create_idx, None);
+        assert_eq!(state.screen, Screen::Browse);
+    }
+
+    #[test]
+    fn modal_navigation_does_not_move_template_cursor() {
+        let mut second = fixture_entry();
+        second.key = "second".into();
+        second.name = "Second".into();
+        let mut state = PickerState::new(mono(), vec![fixture_entry(), second]).browsing();
+        state.on_key(KeyCode::Enter);
+        state.on_key(KeyCode::Down);
+        assert_eq!(state.list_idx, 0);
+        assert_eq!(state.create_idx, Some(1));
+    }
+
+    #[test]
+    fn enter_on_empty_catalog_does_not_open_modal() {
+        let mut state = PickerState::new(mono(), vec![]).browsing();
+        assert_eq!(state.on_key(KeyCode::Enter), None);
+        assert_eq!(state.create_idx, None);
+    }
+
+    #[test]
+    fn create_action_modal_snapshot() {
+        let mut state = PickerState::new(mono(), vec![fixture_entry()]).browsing();
+        state.on_key(KeyCode::Enter);
+        insta::assert_snapshot!(buf_to_string(&render_to_buffer(&state, 100, 20)));
     }
 
     #[test]
@@ -801,9 +767,10 @@ mod tests {
         let mut state = PickerState::new(mono(), vec![]);
         state.on_key(crossterm::event::KeyCode::Down); // → Co-design
         assert_eq!(
-            state.on_key(crossterm::event::KeyCode::Enter),
-            Some(Outcome::CoDesign)
+            state.on_key(KeyCode::Enter),
+            Some(Outcome::Selected(PickerResponse::CoDesign))
         );
+        assert_eq!(state.create_idx, None, "co-design bypasses create modal");
     }
 
     #[test]
@@ -813,5 +780,13 @@ mod tests {
             state.on_key(crossterm::event::KeyCode::Esc),
             Some(Outcome::Cancelled)
         );
+    }
+
+    #[test]
+    fn ctrl_c_cancels_from_any_screen() {
+        let mut state = PickerState::new(mono(), vec![fixture_entry()]).browsing();
+        state.on_key(KeyCode::Enter); // modal open
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(state.on_event(key), Some(Outcome::Cancelled));
     }
 }
