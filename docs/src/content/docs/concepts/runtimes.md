@@ -7,8 +7,8 @@ A **runtime** is the CLI binary behind an agent. teamctl ships adapters for the 
 | Runtime | Binary | MCP | Session resume | Inbox delivery | Notes |
 |---|---|---|---|---|---|
 | Claude Code | `claude` | yes | always-on (deterministic UUID; `--session-id` to create, `--resume` to attach) | channel push (`<channel>` events) | The default. Strongest for planning + tool use. |
-| Codex CLI | `codex` | yes (via per-agent `CODEX_HOME` config.toml) | `resume --last` scoped to per-agent `CODEX_HOME` | supervisor tmux nudge (📬 note in the pane) | OpenAI's CLI. Good for deep reasoning on patches. |
-| Gemini CLI | `gemini` | yes (0.3+) | n/a (loop-restart) | supervisor tmux nudge (📬 note in the pane) | 1M-token context makes it great for research. |
+| Codex CLI | `codex` | yes (via per-agent `CODEX_HOME` config.toml) | `resume --last` scoped to per-agent `CODEX_HOME` | team-mailbox tmux nudge (📬 note in the pane) | OpenAI's CLI. Good for deep reasoning on patches. |
+| Gemini CLI | `gemini` | yes (0.3+) | n/a (loop-restart) | team-mailbox tmux nudge (📬 note in the pane) | 1M-token context makes it great for research. |
 
 **Inbox delivery** is how an agent learns new mail arrived. Claude Code gets it pushed into the session as `<channel source="team">` events (Claude Code Channels). Codex and Gemini treat MCP as strictly request/response and drop unsolicited notifications, so `team-mcp` types a short `📬 N new team message(s)` nudge into the agent's tmux pane instead; the agent then drains its mailbox via `inbox_peek` / `inbox_read` / `inbox_ack`. Either way, agents react on arrival — nobody polls.
 
