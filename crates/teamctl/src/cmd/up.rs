@@ -6,8 +6,8 @@ use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
 use team_core::render::{
     boot_script_path, claude_settings_path, codex_home_dir, env_path, mcp_path, render_agent,
-    render_claude_settings, write_agent_skills, write_codex_config, write_role_prompt_concat,
-    write_subagents_json,
+    render_claude_settings, write_agent_skills, write_codex_config, write_opencode_config,
+    write_role_prompt_concat, write_subagents_json,
 };
 use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
@@ -422,6 +422,11 @@ pub fn render_project_public(compose: &Compose, project_id: &str) -> Result<()> 
         // that config.toml alongside the JSON.
         write_codex_config(compose, h, &bin)
             .with_context(|| format!("write codex config for {}:{}", h.project, h.agent))?;
+        // OpenCode reads MCP servers + instructions from the per-agent
+        // opencode.json its OPENCODE_CONFIG points at; render (or clear)
+        // it alongside the JSON, same lifecycle as the codex config.
+        write_opencode_config(compose, h, &bin)
+            .with_context(|| format!("write opencode config for {}:{}", h.project, h.agent))?;
         // Mirror render_all_public: the scoped path must also
         // re-materialize multi-file role_prompt concat or a scoped
         // reload after a source-file edit boots the agent against a
@@ -582,6 +587,11 @@ pub fn render_all_public(compose: &Compose) -> Result<()> {
         // that config.toml alongside the JSON.
         write_codex_config(compose, h, &bin)
             .with_context(|| format!("write codex config for {}:{}", h.project, h.agent))?;
+        // OpenCode reads MCP servers + instructions from the per-agent
+        // opencode.json its OPENCODE_CONFIG points at; render (or clear)
+        // it alongside the JSON, same lifecycle as the codex config.
+        write_opencode_config(compose, h, &bin)
+            .with_context(|| format!("write opencode config for {}:{}", h.project, h.agent))?;
         // Re-materialize multi-file role_prompt concat unconditionally
         // so any edit to a source file flows into the agent's prompt at
         // the next render — single-form is a no-op (back-compat).

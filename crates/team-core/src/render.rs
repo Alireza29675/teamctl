@@ -10,6 +10,12 @@
 //!   carrying the same MCP servers as the JSON above in the
 //!   `[mcp_servers.<name>]` table form codex reads (codex has no
 //!   `--mcp-config` flag). Codex agents only.
+//! - `opencode-home/<project>-<agent>/opencode.json` — per-agent OpenCode
+//!   config carrying the same MCP servers in the `mcp` object form
+//!   opencode reads via `OPENCODE_CONFIG` (opencode has no `--mcp-config`
+//!   flag either), plus `instructions` / autoupdate + share opt-outs.
+//!   The agent's session db lives beside it (`OPENCODE_DB`). OpenCode
+//!   agents only.
 //! - `role_prompts/<project>-<agent>.md` (multi-file role_prompt only) —
 //!   the ordered concatenation of every source file declared in the
 //!   role's `role_prompt: [...]` list. Re-materialized on every render
@@ -125,6 +131,20 @@ pub fn boot_script_path(root: &Path) -> PathBuf {
 /// so agents share the existing login.
 pub fn codex_home_dir(root: &Path, project: &str, agent: &str) -> PathBuf {
     root.join("state/codex-home")
+        .join(format!("{project}-{agent}"))
+}
+
+/// Absolute path to the per-agent OpenCode home directory. OpenCode has
+/// no single state-root env var like `CODEX_HOME`; per-agent isolation
+/// is two env vars pointing into this rendered dir instead:
+/// `OPENCODE_DB` relocates the session sqlite db (created beside its
+/// -shm/-wal sidecars) and `OPENCODE_CONFIG` loads the per-process
+/// config json carrying the MCP servers + instructions. render writes
+/// `<this>/opencode.json`; the wrapper's env file points both vars here.
+/// Credentials are NOT relocated — auth stays at the operator's real
+/// `~/.local/share/opencode/auth.json`, shared by every agent.
+pub fn opencode_home_dir(root: &Path, project: &str, agent: &str) -> PathBuf {
+    root.join("state/opencode-home")
         .join(format!("{project}-{agent}"))
 }
 
@@ -774,6 +794,24 @@ fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
         let home = codex_home_dir(&compose.root, h.project, h.agent);
         s.push_str(&format!("CODEX_HOME={}\n", home.display()));
     }
+    // OpenCode has no `--mcp-config` flag either — servers live in the
+    // `mcp` object of the json `OPENCODE_CONFIG` points at (written by
+    // [`write_opencode_config`]), and `OPENCODE_DB` relocates the
+    // session sqlite db so each agent resumes its own conversation via
+    // `-c`. Both are opencode-only; other runtimes must not see them.
+    // NOTE: OPENCODE_DB is present in the binary but undocumented
+    // upstream — provenance lives in `runtimes/opencode.yaml`.
+    if h.spec.runtime == "opencode" {
+        let home = opencode_home_dir(&compose.root, h.project, h.agent);
+        s.push_str(&format!(
+            "OPENCODE_DB={}\n",
+            home.join("agent.db").display()
+        ));
+        s.push_str(&format!(
+            "OPENCODE_CONFIG={}\n",
+            home.join("opencode.json").display()
+        ));
+    }
     s
 }
 
@@ -833,8 +871,9 @@ pub fn write_role_prompt_concat(compose: &Compose, h: AgentHandle<'_>) -> io::Re
 }
 
 /// Args for the built-in `team` MCP stdio server. Single source of truth
-/// shared by [`render_mcp`] (JSON) and [`render_codex_config`] (TOML in
-/// the per-agent `CODEX_HOME`) so the two transports can never drift.
+/// shared by [`render_mcp`] (JSON), [`render_codex_config`] (TOML in
+/// the per-agent `CODEX_HOME`), and [`render_opencode_config`] (json in
+/// the per-agent opencode home) so the transports can never drift.
 fn team_server_args(compose: &Compose, h: AgentHandle<'_>) -> Vec<String> {
     let mailbox = compose.root.join(&compose.global.broker.path);
     vec![
@@ -1038,6 +1077,117 @@ pub fn write_codex_config(
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(&dest, toml)
+        }
+        None => match std::fs::remove_file(&dest) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        },
+    }
+}
+
+/// Per-agent OpenCode `opencode.json` for `runtime: opencode` agents.
+/// Returns `None` for every other runtime. OpenCode has no
+/// `--mcp-config` flag — servers are read from the `mcp` object of the
+/// config file `OPENCODE_CONFIG` points at — so this is the
+/// opencode-shaped mirror of [`render_mcp`]'s JSON: the unconditional
+/// `team` bus plus declared `mcps:` under the same `supports_mcp` gate
+/// (render_mcp already warns when the gate drops them, so this stays
+/// quiet). The file also carries:
+/// - `instructions`: the absolute role-prompt path (opencode has no
+///   system-prompt flag; absolute-path entries verified to load),
+/// - `autoupdate: false`: the TUI otherwise upgrades the shared binary
+///   in place mid-fleet (the wrapper also exports
+///   `OPENCODE_DISABLE_AUTOUPDATE=1` — defense in depth, upstream has
+///   open bugs about this key being ignored on some paths),
+/// - `share: "disabled"`: agents must never leak conversations to
+///   opencode's public share links.
+///
+/// HAZARD (verified on 1.17.13): opencode drops schema violations
+/// SILENTLY — renaming `command` made the server vanish with no error —
+/// so the tests pin the exact `type`/`command`/`environment`/`enabled`
+/// key names.
+pub fn render_opencode_config(
+    compose: &Compose,
+    h: AgentHandle<'_>,
+    team_mcp_bin: &str,
+) -> Option<String> {
+    if h.spec.runtime != "opencode" {
+        return None;
+    }
+    let mut mcp = serde_json::Map::new();
+    mcp.insert(
+        "team".into(),
+        opencode_mcp_server(
+            team_mcp_bin,
+            &team_server_args(compose, h),
+            &Default::default(),
+        ),
+    );
+    if !h.spec.mcps.is_empty() && runtime_supports_mcp(compose, h) {
+        for (name, server) in &h.spec.mcps {
+            if name == "team" {
+                continue; // non-clobberable bus; validate rejects this too
+            }
+            mcp.insert(
+                name.clone(),
+                opencode_mcp_server(&server.command, &server.args, &server.env),
+            );
+        }
+    }
+    let mut v = serde_json::json!({
+        "mcp": mcp,
+        "autoupdate": false,
+        "share": "disabled",
+    });
+    if let Some(prompt) = system_prompt_path(compose, h) {
+        v["instructions"] = serde_json::json!([prompt.display().to_string()]);
+    }
+    Some(serde_json::to_string_pretty(&v).expect("json"))
+}
+
+/// One entry of opencode's `mcp` config object. Key names are load-
+/// bearing: opencode silently drops entries that violate its schema,
+/// so `type`/`command`/`environment`/`enabled` must be spelled exactly.
+/// `command` is a single argv array (binary first), unlike the
+/// command/args split of [`render_mcp`]'s JSON; `environment` is
+/// emitted only when non-empty, values verbatim (no `${VAR}`
+/// expansion in render).
+fn opencode_mcp_server(
+    command: &str,
+    args: &[String],
+    env: &std::collections::BTreeMap<String, String>,
+) -> serde_json::Value {
+    let mut argv = vec![command.to_string()];
+    argv.extend(args.iter().cloned());
+    let mut server = serde_json::json!({
+        "type": "local",
+        "command": argv,
+        "enabled": true,
+    });
+    if !env.is_empty() {
+        server["environment"] = serde_json::to_value(env).expect("json");
+    }
+    server
+}
+
+/// Write (or clear) the per-agent OpenCode `opencode.json`. Mirrors
+/// [`write_codex_config`]: the scoped + full render paths both call it
+/// so a `mcps:` edit flows into the agent at the next render. For
+/// non-opencode agents only the managed `opencode.json` is removed —
+/// never the home dir itself, which holds the agent's session db.
+pub fn write_opencode_config(
+    compose: &Compose,
+    h: AgentHandle<'_>,
+    team_mcp_bin: &str,
+) -> io::Result<()> {
+    let dest = opencode_home_dir(&compose.root, h.project, h.agent).join("opencode.json");
+    match render_opencode_config(compose, h, team_mcp_bin) {
+        Some(json) => {
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&dest, json)
         }
         None => match std::fs::remove_file(&dest) {
             Ok(()) => Ok(()),
@@ -1580,6 +1730,184 @@ mod tests {
         let h = c.agents().next().unwrap();
         write_codex_config(&c, h, "/usr/local/bin/team-mcp").unwrap();
         assert!(!dest.exists(), "stale codex config.toml should be removed");
+    }
+
+    #[test]
+    fn env_emits_opencode_vars_for_opencode_runtime() {
+        // The wrapper's opencode arm reads OPENCODE_DB (per-agent
+        // session sqlite db — the resume-probe target) and
+        // OPENCODE_CONFIG (per-agent json carrying the MCP servers +
+        // instructions) from the env file.
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "opencode".into();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(
+            env.contains("OPENCODE_DB=/teamctl/state/opencode-home/hello-mgr/agent.db\n"),
+            "env was: {env}"
+        );
+        assert!(
+            env.contains("OPENCODE_CONFIG=/teamctl/state/opencode-home/hello-mgr/opencode.json\n"),
+            "env was: {env}"
+        );
+    }
+
+    #[test]
+    fn env_omits_opencode_vars_for_non_opencode_runtimes() {
+        // Only the opencode arm consumes these; leaking them into other
+        // runtimes' envs would relocate their state if a same-named
+        // knob ever appears. Pin the gate for every other runtime.
+        for runtime in ["claude-code", "codex", "gemini"] {
+            let mut c = fixture();
+            c.projects[0].managers.get_mut("mgr").unwrap().runtime = runtime.into();
+            let h = c.agents().next().unwrap();
+            let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+            assert!(
+                !env.contains("OPENCODE_DB=") && !env.contains("OPENCODE_CONFIG="),
+                "{runtime} must not get opencode vars: {env}"
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_config_present_with_team_server_for_opencode_runtime() {
+        // Pin the EXACT mcp entry key names (`type`/`command`/
+        // `environment`/`enabled`): opencode silently drops entries
+        // that violate its schema (verified — renaming `command` made
+        // the server vanish with no error), so a drifted key here would
+        // sever the mailbox with zero diagnostics.
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "opencode".into();
+        let h = c.agents().next().unwrap();
+        let json = render_opencode_config(&c, h, "/usr/local/bin/team-mcp")
+            .expect("opencode agent must get an opencode.json");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let team = &v["mcp"]["team"];
+        assert_eq!(team["type"], "local");
+        assert_eq!(team["enabled"], true);
+        // Single argv array (binary first) — same args as the JSON
+        // transport, from the shared team_server_args helper.
+        assert_eq!(team["command"][0], "/usr/local/bin/team-mcp");
+        assert_eq!(team["command"][1], "--agent-id");
+        assert_eq!(team["command"][2], "hello:mgr");
+        let argv: Vec<&str> = team["command"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
+        let i = argv.iter().position(|a| *a == "--tmux-prefix").unwrap();
+        assert_eq!(argv[i + 1], "a-");
+        // The opt-outs the wrapper depends on.
+        assert_eq!(v["autoupdate"], false);
+        assert_eq!(v["share"], "disabled");
+        // Role prompt rides `instructions` as an absolute path.
+        assert_eq!(
+            v["instructions"],
+            serde_json::json!(["/teamctl/roles/mgr.md"])
+        );
+    }
+
+    #[test]
+    fn opencode_config_absent_for_non_opencode_runtimes() {
+        // Other runtimes get their MCP servers via the JSON file (or
+        // the codex TOML); a stray opencode.json would be dead weight.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        assert!(render_opencode_config(&c, h, "/usr/local/bin/team-mcp").is_none());
+    }
+
+    #[test]
+    fn opencode_config_omits_instructions_without_role_prompt() {
+        // No role_prompt → no `instructions` key at all (an empty list
+        // or a blank path would be schema noise opencode may silently
+        // choke on).
+        let mut c = fixture();
+        {
+            let m = c.projects[0].managers.get_mut("mgr").unwrap();
+            m.runtime = "opencode".into();
+            m.role_prompt = None;
+        }
+        let h = c.agents().next().unwrap();
+        let json = render_opencode_config(&c, h, "/usr/local/bin/team-mcp").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v.get("instructions").is_none(), "json was: {json}");
+    }
+
+    #[test]
+    fn opencode_config_includes_declared_servers() {
+        // Declared `mcps:` land as their own `mcp` entries next to the
+        // team bus, mirroring the JSON transport's merge. env values
+        // pass through verbatim under the exact `environment` key.
+        let mut c = fixture();
+        {
+            let m = c.projects[0].managers.get_mut("mgr").unwrap();
+            m.runtime = "opencode".into();
+            let mut gh = server("npx", &["-y", "@modelcontextprotocol/server-github"]);
+            gh.env
+                .insert("GITHUB_TOKEN".into(), "${GITHUB_TOKEN}".into());
+            let mut mcps = BTreeMap::new();
+            mcps.insert("github".into(), gh);
+            m.mcps = mcps;
+        }
+        let h = c.agents().next().unwrap();
+        let json = render_opencode_config(&c, h, "/usr/local/bin/team-mcp").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let gh = &v["mcp"]["github"];
+        assert_eq!(gh["type"], "local");
+        assert_eq!(gh["enabled"], true);
+        assert_eq!(
+            gh["command"],
+            serde_json::json!(["npx", "-y", "@modelcontextprotocol/server-github"])
+        );
+        assert_eq!(
+            gh["environment"]["GITHUB_TOKEN"], "${GITHUB_TOKEN}",
+            "env values must pass through verbatim under `environment`"
+        );
+        assert_eq!(v["mcp"].as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn opencode_config_team_server_is_non_clobberable() {
+        // Same guarantee as the JSON + TOML transports: a declared
+        // server literally named `team` must not shadow the mailbox bus.
+        let mut c = fixture();
+        {
+            let m = c.projects[0].managers.get_mut("mgr").unwrap();
+            m.runtime = "opencode".into();
+            let mut mcps = BTreeMap::new();
+            mcps.insert("team".into(), server("evil-team", &[]));
+            m.mcps = mcps;
+        }
+        let h = c.agents().next().unwrap();
+        let json = render_opencode_config(&c, h, "/usr/local/bin/team-mcp").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            v["mcp"]["team"]["command"][0], "/usr/local/bin/team-mcp",
+            "built-in team server must not be clobbered by a declared `team`"
+        );
+        assert_eq!(v["mcp"].as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn write_opencode_config_writes_then_clears_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = fixture();
+        c.root = dir.path().to_path_buf();
+        let dest = opencode_home_dir(&c.root, "hello", "mgr").join("opencode.json");
+
+        // opencode runtime → config materialized under the per-agent home.
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "opencode".into();
+        let h = c.agents().next().unwrap();
+        write_opencode_config(&c, h, "/usr/local/bin/team-mcp").unwrap();
+        assert!(dest.exists(), "opencode.json should be written");
+
+        // Runtime switched away → the managed config is removed (the home
+        // dir itself survives: it holds the agent's session db).
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "claude-code".into();
+        let h = c.agents().next().unwrap();
+        write_opencode_config(&c, h, "/usr/local/bin/team-mcp").unwrap();
+        assert!(!dest.exists(), "stale opencode.json should be removed");
     }
 
     #[test]
