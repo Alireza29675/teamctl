@@ -18,6 +18,13 @@
 //! pre-existing mail is left for the agent to fetch via `inbox_peek` (the
 //! bootstrap prompt directs it to). Other runtimes silently ignore the
 //! notification, so emitting unconditionally is safe.
+//!
+//! Non-claude runtimes (codex, gemini) are strictly request/response over
+//! MCP — there is no push mechanism they honour. For those agents the
+//! watcher additionally types a short "📬 N new team message(s)" nudge into
+//! the agent's tmux pane (the same mechanism `compact_self` uses), batching
+//! all rows found in one poll tick into a single nudge. The agent then
+//! drains its mailbox via `inbox_peek` / `inbox_read` / `inbox_ack`.
 
 mod rpc;
 mod store;
@@ -144,6 +151,7 @@ async fn main() -> Result<()> {
     spawn_channel_watcher(
         ctx.store.clone(),
         ctx.agent_id.clone(),
+        ctx.tmux_prefix.clone(),
         stdout.clone(),
         initialized.clone(),
         lazy_inbox,
@@ -202,10 +210,39 @@ async fn write_line(stdout: &Arc<Mutex<Stdout>>, buf: &[u8]) -> Result<()> {
 fn spawn_channel_watcher(
     store: Arc<store::Store>,
     agent_id: String,
+    tmux_prefix: String,
     stdout: Arc<Mutex<Stdout>>,
     initialized: Arc<Notify>,
     lazy_inbox: bool,
 ) {
+    // Delivery mode is resolved once, here at spawn: this process serves
+    // exactly one agent (`--agent-id` is fixed for the process lifetime),
+    // and `teamctl up` registers the agent's runtime in the mailbox
+    // (`register_all_public`) *before* spawning the tmux session whose
+    // runtime spawns us. A compose edit that flips the runtime goes
+    // through `teamctl up`/`reload`, which restarts the agent's session —
+    // and this team-mcp child with it — so a stale mode can't outlive a
+    // runtime change.
+    let runtime = match store.runtime_for(&agent_id) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "channel watcher runtime lookup failed");
+            None
+        }
+    };
+    let mode = delivery_mode(runtime.as_deref());
+    // Session name for the nudge path; `None` for claude (never nudged)
+    // or when the agent id is malformed (nudges skipped, logged once).
+    let nudge_session = match mode {
+        DeliveryMode::Channel => None,
+        DeliveryMode::Nudge => match tools::pane_session(&tmux_prefix, &agent_id) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::warn!(error = %e, "channel watcher nudge disabled");
+                None
+            }
+        },
+    };
     // High-water mark captured *synchronously* at spawn — before the
     // tokio task is scheduled. Computing it inside the task after
     // `initialized.notified().await` opened a race: any writer that
@@ -255,7 +292,13 @@ fn spawn_channel_watcher(
                 }
             };
             let mut max_id = last_seen;
+            let mut fresh = 0usize;
             for m in msgs.iter().filter(|m| m.id > last_seen) {
+                fresh += 1;
+                // Emitted for every runtime: claude injects it as a
+                // `<channel>` event; non-claude clients ignore unsolicited
+                // notifications, so keeping the emit path single-shape is
+                // free and leaves the claude behaviour byte-identical.
                 let payload = format_channel_event(m, lazy_inbox);
                 let buf = match serde_json::to_vec(&payload) {
                     Ok(b) => b,
@@ -272,9 +315,83 @@ fn spawn_channel_watcher(
                     max_id = m.id;
                 }
             }
+            // Non-claude delivery: one nudge per poll tick that found new
+            // rows (batched, never per-row), typed into the agent's own
+            // pane. Fire-and-forget on the blocking pool, log-and-drop on
+            // failure — same contract as `compact_self`. A missed nudge is
+            // recovered by the next arrival's nudge (the high-water mark
+            // advances regardless) and by the agent's own `inbox_peek`
+            // habit from the bootstrap prompt.
+            if fresh > 0 {
+                if let Some(session) = nudge_session.clone() {
+                    tokio::task::spawn_blocking(move || {
+                        let argv = inbox_nudge_argv(&session, fresh);
+                        match std::process::Command::new("tmux").args(argv).output() {
+                            Ok(o) if !o.status.success() => {
+                                let stderr = String::from_utf8_lossy(&o.stderr);
+                                tracing::warn!(
+                                    session = %session,
+                                    error = %stderr.trim(),
+                                    "inbox nudge: tmux send-keys failed",
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    session = %session,
+                                    error = %e,
+                                    "inbox nudge: tmux invoke failed",
+                                );
+                            }
+                            _ => {}
+                        }
+                    });
+                }
+            }
             last_seen = max_id;
         }
     });
+}
+
+/// How new inbox rows get in front of the served agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeliveryMode {
+    /// Claude Code Channels: the stdout notification alone reaches the
+    /// session as a `<channel source="team">` event.
+    Channel,
+    /// Every other runtime treats MCP as strictly request/response and
+    /// drops unsolicited notifications, so new mail is announced by
+    /// typing a nudge into the agent's tmux pane.
+    Nudge,
+}
+
+/// Pick the delivery mode for `runtime` (as registered in the mailbox).
+/// Only claude-code honours channel pushes; codex, gemini, unknown
+/// runtimes, and unregistered agents (`None`) all get the tmux nudge —
+/// for a pane that doesn't exist the nudge just fails and is dropped.
+fn delivery_mode(runtime: Option<&str>) -> DeliveryMode {
+    match runtime {
+        Some("claude-code") => DeliveryMode::Channel,
+        _ => DeliveryMode::Nudge,
+    }
+}
+
+/// Argv for the tmux send-keys invocation that announces `new_rows` fresh
+/// inbox rows in the agent's pane. Pulled out (like `tools::compact_self_argv`)
+/// so unit tests pin the exact arg shape without spinning up tmux. The
+/// text lands in the agent's composer as a user message, so it stays
+/// short and points at the mailbox tools; the trailing `Enter` keyword
+/// makes tmux fire a Return so the runtime actually processes it.
+fn inbox_nudge_argv(session: &str, new_rows: usize) -> [String; 5] {
+    [
+        "send-keys".into(),
+        "-t".into(),
+        session.into(),
+        format!(
+            "📬 {new_rows} new team message(s) — call inbox_peek, \
+             then inbox_read each meta.id and inbox_ack when handled."
+        ),
+        "Enter".into(),
+    ]
 }
 
 /// Build the JSON-RPC notification per Claude Code's Channels wire format.
@@ -368,5 +485,49 @@ fn stub_location(m: &store::Message) -> String {
         format!(" in {name}")
     } else {
         String::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delivery_mode_channels_only_for_claude_code() {
+        // The channel push is a Claude Code Channels feature; every other
+        // runtime is strictly request/response over MCP and needs the
+        // tmux nudge. Unknown runtime strings and unregistered agents
+        // (`None`) fall to the nudge side too — a nudge into a missing
+        // pane is dropped, whereas a channel push to a non-claude runtime
+        // is silently ignored and the agent idles forever.
+        assert_eq!(delivery_mode(Some("claude-code")), DeliveryMode::Channel);
+        assert_eq!(delivery_mode(Some("codex")), DeliveryMode::Nudge);
+        assert_eq!(delivery_mode(Some("gemini")), DeliveryMode::Nudge);
+        assert_eq!(delivery_mode(Some("some-future-cli")), DeliveryMode::Nudge);
+        assert_eq!(delivery_mode(None), DeliveryMode::Nudge);
+    }
+
+    #[test]
+    fn inbox_nudge_argv_batches_count_and_ends_with_enter_keyword() {
+        // Pin the wire shape: one send-keys per poll tick, the row count
+        // baked into the body, and `Enter` as a separate argv element so
+        // tmux fires a Return and the runtime submits the note.
+        let argv = inbox_nudge_argv("t-p-mgr", 2);
+        assert_eq!(argv[0], "send-keys");
+        assert_eq!(argv[1], "-t");
+        assert_eq!(argv[2], "t-p-mgr");
+        assert!(
+            argv[3].starts_with("📬 2 new team message(s)"),
+            "nudge body must lead with the batched count: {}",
+            argv[3]
+        );
+        assert!(
+            argv[3].contains("inbox_peek")
+                && argv[3].contains("inbox_read")
+                && argv[3].contains("inbox_ack"),
+            "nudge body must point at the mailbox tools: {}",
+            argv[3]
+        );
+        assert_eq!(argv[4], "Enter");
     }
 }
