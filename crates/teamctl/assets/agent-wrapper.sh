@@ -153,13 +153,15 @@ log() {
 # sends one Enter when matched, then sleeps 1s so the dialog clears
 # from the captured frame before the next poll (otherwise the same
 # match would re-fire). The single-pattern strings are runtime chrome
-# that doesn't occur in normal output (the codex trust wording is
-# dialog-only, so it rides the same alternation). The claude trust and
-# MCP dialogs are matched on a two-string co-occurrence rather than a
-# single header, so an agent that merely *prints* one of the phrases
-# can't trigger a stray Enter: trust needs "Quick safety check:" AND
-# "trust this folder"; MCP needs "MCP servers may execute code" AND the
-# footer chrome "Enter to confirm · Esc" (the interpunct footer doesn't
+# that doesn't occur in normal output. Every trust/MCP dialog is
+# matched on a two-string co-occurrence rather than a single header,
+# so an agent that merely *prints* one of the phrases can't trigger a
+# stray Enter — this team works ON teamctl and discusses these very
+# dialogs in prose: claude trust needs "Quick safety check:" AND
+# "trust this folder"; codex trust needs one of its wordings AND the
+# dialog chrome ("Press enter to continue" or the "2. No" option
+# line); MCP needs "MCP servers may execute code" AND the footer
+# chrome "Enter to confirm · Esc" (the interpunct footer doesn't
 # occur in prose, so an agent discussing MCP security can't collide
 # with it).
 #
@@ -174,9 +176,12 @@ auto_confirm_known_dialogs() {
     while :; do
         frame=$(tmux capture-pane -t "$pane" -p 2>/dev/null)
         if printf '%s\n' "$frame" \
-            | grep -qE 'Loading development channels|Bypass Permissions mode|Stop and wait for limit to reset|Yes, I trust this folder|Yes, allow Codex to work in this folder|Do you trust the contents of this directory' \
+            | grep -qE 'Loading development channels|Bypass Permissions mode|Stop and wait for limit to reset' \
             || { printf '%s\n' "$frame" | grep -q 'Quick safety check:' \
                  && printf '%s\n' "$frame" | grep -q 'trust this folder'; } \
+            || { printf '%s\n' "$frame" \
+                     | grep -qE 'Yes, I trust this folder|Yes, allow Codex to work in this folder|Do you trust the contents of this directory' \
+                 && printf '%s\n' "$frame" | grep -qE 'Press enter to continue|2\. No'; } \
             || { printf '%s\n' "$frame" | grep -q 'MCP servers may execute code' \
                  && printf '%s\n' "$frame" | grep -q 'Enter to confirm · Esc'; }; then
             tmux send-keys -t "$pane" Enter
@@ -196,12 +201,20 @@ auto_confirm_known_dialogs() {
 # dumb — one sleep, one send-keys, no retry loop; worst case the text
 # sits in the composer for an attached operator to see. No-op outside
 # tmux (TMUX_PANE unset), same guard as the auto-confirm watcher.
+#
+# The trailing bare Enter re-fires the submit after a beat: a resumed
+# codex TUI loads its history before the composer goes live, so the
+# first Enter can be eaten mid-boot and the nudge text strands in the
+# composer unsubmitted (observed live on codex 0.144.3). A second
+# Enter on an already-submitted (empty) composer is a no-op.
 nudge_resumed_session() {
     pane="${TMUX_PANE:-${TMUX_SESSION:-}}"
     [ -z "$pane" ] && return 0
     command -v tmux >/dev/null 2>&1 || return 0
     sleep 5
     tmux send-keys -t "$pane" "Restarted mid-shift: call inbox_peek to catch up on anything that arrived while you were down, then resume your role." Enter
+    sleep 3
+    tmux send-keys -t "$pane" Enter
 }
 
 # Consecutive fast resume-path failures (see the self-heal block at

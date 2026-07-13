@@ -1221,6 +1221,15 @@ mod tests {
             DEFAULT_WRAPPER.contains("Do you trust the contents of this directory"),
             "auto-confirm watcher must match codex 0.144's trust-dialog wording",
         );
+        // Co-occurrence guard: the codex wordings must only fire alongside
+        // dialog chrome, or an agent that merely PRINTS a wording in prose
+        // (this team discusses these dialogs constantly) triggers a stray
+        // Enter. "Yes, I trust this folder" doubles as claude's own trust
+        // option label, which makes the single-string form doubly unsafe.
+        assert!(
+            DEFAULT_WRAPPER.contains("Press enter to continue|2\\. No"),
+            "codex trust match must require dialog chrome co-occurrence",
+        );
         assert!(
             wrapper_codex_branch().contains("AUTO_CONFIRM=1"),
             "codex branch must opt into the auto-confirm watcher",
@@ -1258,6 +1267,18 @@ mod tests {
         assert!(
             DEFAULT_WRAPPER.contains("Restarted mid-shift: call inbox_peek"),
             "nudge must point the resumed agent at inbox_peek catch-up",
+        );
+        // The nudge must re-fire Enter after a beat: a resumed codex TUI
+        // loads history before the composer goes live, so the first Enter
+        // can be eaten mid-boot and the text strands unsubmitted (observed
+        // live on codex 0.144.3).
+        let nudge_start = DEFAULT_WRAPPER
+            .find("nudge_resumed_session() {")
+            .expect("nudge helper present");
+        let nudge = &DEFAULT_WRAPPER[nudge_start..nudge_start + 700];
+        assert!(
+            nudge.matches("send-keys").count() >= 2,
+            "nudge must send a trailing bare Enter to beat the resume-boot race",
         );
     }
 
