@@ -1646,17 +1646,17 @@ enum SlashOutcome {
 
 /// Pure decision: given the manager id (`<project>:<role>`), the manager's
 /// runtime, and the configured tmux prefix, decide whether slash-passthrough
-/// fires and against which tmux session. Claude Code and Codex both run a
-/// slash-command REPL that reports unknown commands itself, so both get
-/// passthrough; other runtimes are rejected per Decision 6 (manager-only
-/// routing) and the rejection message names the actual runtime so the
-/// operator sees why.
+/// fires and against which tmux session. Claude Code, Codex, and OpenCode
+/// all run a slash-command REPL that reports unknown commands itself, so
+/// all three get passthrough; other runtimes are rejected per Decision 6
+/// (manager-only routing) and the rejection message names the actual
+/// runtime so the operator sees why.
 fn slash_outcome(manager: &str, runtime: &str, tmux_prefix: &str) -> SlashOutcome {
-    if runtime != "claude-code" && runtime != "codex" {
+    if runtime != "claude-code" && runtime != "codex" && runtime != "opencode" {
         return SlashOutcome::Reject {
             reason: format!(
-                "slash-passthrough is only supported on Claude Code and Codex \
-                 agents (this manager runs `{runtime}`)."
+                "slash-passthrough is only supported on Claude Code, Codex, and \
+                 OpenCode agents (this manager runs `{runtime}`)."
             ),
         };
     }
@@ -1746,9 +1746,25 @@ const CODEX_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("hooks", "Review and trust hooks"),
 ];
 
+/// Curated subset of OpenCode slash commands surfaced via Telegram's
+/// `setMyCommands` API, mirroring the two lists above. Live-captured from
+/// the opencode 1.17.13 TUI — extend by verification, not by guessing at
+/// the full set. The same Telegram charset constraint applies
+/// (`[a-z0-9_]` only), and the same maintenance note: hand-refresh on
+/// opencode version bumps; operators can always type unlisted commands
+/// manually and slash-passthrough routes them to tmux just fine.
+const OPENCODE_SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("models", "Switch the AI model"),
+    ("new", "Start a new session"),
+    ("sessions", "List and switch sessions"),
+    ("status", "Show opencode status"),
+    ("variants", "Cycle the model's reasoning variants"),
+];
+
 /// Build the runtime-appropriate `BotCommand` list for `setMyCommands`. CC
 /// managers get `CC_SLASH_COMMANDS`, Codex managers get
-/// `CODEX_SLASH_COMMANDS`; everything else (gemini, unknown, unscoped)
+/// `CODEX_SLASH_COMMANDS`, OpenCode managers get
+/// `OPENCODE_SLASH_COMMANDS`; everything else (gemini, unknown, unscoped)
 /// gets an empty list — clean degrade per Decision 6 (manager-only
 /// routing). Pulled out as a free function so the per-runtime mapping is
 /// unit-testable without a real Telegram bot.
@@ -1759,6 +1775,10 @@ fn commands_for_runtime(runtime: Option<&str>) -> Vec<BotCommand> {
             .map(|(c, d)| BotCommand::new(*c, *d))
             .collect(),
         Some("codex") => CODEX_SLASH_COMMANDS
+            .iter()
+            .map(|(c, d)| BotCommand::new(*c, *d))
+            .collect(),
+        Some("opencode") => OPENCODE_SLASH_COMMANDS
             .iter()
             .map(|(c, d)| BotCommand::new(*c, *d))
             .collect(),
@@ -3883,6 +3903,20 @@ mod tests {
     }
 
     #[test]
+    fn slash_outcome_passes_through_for_opencode_runtime() {
+        // OpenCode's TUI is a slash-command REPL like Claude Code's and
+        // Codex's and reports unknown commands itself, so passthrough
+        // parity is safe.
+        let outcome = slash_outcome("writing:manager", "opencode", "t-");
+        assert_eq!(
+            outcome,
+            SlashOutcome::Passthrough {
+                session: "t-writing-manager".into(),
+            }
+        );
+    }
+
+    #[test]
     fn slash_outcome_rejects_gemini_runtime_with_named_runtime() {
         let outcome = slash_outcome("writing:manager", "gemini", "t-");
         let SlashOutcome::Reject { reason } = outcome else {
@@ -3966,6 +4000,22 @@ mod tests {
     }
 
     #[test]
+    fn commands_for_runtime_returns_full_opencode_list_for_opencode() {
+        let cmds = commands_for_runtime(Some("opencode"));
+        assert_eq!(
+            cmds.len(),
+            OPENCODE_SLASH_COMMANDS.len(),
+            "opencode manager registers the full curated list"
+        );
+        // Pin the exact set — order and descriptions included — so an
+        // edit to OPENCODE_SLASH_COMMANDS shows up here consciously.
+        for (cmd, (name, desc)) in cmds.iter().zip(OPENCODE_SLASH_COMMANDS) {
+            assert_eq!(cmd.command, *name);
+            assert_eq!(cmd.description, *desc);
+        }
+    }
+
+    #[test]
     fn commands_for_runtime_returns_empty_for_gemini() {
         assert!(commands_for_runtime(Some("gemini")).is_empty());
     }
@@ -4041,6 +4091,36 @@ mod tests {
     fn codex_slash_command_descriptions_satisfy_telegram_constraints() {
         // Telegram requires `BotCommand.description` to be 3-256 chars.
         for (cmd, desc) in CODEX_SLASH_COMMANDS {
+            assert!(
+                desc.len() >= 3 && desc.len() <= 256,
+                "description for `{cmd}` violates 3-256 char limit (got {} chars: {desc:?})",
+                desc.len()
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_slash_command_names_satisfy_telegram_constraints() {
+        // Same Telegram `[a-z0-9_]` / 1-32 char constraint as the CC and
+        // codex lists — trips here before a future addition hits the API
+        // and gets silently rejected.
+        for (cmd, _desc) in OPENCODE_SLASH_COMMANDS {
+            assert!(
+                !cmd.is_empty() && cmd.len() <= 32,
+                "command `{cmd}` violates 1-32 char limit"
+            );
+            assert!(
+                cmd.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "command `{cmd}` contains chars Telegram rejects (only [a-z0-9_])"
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_slash_command_descriptions_satisfy_telegram_constraints() {
+        // Telegram requires `BotCommand.description` to be 3-256 chars.
+        for (cmd, desc) in OPENCODE_SLASH_COMMANDS {
             assert!(
                 desc.len() >= 3 && desc.len() <= 256,
                 "description for `{cmd}` violates 3-256 char limit (got {} chars: {desc:?})",

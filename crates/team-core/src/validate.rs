@@ -161,6 +161,9 @@ pub enum ValidationWarning {
         runtime: String,
         mode: String,
     },
+
+    #[error("agent `{project}:{agent}` sets `permission_mode: bypassPermissions` but opencode has no full-bypass upstream — the wrapper downgrades it to `--auto`; deny rules stay enforced")]
+    PermissionModeBypassDowngraded { project: String, agent: String },
 }
 
 /// T-160: max length for `display_name`. 64 is a sensible upper bound
@@ -382,10 +385,13 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
 /// without validate), but those warns are invisible in normal CLI runs;
 /// this is the operator-visible surface. `effort:` is consumed by both
 /// claude-code (`--effort`) and codex (`-c model_reasoning_effort`); any
-/// other wrapper arm ignores `$EFFORT`. `permission_mode:` maps to flags
-/// in the claude-code and codex arms only. And `${VAR}` placeholders in
-/// declared MCP env values are expanded by claude-code alone — codex
-/// hands the server the literal string.
+/// other wrapper arm ignores `$EFFORT` — opencode included, whose plain
+/// TUI rejects `--variant`. `permission_mode:` maps to flags in the
+/// claude-code, codex, and opencode arms (opencode has no full-bypass
+/// upstream, so `bypassPermissions` degrades to `--auto` and gets its own
+/// warning). And `${VAR}` placeholders in declared MCP env values are
+/// expanded by claude-code alone — codex and opencode hand the server the
+/// literal string.
 pub fn validate_warnings(compose: &Compose) -> Vec<ValidationWarning> {
     let mut warns = Vec::new();
     for p in &compose.projects {
@@ -426,14 +432,15 @@ pub fn validate_warnings(compose: &Compose) -> Vec<ValidationWarning> {
                     });
                 }
                 // Claude Code expands `${VAR}` placeholders in .mcp.json
-                // env values at launch; codex reads config.toml literally,
-                // so the placeholder string reaches the server process and
-                // auth silently breaks. Deliberately NOT fixed by expanding
-                // at render time — that would write resolved secrets to
-                // disk. Warn so the operator gives the server a literal
-                // value or exports the secret in the environment the MCP
-                // server process inherits.
-                if a.runtime == "codex" {
+                // env values at launch; codex reads config.toml literally
+                // and opencode its config json likewise, so the placeholder
+                // string reaches the server process and auth silently
+                // breaks. Deliberately NOT fixed by expanding at render
+                // time — that would write resolved secrets to disk. Warn so
+                // the operator gives the server a literal value or exports
+                // the secret in the environment the MCP server process
+                // inherits.
+                if matches!(a.runtime.as_str(), "codex" | "opencode") {
                     for (server, srv) in &a.mcps {
                         if srv.env.values().any(|v| v.contains("${")) {
                             warns.push(ValidationWarning::McpEnvInterpolationUnsupported {
@@ -446,19 +453,35 @@ pub fn validate_warnings(compose: &Compose) -> Vec<ValidationWarning> {
                     }
                 }
                 // `permission_mode` maps to real flags only in the wrapper's
-                // claude-code and codex arms; the gemini arm hardcodes
-                // `--yolo`, so e.g. `permission_mode: attended` silently
-                // becomes bypass-everything — the most dangerous silent
-                // mismatch in the matrix. `None` is the schema default, so
-                // warning only on `Some` keeps untouched agents quiet.
-                if a.runtime != "codex" {
-                    if let Some(mode) = &a.permission_mode {
-                        warns.push(ValidationWarning::PermissionModeUnsupported {
-                            project: p.project.id.clone(),
-                            agent: id.into(),
-                            runtime: a.runtime.clone(),
-                            mode: mode.clone(),
-                        });
+                // claude-code, codex, and opencode arms; the gemini arm
+                // hardcodes `--yolo`, so e.g. `permission_mode: attended`
+                // silently becomes bypass-everything — the most dangerous
+                // silent mismatch in the matrix. `None` is the schema
+                // default, so warning only on `Some` keeps untouched agents
+                // quiet. opencode is a partial mapping: it has no
+                // full-bypass upstream (the --yolo feature request was
+                // closed not-planned), so `bypassPermissions` degrades to
+                // `--auto` — deny rules stay enforced — and gets its own
+                // downgrade warning instead of a silent softening.
+                if let Some(mode) = &a.permission_mode {
+                    match a.runtime.as_str() {
+                        "codex" => {}
+                        "opencode" => {
+                            if mode == "bypassPermissions" {
+                                warns.push(ValidationWarning::PermissionModeBypassDowngraded {
+                                    project: p.project.id.clone(),
+                                    agent: id.into(),
+                                });
+                            }
+                        }
+                        _ => {
+                            warns.push(ValidationWarning::PermissionModeUnsupported {
+                                project: p.project.id.clone(),
+                                agent: id.into(),
+                                runtime: a.runtime.clone(),
+                                mode: mode.clone(),
+                            });
+                        }
                     }
                 }
             };
@@ -1186,6 +1209,118 @@ mod tests {
                     if agent == "dev" && runtime == "gemini"
             )),
             "expected EffortUnsupported, got {warns:?}",
+        );
+    }
+
+    #[test]
+    fn opencode_agent_with_effort_warns() {
+        // The wrapper's opencode arm never reads $EFFORT — the plain
+        // opencode TUI rejects `--variant` (run-subcommand only), so the
+        // effort exemption list stays {claude-code, codex}.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "opencode".into();
+        mgr.effort = Some(crate::compose::EffortLevel::High);
+        let warns = validate_warnings(&c);
+        assert!(
+            warns.iter().any(|w| matches!(
+                w,
+                ValidationWarning::EffortUnsupported { agent, runtime, .. }
+                    if agent == "mgr" && runtime == "opencode"
+            )),
+            "expected EffortUnsupported, got {warns:?}",
+        );
+    }
+
+    #[test]
+    fn opencode_agent_with_hooks_subagents_skills_warns() {
+        // Pins that opencode rides the generic claude-only sweep: hooks,
+        // sub-agents, and skills all warn, exactly like codex/gemini.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "opencode".into();
+        mgr.hooks = vec![one_hook()];
+        mgr.subagents = vec![PathBuf::from("agents/reviewer.md")];
+        mgr.skills = vec![PathBuf::from("skills/release")];
+        let warns = validate_warnings(&c);
+        assert!(
+            warns
+                .iter()
+                .any(|w| matches!(w, ValidationWarning::HooksUnsupported { runtime, .. } if runtime == "opencode")),
+            "expected HooksUnsupported, got {warns:?}",
+        );
+        assert!(
+            warns
+                .iter()
+                .any(|w| matches!(w, ValidationWarning::SubagentsUnsupported { runtime, .. } if runtime == "opencode")),
+            "expected SubagentsUnsupported, got {warns:?}",
+        );
+        assert!(
+            warns
+                .iter()
+                .any(|w| matches!(w, ValidationWarning::SkillsUnsupported { runtime, .. } if runtime == "opencode")),
+            "expected SkillsUnsupported, got {warns:?}",
+        );
+    }
+
+    #[test]
+    fn opencode_agent_with_mcp_env_placeholder_warns() {
+        // opencode reads its rendered config json literally, same as
+        // codex's config.toml — the literal `${GITHUB_TOKEN}` string
+        // would reach the server and auth silently breaks.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "opencode".into();
+        mgr.mcps
+            .insert("github".into(), github_mcp_with_placeholder());
+        let warns = validate_warnings(&c);
+        assert!(
+            warns.iter().any(|w| matches!(
+                w,
+                ValidationWarning::McpEnvInterpolationUnsupported { project, agent, runtime, server }
+                    if project == "hello" && agent == "mgr" && runtime == "opencode" && server == "github"
+            )),
+            "expected McpEnvInterpolationUnsupported, got {warns:?}",
+        );
+    }
+
+    #[test]
+    fn opencode_agent_with_permission_mode_produces_no_warnings() {
+        // The opencode arm maps permission_mode (attended / headless
+        // default → --auto) to real behavior — no mismatch for any mode
+        // short of bypassPermissions.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "opencode".into();
+        mgr.permission_mode = Some("attended".into());
+        assert_eq!(validate_warnings(&c), vec![]);
+    }
+
+    #[test]
+    fn opencode_agent_with_bypass_permissions_warns_downgrade() {
+        // opencode has no full-bypass upstream — the wrapper downgrades
+        // `bypassPermissions` to `--auto` (deny rules stay enforced), and
+        // the warning is the only visible trace of that softening.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "opencode".into();
+        mgr.permission_mode = Some("bypassPermissions".into());
+        let warns = validate_warnings(&c);
+        assert!(
+            warns.iter().any(|w| matches!(
+                w,
+                ValidationWarning::PermissionModeBypassDowngraded { project, agent }
+                    if project == "hello" && agent == "mgr"
+            )),
+            "expected PermissionModeBypassDowngraded, got {warns:?}",
+        );
+        // The generic unsupported warning must NOT also fire — opencode
+        // is a supported-with-downgrade runtime, not an unmapped one.
+        assert!(
+            !warns
+                .iter()
+                .any(|w| matches!(w, ValidationWarning::PermissionModeUnsupported { .. })),
+            "downgrade must not double-fire the generic warning: {warns:?}",
         );
     }
 }

@@ -35,20 +35,23 @@ Agents on any runtime react to new mail on arrival — only the mechanism differ
 
 Not every agent-spec field applies to every runtime:
 
-| Capability | Claude Code | Codex | Gemini |
-|---|---|---|---|
-| MCP (`mcps:` + built-in `team` mailbox) | ✓ | ✓ | ✓ |
-| `model` | ✓ | ✓ | ✓ |
-| `effort` | ✓ | ✓ | — |
-| `permission_mode` (incl. `attended`, `bypassPermissions`) | ✓ | ✓ | — |
-| Compaction on rate limit / Telegram slash passthrough | ✓ | ✓ | — |
-| `hooks` | ✓ | — | — |
-| `subagents` | ✓ | — | — |
-| `skills` | ✓ | — | — |
+| Capability | Claude Code | Codex | OpenCode | Gemini |
+|---|---|---|---|---|
+| MCP (`mcps:` + built-in `team` mailbox) | ✓ | ✓ | ✓ | ✓ |
+| `model` | ✓ | ✓ | ✓ | ✓ |
+| `effort` | ✓ | ✓ | — | — |
+| `permission_mode` (incl. `attended`, `bypassPermissions`) | ✓ | ✓ | ✓ \* | — |
+| Compaction on rate limit | ✓ | ✓ | — | — |
+| Telegram slash passthrough | ✓ | ✓ | ✓ | — |
+| `hooks` | ✓ | — | — | — |
+| `subagents` | ✓ | — | — | — |
+| `skills` | ✓ | — | — | — |
+
+\* `permission_mode: bypassPermissions` on opencode degrades to `--auto` — opencode has no full-bypass upstream, so deny rules stay enforced; `teamctl validate` prints a warning naming the downgrade.
 
 A capability declared on a runtime that doesn't support it is ignored at render time. `teamctl validate` prints a warning for each such mismatch (validation still succeeds).
 
-One subtlety on MCP env: `${VAR}` placeholders in `mcps:` env values are Claude-Code-only — Claude Code expands them at launch, but Codex passes the literal `${VAR}` string to the server. For codex agents, give servers literal values or put the secret in the operator environment the MCP server process inherits.
+One subtlety on MCP env: `${VAR}` placeholders in `mcps:` env values are Claude-Code-only — Claude Code expands them at launch, but Codex and OpenCode pass the literal `${VAR}` string to the server. For codex and opencode agents, give servers literal values or put the secret in the operator environment the MCP server process inherits.
 
 ## When to pick which
 
