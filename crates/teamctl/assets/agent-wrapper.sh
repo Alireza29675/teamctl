@@ -35,6 +35,13 @@ fi
 # codex arm's `[ -n "$CODEX_HOME" ]` guard is set -u-safe for other
 # runtimes and older env files.
 : "${CODEX_HOME:=}"
+# Rendered into the env file only for opencode runtime: OPENCODE_DB
+# relocates the session sqlite db (the per-agent isolation mechanism)
+# and OPENCODE_CONFIG points at the per-agent config json carrying the
+# MCP servers + instructions. Default to empty so the opencode arm's
+# guards are set -u-safe for other runtimes and older env files.
+: "${OPENCODE_DB:=}"
+: "${OPENCODE_CONFIG:=}"
 : "${SYSTEM_PROMPT_PATH:=}"
 : "${CLAUDE_PROJECT_DIR:=.}"
 : "${TEAMCTL_ROOT:=$CLAUDE_PROJECT_DIR}"
@@ -180,16 +187,16 @@ auto_confirm_known_dialogs() {
     done
 }
 
-# A resumed codex TUI reopens the prior conversation but sits idle:
-# no prompt is injected on the resume path (see the resume probe in
-# the codex case below), so without a wake-up the agent would wait
-# forever for input that never comes. One-shot nudge: sleep past the
-# TUI boot, then type a short catch-up instruction into our own pane
-# and press Enter. Deliberately dumb — one sleep, one send-keys, no
-# retry loop; worst case the text sits in the composer for an
-# attached operator to see. No-op outside tmux (TMUX_PANE unset),
-# same guard as the auto-confirm watcher.
-nudge_resumed_codex() {
+# A resumed TUI (codex `resume --last`, opencode `-c`) reopens the
+# prior conversation but sits idle: no prompt is injected on the
+# resume path (see the resume probes in the runtime cases below), so
+# without a wake-up the agent would wait forever for input that never
+# comes. One-shot nudge: sleep past the TUI boot, then type a short
+# catch-up instruction into our own pane and press Enter. Deliberately
+# dumb — one sleep, one send-keys, no retry loop; worst case the text
+# sits in the composer for an attached operator to see. No-op outside
+# tmux (TMUX_PANE unset), same guard as the auto-confirm watcher.
+nudge_resumed_session() {
     pane="${TMUX_PANE:-${TMUX_SESSION:-}}"
     [ -z "$pane" ] && return 0
     command -v tmux >/dev/null 2>&1 || return 0
@@ -197,10 +204,11 @@ nudge_resumed_codex() {
     tmux send-keys -t "$pane" "Restarted mid-shift: call inbox_peek to catch up on anything that arrived while you were down, then resume your role." Enter
 }
 
-# Consecutive fast codex-resume failures (see the self-heal block at
+# Consecutive fast resume-path failures (see the self-heal block at
 # the bottom of the loop). Lives outside the loop so it survives
-# across restarts.
-CODEX_FAST_FAILS=0
+# across restarts. Each resume-capable runtime case sets RESUMED=1
+# when its probe matched.
+RESUME_FAST_FAILS=0
 
 # Build the runtime invocation as the script's positional parameters.
 # Doing this in-line (instead of in a function) keeps the args quoted —
@@ -209,10 +217,10 @@ CODEX_FAST_FAILS=0
 # the role prompt.
 while :; do
     log "starting runtime=$RUNTIME model=${MODEL:-<default>}"
-    # Per-iteration: the claude-code branch sets this to 1 when it launches
-    # with `--resume`. The collision self-heal at the bottom of the loop
-    # keys on it; reset here so a non-claude runtime (or a fresh-session
-    # launch) never trips it.
+    # Per-iteration: each resume-capable runtime case sets this to 1 when
+    # its resume probe matches. The self-heal blocks at the bottom of the
+    # loop key on it; reset here so a non-resuming runtime (or a
+    # fresh-session launch) never trips them.
     RESUMED=0
     case "$RUNTIME" in
         claude-code)
@@ -383,11 +391,11 @@ while :; do
             # Self-healing like the claude branch: remove the sessions
             # dir and the next spawn falls through to a fresh boot, no
             # operator action needed.
-            CODEX_RESUME=0
+            RESUMED=0
             if [ -n "$CODEX_HOME" ] && \
                 ls "$CODEX_HOME/sessions"/*/*/*/*.jsonl >/dev/null 2>&1; then
                 set -- resume --last
-                CODEX_RESUME=1
+                RESUMED=1
             fi
             [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
             # Codex has no --effort flag; reasoning effort rides the
@@ -419,8 +427,66 @@ while :; do
             fi
             # The codex TUI takes the bootstrap as a positional PROMPT —
             # fresh spawns only; a resumed session gets the nudge.
-            [ "$CODEX_RESUME" = 0 ] && set -- "$@" "$BOOTSTRAP_PROMPT"
+            [ "$RESUMED" = 0 ] && set -- "$@" "$BOOTSTRAP_PROMPT"
             AUTO_CONFIRM=1
+            ;;
+        opencode)
+            BIN=opencode
+            set --
+            # OpenCode's TUI auto-upgrades the shared binary in place on
+            # boot (observed 1.17.13→1.17.18, even under full env
+            # isolation) — a mid-fleet binary swap. Disable it here AND
+            # via `"autoupdate": false` in the rendered config: defense
+            # in depth, upstream has open bugs about the config flag
+            # being ignored on some paths.
+            export OPENCODE_DISABLE_AUTOUPDATE=1
+            # OPENCODE_DB (per-agent session sqlite db) and
+            # OPENCODE_CONFIG (per-agent config json carrying the MCP
+            # servers + instructions) arrive via the env file, rendered
+            # by team-core for opencode agents only. Auth stays at the
+            # real ~/.local/share/opencode/auth.json — neither var
+            # relocates it, so no symlink is needed (unlike codex).
+            # Missing auth does NOT error: opencode silently falls back
+            # to free anonymous models, so warn loudly instead.
+            if [ ! -f "$HOME/.local/share/opencode/auth.json" ]; then
+                log "opencode has no credentials — it will silently run on free anonymous models; run \`opencode auth login\`"
+            fi
+            # Session resume: the per-agent OPENCODE_DB isolates the
+            # session store, and `-c` reopens the most recent session in
+            # the current directory within that db — exact per agent,
+            # because the db holds only this agent's sessions. `-c` on a
+            # db whose cwd has no prior session silently creates a fresh
+            # one — self-healing like the claude branch. No --prompt on
+            # the resume path: the one-shot nudge (armed after the case)
+            # re-grounds the agent instead.
+            RESUMED=0
+            if [ -n "$OPENCODE_DB" ] && [ -f "$OPENCODE_DB" ]; then
+                set -- "$@" -c
+                RESUMED=1
+            fi
+            # Model is provider/model form (e.g. openai/gpt-5.4-mini-fast).
+            [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
+            # No effort mapping: the plain opencode TUI rejects
+            # `--variant` (run-subcommand only, verified exit 1), so
+            # `effort:` is unsupported on opencode v1.
+            # Permission mapping, mirroring the claude-code branch:
+            # attended means a human answers opencode's own interactive
+            # ask-prompts; everything else (or unset) is headless and
+            # maps to --auto, which auto-approves anything not
+            # explicitly denied. That includes bypassPermissions —
+            # opencode has no full-bypass equivalent (the --yolo feature
+            # request was closed not-planned upstream), so --auto is the
+            # closest available and deny rules stay enforced.
+            if [ "${PERMISSION_MODE:-}" = "attended" ]; then
+                :
+            else
+                set -- "$@" --auto
+            fi
+            # The opencode TUI takes the bootstrap via --prompt (a flag,
+            # NOT a positional) — fresh spawns only; a resumed session
+            # gets the nudge. No AUTO_CONFIRM: opencode boots straight
+            # to the composer, no first-run dialogs (verified).
+            [ "$RESUMED" = 0 ] && set -- "$@" --prompt "$BOOTSTRAP_PROMPT"
             ;;
         gemini)
             BIN=gemini
@@ -445,8 +511,8 @@ while :; do
     AUTO_CONFIRM=0
 
     NUDGE_PID=
-    if [ "${CODEX_RESUME:-0}" = 1 ]; then
-        nudge_resumed_codex &
+    if [ "${RESUMED:-0}" = 1 ]; then
+        nudge_resumed_session &
         NUDGE_PID=$!
     fi
 
@@ -477,31 +543,47 @@ while :; do
     # succeed here. One-shot (cleared just below), so a later restart resumes
     # the now-local session normally. On a genuine crash of a real local
     # session the forced `--session-id` errors and we fall through to the
-    # normal restart — one harmless extra attempt, never a loop.
-    if [ "$ec" -ne 0 ] && [ "${RESUMED:-0}" = 1 ] && [ "${FORCE_FRESH_SESSION:-0}" != 1 ]; then
+    # normal restart — one harmless extra attempt, never a loop. Gated on
+    # the claude-code runtime: RESUMED is shared with the other
+    # resume-capable runtimes, whose recovery is the fast-fail counter
+    # below, not a claude flag swap.
+    if [ "$RUNTIME" = "claude-code" ] && [ "$ec" -ne 0 ] && [ "${RESUMED:-0}" = 1 ] && [ "${FORCE_FRESH_SESSION:-0}" != 1 ]; then
         log "resume failed (ec=$ec); retrying once with a fresh cwd-scoped --session-id"
         FORCE_FRESH_SESSION=1
         continue
     fi
     FORCE_FRESH_SESSION=0
 
-    # A corrupt rollout can make `codex resume --last` die instantly on
-    # every boot — the resume probe re-matches the same rollout each
+    # A corrupt session store can make the resume path die instantly on
+    # every boot — the resume probe re-matches the same state each
     # time, so the restart loop would spin forever. Self-heal in the
     # same spirit as the claude branch: after 3 consecutive resume-path
-    # exits that lasted under 60s, move the sessions dir aside so the
-    # next boot falls through to a fresh spawn. A long-lived session or
-    # a fresh-path boot resets the counter.
-    if [ "${CODEX_RESUME:-0}" = 1 ] && [ $((RUN_ENDED - RUN_STARTED)) -lt 60 ]; then
-        CODEX_FAST_FAILS=$((CODEX_FAST_FAILS + 1))
-        if [ "$CODEX_FAST_FAILS" -ge 3 ]; then
-            rm -rf "$CODEX_HOME/sessions.crash-bak"
-            mv "$CODEX_HOME/sessions" "$CODEX_HOME/sessions.crash-bak" 2>/dev/null
-            log "3 fast codex resume failures — moved $CODEX_HOME/sessions to $CODEX_HOME/sessions.crash-bak; next boot is fresh"
-            CODEX_FAST_FAILS=0
+    # exits that lasted under 60s, move the runtime's session store
+    # aside so the next boot falls through to a fresh spawn. A
+    # long-lived session or a fresh-path boot resets the counter.
+    if [ "${RESUMED:-0}" = 1 ] && [ $((RUN_ENDED - RUN_STARTED)) -lt 60 ]; then
+        RESUME_FAST_FAILS=$((RESUME_FAST_FAILS + 1))
+        if [ "$RESUME_FAST_FAILS" -ge 3 ]; then
+            case "$RUNTIME" in
+                codex)
+                    rm -rf "$CODEX_HOME/sessions.crash-bak"
+                    mv "$CODEX_HOME/sessions" "$CODEX_HOME/sessions.crash-bak" 2>/dev/null
+                    log "3 fast codex resume failures — moved $CODEX_HOME/sessions to $CODEX_HOME/sessions.crash-bak; next boot is fresh"
+                    ;;
+                opencode)
+                    # The sqlite db moves together with its -shm/-wal
+                    # sidecars (absent ones just no-op under 2>/dev/null).
+                    OC_HOME=$(dirname "$OPENCODE_DB")
+                    rm -rf "$OC_HOME/db.crash-bak"
+                    mkdir -p "$OC_HOME/db.crash-bak"
+                    mv "$OPENCODE_DB" "$OPENCODE_DB-shm" "$OPENCODE_DB-wal" "$OC_HOME/db.crash-bak/" 2>/dev/null
+                    log "3 fast opencode resume failures — moved $OPENCODE_DB (+sidecars) to $OC_HOME/db.crash-bak/; next boot is fresh"
+                    ;;
+            esac
+            RESUME_FAST_FAILS=0
         fi
     else
-        CODEX_FAST_FAILS=0
+        RESUME_FAST_FAILS=0
     fi
 
     log "runtime exited ec=$ec — restarting in 5s"

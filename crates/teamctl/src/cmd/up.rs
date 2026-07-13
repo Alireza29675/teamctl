@@ -1188,12 +1188,12 @@ mod tests {
             "codex resume probe must glob the sessions/YYYY/MM/DD rollout layout",
         );
         assert!(
-            codex.contains("[ \"$CODEX_RESUME\" = 0 ] && set -- \"$@\" \"$BOOTSTRAP_PROMPT\""),
+            codex.contains("[ \"$RESUMED\" = 0 ] && set -- \"$@\" \"$BOOTSTRAP_PROMPT\""),
             "codex must pass the bootstrap positional on fresh spawns only",
         );
         assert!(
-            DEFAULT_WRAPPER.contains("nudge_resumed_codex"),
-            "wrapper must define the resumed-codex wake-up nudge",
+            DEFAULT_WRAPPER.contains("nudge_resumed_session"),
+            "wrapper must define the resumed-session wake-up nudge",
         );
         assert!(
             DEFAULT_WRAPPER.contains("Restarted mid-shift: call inbox_peek"),
@@ -1201,23 +1201,137 @@ mod tests {
         );
     }
 
-    /// Codex resume crash-loop self-heal: a corrupt rollout makes
-    /// `codex resume --last` die instantly on every boot, and the
-    /// resume probe re-matches it forever. The wrapper counts
-    /// consecutive fast resume-path exits and moves the sessions dir
-    /// to `sessions.crash-bak` after the third, so the next boot is
-    /// fresh. Pin the counter, the threshold, and the move-aside path
-    /// so a silent edit can't reintroduce the infinite crash loop.
+    /// Resume crash-loop self-heal: a corrupt session store makes the
+    /// resume path (`codex resume --last`, `opencode -c`) die instantly
+    /// on every boot, and the resume probe re-matches it forever. The
+    /// wrapper counts consecutive fast resume-path exits (a single
+    /// counter shared by both runtimes — the probes set the shared
+    /// RESUMED flag) and moves the runtime's session store aside after
+    /// the third, so the next boot is fresh. Pin the counter, the
+    /// threshold, and both move-aside paths so a silent edit can't
+    /// reintroduce the infinite crash loop for either runtime.
     #[test]
-    fn wrapper_codex_resume_crash_loop_self_heal_present() {
+    fn wrapper_resume_crash_loop_self_heal_present() {
         for marker in [
-            "CODEX_FAST_FAILS=$((CODEX_FAST_FAILS + 1))",
-            "[ \"$CODEX_FAST_FAILS\" -ge 3 ]",
+            "RESUME_FAST_FAILS=$((RESUME_FAST_FAILS + 1))",
+            "[ \"$RESUME_FAST_FAILS\" -ge 3 ]",
             "$CODEX_HOME/sessions.crash-bak",
+            "$OC_HOME/db.crash-bak",
+            "mv \"$OPENCODE_DB\" \"$OPENCODE_DB-shm\" \"$OPENCODE_DB-wal\" \"$OC_HOME/db.crash-bak/\"",
         ] {
             assert!(
                 DEFAULT_WRAPPER.contains(marker),
                 "DEFAULT_WRAPPER missing marker: {marker}",
+            );
+        }
+    }
+
+    /// The opencode case body of the wrapper, sliced between the case
+    /// label and its `;;` terminator — same trap as
+    /// [`wrapper_codex_branch`]: negative assertions must not be fouled
+    /// by other branches' legitimate use of the same flags. (The
+    /// wrapper itself never writes the literal case-label string in
+    /// comments outside the branch, so `find` lands on the real label.)
+    fn wrapper_opencode_branch() -> &'static str {
+        let start = DEFAULT_WRAPPER
+            .find("opencode)")
+            .expect("DEFAULT_WRAPPER has an opencode case");
+        let body = &DEFAULT_WRAPPER[start..];
+        let end = body.find(";;").expect("opencode case terminated by ;;");
+        &body[..end]
+    }
+
+    /// OpenCode launch correctness: MCP + instructions ride the
+    /// per-agent OPENCODE_CONFIG json (no --mcp-config flag), the TUI
+    /// auto-upgrades the shared binary in place unless
+    /// OPENCODE_DISABLE_AUTOUPDATE=1 is exported (verified
+    /// 1.17.13→1.17.18 mid-run), missing auth silently falls back to
+    /// free anonymous models (so the wrapper must warn), and `effort:`
+    /// has no TUI mapping (`--variant` is run-subcommand only). Pin all
+    /// four so a silent wrapper edit can't regress any of them.
+    #[test]
+    fn wrapper_opencode_launch_shape_present() {
+        let opencode = wrapper_opencode_branch();
+        assert!(
+            opencode.contains("export OPENCODE_DISABLE_AUTOUPDATE=1"),
+            "opencode branch must disable the in-place binary autoupdate",
+        );
+        assert!(
+            opencode.contains("$HOME/.local/share/opencode/auth.json")
+                && opencode.contains("free anonymous models"),
+            "opencode branch must warn when auth.json is absent (silent free-tier fallback)",
+        );
+        assert!(
+            opencode.contains("--model \"$MODEL\""),
+            "opencode branch must thread model (provider/model form)",
+        );
+        assert!(
+            !opencode.contains("--mcp-config \"$MCP_CONFIG\""),
+            "opencode has no --mcp-config flag — MCP goes through OPENCODE_CONFIG json",
+        );
+        assert!(
+            !opencode.contains("--effort") && !opencode.contains("--variant \""),
+            "effort is unsupported on opencode v1 — no flag may be wired",
+        );
+        assert!(
+            !opencode.contains("AUTO_CONFIRM=1"),
+            "opencode boots straight to the composer — no dialogs to auto-confirm",
+        );
+    }
+
+    /// OpenCode permission mapping: attended keeps opencode's own
+    /// interactive ask-prompts; everything else — including
+    /// bypassPermissions, since opencode has no full-bypass equivalent
+    /// (--yolo closed not-planned upstream) — maps to `--auto`
+    /// (auto-approve anything not explicitly denied).
+    #[test]
+    fn wrapper_opencode_permission_mapping_present() {
+        let opencode = wrapper_opencode_branch();
+        assert!(
+            opencode.contains("set -- \"$@\" --auto"),
+            "opencode headless default must be --auto",
+        );
+        // Match the full flag usage, not the bare flag name — the
+        // branch's comments legitimately name codex's --yolo to explain
+        // why bypassPermissions downgrades to --auto here.
+        assert!(
+            !opencode.contains("set -- \"$@\" --yolo"),
+            "opencode has no full-bypass flag — bypassPermissions downgrades to --auto",
+        );
+        assert!(
+            opencode.contains("[ \"${PERMISSION_MODE:-}\" = \"attended\" ]"),
+            "opencode branch must keep the set -u-safe attended opt-out",
+        );
+    }
+
+    /// OpenCode session resume: the per-agent OPENCODE_DB isolates the
+    /// session store, so the wrapper probes for the db file and
+    /// continues the prior conversation with `-c` — scoped to the cwd
+    /// within that db, which is exact per agent. The resume path must
+    /// NOT pass `--prompt` (the one-shot nudge re-grounds the agent);
+    /// fresh spawns pass the bootstrap via `--prompt`, a flag, not a
+    /// positional. Pin the probe, the flag selection, and the set -u
+    /// defaults for the env-file-rendered vars.
+    #[test]
+    fn wrapper_opencode_resume_branch_present() {
+        let opencode = wrapper_opencode_branch();
+        assert!(
+            opencode.contains("[ -n \"$OPENCODE_DB\" ] && [ -f \"$OPENCODE_DB\" ]"),
+            "opencode resume probe must check the per-agent db file",
+        );
+        assert!(
+            opencode.contains("set -- \"$@\" -c"),
+            "opencode resume path must continue via -c",
+        );
+        assert!(
+            opencode
+                .contains("[ \"$RESUMED\" = 0 ] && set -- \"$@\" --prompt \"$BOOTSTRAP_PROMPT\""),
+            "opencode must pass the bootstrap via --prompt on fresh spawns only",
+        );
+        for marker in [": \"${OPENCODE_DB:=}\"", ": \"${OPENCODE_CONFIG:=}\""] {
+            assert!(
+                DEFAULT_WRAPPER.contains(marker),
+                "DEFAULT_WRAPPER missing set -u default: {marker}",
             );
         }
     }
