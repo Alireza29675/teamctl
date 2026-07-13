@@ -1057,6 +1057,17 @@ pub fn render_codex_config(
         "\n[projects.{}]\ntrust_level = \"trusted\"\n",
         toml_str(&cwd.display().to_string())
     ));
+    // Allow network from inside the workspace-write sandbox (the wrapper's
+    // headless default `-s workspace-write`). Without it codex can't reach
+    // github.com etc., so agents fall back to ChatGPT connector apps
+    // (`codex_apps.github.*`) for git work — and those hit a per-tool
+    // approval prompt teamctl can't pre-seed (the connector id is
+    // account-specific) and would strand an unattended pane. With network
+    // on, agents use plain `git`/`gh`/`curl`, the same tooling claude-code
+    // agents already have. The filesystem stays sandboxed to the workspace
+    // + temp dirs, so this is still tighter than claude-code (which isn't
+    // network-sandboxed at all). Inert under `attended`/`--yolo` sandboxes.
+    s.push_str("\n[sandbox_workspace_write]\nnetwork_access = true\n");
     Some(s)
 }
 
@@ -1651,6 +1662,12 @@ mod tests {
         assert!(
             toml.contains("trust_level = \"trusted\""),
             "toml was: {toml}"
+        );
+        // Network is on inside the workspace-write sandbox so agents use
+        // plain git/gh instead of connector apps that would prompt.
+        assert!(
+            toml.contains("[sandbox_workspace_write]\nnetwork_access = true"),
+            "toml must enable sandbox network: {toml}"
         );
     }
 
