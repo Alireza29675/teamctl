@@ -244,7 +244,7 @@ pub fn stage_to_tempfile(
     if needs_write {
         // Atomic write via tempfile + rename so a crash mid-write
         // can't leave a half-baked stage file with the canonical name.
-        let tmp = staging_dir.join(format!("{}.tmp", &accepted.blake3_hex));
+        let tmp = staging_dir.join(format!("{}.tmp", accepted.blake3_hex));
         fs::write(&tmp, &accepted.bytes)?;
         fs::rename(&tmp, &path)?;
     } else {
