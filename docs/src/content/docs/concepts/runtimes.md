@@ -4,11 +4,13 @@ title: Runtimes
 
 A **runtime** is the CLI binary behind an agent. teamctl ships adapters for the three major AI coding CLIs — they can all mix freely inside one team.
 
-| Runtime | Binary | MCP | Session resume | Notes |
-|---|---|---|---|---|
-| Claude Code | `claude` | yes | always-on (deterministic UUID; `--session-id` to create, `--resume` to attach) | The default. Strongest for planning + tool use. |
-| Codex CLI | `codex` | yes (via per-agent `CODEX_HOME` config.toml) | `resume --last` scoped to per-agent `CODEX_HOME` | OpenAI's CLI. Good for deep reasoning on patches. |
-| Gemini CLI | `gemini` | yes (0.3+) | n/a (loop-restart) | 1M-token context makes it great for research. |
+| Runtime | Binary | MCP | Session resume | Inbox delivery | Notes |
+|---|---|---|---|---|---|
+| Claude Code | `claude` | yes | always-on (deterministic UUID; `--session-id` to create, `--resume` to attach) | channel push (`<channel>` events) | The default. Strongest for planning + tool use. |
+| Codex CLI | `codex` | yes (via per-agent `CODEX_HOME` config.toml) | `resume --last` scoped to per-agent `CODEX_HOME` | supervisor tmux nudge (📬 note in the pane) | OpenAI's CLI. Good for deep reasoning on patches. |
+| Gemini CLI | `gemini` | yes (0.3+) | n/a (loop-restart) | supervisor tmux nudge (📬 note in the pane) | 1M-token context makes it great for research. |
+
+**Inbox delivery** is how an agent learns new mail arrived. Claude Code gets it pushed into the session as `<channel source="team">` events (Claude Code Channels). Codex and Gemini treat MCP as strictly request/response and drop unsolicited notifications, so `team-mcp` types a short `📬 N new team message(s)` nudge into the agent's tmux pane instead; the agent then drains its mailbox via `inbox_peek` / `inbox_read` / `inbox_ack`. Either way, agents react on arrival — nobody polls.
 
 For Claude Code, every spawn uses a UUIDv5 derived deterministically from `teamctl:<project>:<agent>`. The wrapper passes `--session-id <uuid>` to create the session on first spawn, and `--resume <uuid>` on every subsequent spawn once the session jsonl exists. Same UUID either way, so an agent's context survives `teamctl down`/`up`, crash recovery, and host reboots without operator action. If the session-file at that UUID is ever removed (manual cleanup, claude session-dir reset), the wrapper falls back to `--session-id` and claude recreates a fresh session at the same UUID. Self-healing by construction.
 
