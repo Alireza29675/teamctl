@@ -277,8 +277,14 @@ fn spawn_channel_watcher(
             };
             let mut max_id = last_seen;
             let mut fresh = 0usize;
+            // First fresh row's (sender, body) feeds the nudge preview so
+            // non-claude agents can triage without an inbox_read round-trip.
+            let mut first_fresh: Option<(String, String)> = None;
             for m in msgs.iter().filter(|m| m.id > last_seen) {
                 fresh += 1;
+                if first_fresh.is_none() {
+                    first_fresh = Some((m.sender.clone(), m.text.clone()));
+                }
                 // Emitted for every runtime: claude injects it as a
                 // `<channel>` event; non-claude clients ignore unsolicited
                 // notifications, so keeping the emit path single-shape is
@@ -333,9 +339,13 @@ fn spawn_channel_watcher(
                     }
                 };
                 if mode == DeliveryMode::Nudge {
-                    if let Some(session) = nudge_session.clone() {
+                    // `first_fresh` is always Some here (`fresh > 0`), but
+                    // matching both keeps the dispatch obviously panic-free.
+                    if let (Some(session), Some((sender, body))) =
+                        (nudge_session.clone(), first_fresh.take())
+                    {
                         tokio::task::spawn_blocking(move || {
-                            let argv = inbox_nudge_argv(&session, fresh);
+                            let argv = inbox_nudge_argv(&session, &sender, &body, fresh);
                             match std::process::Command::new("tmux").args(argv).output() {
                                 Ok(o) if !o.status.success() => {
                                     let stderr = String::from_utf8_lossy(&o.stderr);
@@ -390,22 +400,68 @@ fn delivery_mode(runtime: Option<&str>) -> DeliveryMode {
 }
 
 /// Argv for the tmux send-keys invocation that announces `new_rows` fresh
-/// inbox rows in the agent's pane. Pulled out (like `tools::compact_self_argv`)
-/// so unit tests pin the exact arg shape without spinning up tmux. The
-/// text lands in the agent's composer as a user message, so it stays
-/// short and points at the mailbox tools; the trailing `Enter` keyword
-/// makes tmux fire a Return so the runtime actually processes it.
-fn inbox_nudge_argv(session: &str, new_rows: usize) -> [String; 5] {
+/// inbox rows in the agent's pane, carrying the first row's sender and a
+/// short body preview so the agent can triage without an `inbox_read`
+/// round-trip. Pulled out (like `tools::compact_self_argv`) so unit tests
+/// pin the exact arg shape without spinning up tmux. The text lands in
+/// the agent's composer as a user message, so it stays short and points
+/// at the mailbox tools; the trailing `Enter` keyword makes tmux fire a
+/// Return so the runtime actually processes it.
+///
+/// `sender` and `body` are UNTRUSTED message data typed into a keyboard
+/// surface — both go through `pane_safe_line`, and the line always opens
+/// with the fixed `📬 ` prefix so no message can put its own first byte
+/// on the composer line (a leading `/` would run as a slash command).
+fn inbox_nudge_argv(session: &str, sender: &str, body: &str, new_rows: usize) -> [String; 5] {
+    const PREVIEW_CHARS: usize = 80;
+    let sender = pane_safe_line(sender);
+    let clean = pane_safe_line(body);
+    let mut preview: String = clean.chars().take(PREVIEW_CHARS).collect();
+    if clean.chars().count() > PREVIEW_CHARS {
+        preview.push('…');
+    }
+    let more = if new_rows > 1 {
+        format!(" (+{} more)", new_rows - 1)
+    } else {
+        String::new()
+    };
+    let head = if preview.is_empty() {
+        // Non-text rows (kind set, empty body) still get a sane line.
+        format!("📬 {sender}: new message{more}")
+    } else {
+        format!("📬 {sender}: \"{preview}\"{more}")
+    };
     [
         "send-keys".into(),
         "-t".into(),
         session.into(),
         format!(
-            "📬 {new_rows} new team message(s) — call inbox_peek, \
+            "{head} — call inbox_peek, \
              then inbox_read each meta.id and inbox_ack when handled."
         ),
         "Enter".into(),
     ]
+}
+
+/// Sanitize untrusted text for a line *typed* into a tmux pane: collapse
+/// every whitespace run (`\n`, `\r`, `\t`, …) to a single space and drop
+/// all other ASCII control chars (< 0x20 and DEL), ESC included.
+///
+/// Deliberately separate from `notification_stub`'s preview: that one
+/// travels as JSON and lands inside a `<channel>` event where newlines
+/// and control bytes are inert. The keyboard path is an execution
+/// surface — a newline submits the composer, ESC can drive the runtime's
+/// TUI, and a line starting with `/` runs as a slash command — so it
+/// needs this stricter, pane-safe treatment.
+fn pane_safe_line(text: &str) -> String {
+    text.chars()
+        // Keep whitespace controls (\n, \r, \t) for the collapse below;
+        // drop every other ASCII control outright.
+        .filter(|c| !c.is_ascii_control() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Build the JSON-RPC notification per Claude Code's Channels wire format.
@@ -523,25 +579,96 @@ mod tests {
 
     #[test]
     fn inbox_nudge_argv_batches_count_and_ends_with_enter_keyword() {
-        // Pin the wire shape: one send-keys per poll tick, the row count
-        // baked into the body, and `Enter` as a separate argv element so
-        // tmux fires a Return and the runtime submits the note.
-        let argv = inbox_nudge_argv("t-p-mgr", 2);
+        // Pin the wire shape: one send-keys per poll tick, the first
+        // row's sender + preview and the batch remainder baked into the
+        // body, and `Enter` as a separate argv element so tmux fires a
+        // Return and the runtime submits the note.
+        let argv = inbox_nudge_argv("t-p-mgr", "hello:hugo", "standup in 5", 3);
         assert_eq!(argv[0], "send-keys");
         assert_eq!(argv[1], "-t");
         assert_eq!(argv[2], "t-p-mgr");
-        assert!(
-            argv[3].starts_with("📬 2 new team message(s)"),
-            "nudge body must lead with the batched count: {}",
-            argv[3]
-        );
-        assert!(
-            argv[3].contains("inbox_peek")
-                && argv[3].contains("inbox_read")
-                && argv[3].contains("inbox_ack"),
-            "nudge body must point at the mailbox tools: {}",
-            argv[3]
+        assert_eq!(
+            argv[3],
+            "📬 hello:hugo: \"standup in 5\" (+2 more) — call inbox_peek, \
+             then inbox_read each meta.id and inbox_ack when handled."
         );
         assert_eq!(argv[4], "Enter");
+
+        // Exactly one fresh row: no `(+N more)` tail.
+        let single = inbox_nudge_argv("t-p-mgr", "hello:hugo", "ping", 1);
+        assert!(
+            !single[3].contains("more"),
+            "single-row nudge must not carry a batch tail: {}",
+            single[3]
+        );
+    }
+
+    #[test]
+    fn inbox_nudge_always_starts_with_the_fixed_mailbox_prefix() {
+        // The typed line is an execution surface: a composer line
+        // starting with `/` runs as a slash command. The fixed `📬 `
+        // prefix guarantees no untrusted sender or body ever supplies
+        // the line's first byte.
+        let argv = inbox_nudge_argv("s", "/quit", "/compact", 1);
+        assert!(
+            argv[3].starts_with("📬 "),
+            "nudge must open with the fixed prefix: {}",
+            argv[3]
+        );
+    }
+
+    #[test]
+    fn pane_safe_line_collapses_newlines_and_strips_controls() {
+        // An embedded `\n/compact\n` must never reach the pane as its
+        // own line — newlines submit, and a line starting with `/`
+        // executes as a slash command.
+        assert_eq!(
+            pane_safe_line("please\n/compact\nnow"),
+            "please /compact now"
+        );
+        // ESC (and every other non-whitespace ASCII control, DEL
+        // included) is dropped so bodies can't drive the runtime's TUI.
+        assert_eq!(pane_safe_line("red\x1b[31malert\x07\x7f"), "red[31malert");
+        // Tabs, CRs, and runs of mixed whitespace collapse to single spaces.
+        assert_eq!(pane_safe_line("a\t\tb\r\n  c"), "a b c");
+    }
+
+    #[test]
+    fn inbox_nudge_sanitizes_sender_too() {
+        // The sender column is data as much as the body is — it must go
+        // through the same pane-safe treatment.
+        let argv = inbox_nudge_argv("s", "evil\nname\x1b", "hi", 1);
+        assert!(
+            argv[3].starts_with("📬 evil name: \"hi\""),
+            "sender must come out control-free and single-line: {}",
+            argv[3]
+        );
+    }
+
+    #[test]
+    fn inbox_nudge_preview_truncates_multibyte_on_char_boundary() {
+        // `chars().take()` truncation must hold for multibyte scalars —
+        // no panic, 80 chars plus the ellipsis, never 81.
+        let body = "🦀".repeat(200);
+        let argv = inbox_nudge_argv("s", "hello:dev", &body, 1);
+        assert!(
+            argv[3].contains(&format!("\"{}…\"", "🦀".repeat(80))),
+            "preview must cap at 80 chars with an ellipsis: {}",
+            argv[3]
+        );
+        assert!(!argv[3].contains(&"🦀".repeat(81)));
+    }
+
+    #[test]
+    fn inbox_nudge_empty_body_still_produces_a_sane_line() {
+        // Whitespace-only (or kind-only, empty-text) rows must not yield
+        // a dangling empty quote.
+        let argv = inbox_nudge_argv("s", "hello:dev", "  \n\t ", 2);
+        assert!(
+            argv[3].starts_with("📬 hello:dev: new message (+1 more)"),
+            "empty body must fall back to a plain announcement: {}",
+            argv[3]
+        );
+        assert!(argv[3].contains("inbox_peek"));
     }
 }

@@ -1311,10 +1311,11 @@ mod tests {
     /// Delivery differs per runtime, so the bootstrap default must too:
     /// claude-code keeps the Channels text (events pushed into the
     /// session, no polling); every other runtime gets the honest story —
-    /// team-mcp types "📬 N new team message(s)" nudges into the pane,
-    /// and the agent starts with an `inbox_peek` catch-up. Telling a
-    /// non-claude agent "traffic is delivered as channel events" strands
-    /// it idle forever, because its runtime drops MCP notifications.
+    /// team-mcp types `📬 sender: "preview…" (+N more)` nudges into the
+    /// pane, and the agent starts with an `inbox_peek` catch-up. Telling
+    /// a non-claude agent "traffic is delivered as channel events"
+    /// strands it idle forever, because its runtime drops MCP
+    /// notifications.
     #[test]
     fn wrapper_bootstrap_prompt_dispatches_on_runtime() {
         let block = wrapper_bootstrap_block();
@@ -1334,10 +1335,10 @@ mod tests {
             "non-claude prompt must instruct the startup inbox_peek catch-up",
         );
         assert!(
-            other.contains("📬 N new team message(s)")
+            other.contains("(+N more)")
                 && other.contains("inbox_read")
                 && other.contains("inbox_ack"),
-            "non-claude prompt must describe the tmux nudge and the drain loop",
+            "non-claude prompt must describe the nudge's preview shape and the drain loop",
         );
         assert!(
             !other.to_lowercase().contains("channel"),
