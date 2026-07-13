@@ -165,6 +165,28 @@ auto_confirm_known_dialogs() {
     done
 }
 
+# A resumed codex TUI reopens the prior conversation but sits idle:
+# no prompt is injected on the resume path (see the resume probe in
+# the codex case below), so without a wake-up the agent would wait
+# forever for input that never comes. One-shot nudge: sleep past the
+# TUI boot, then type a short catch-up instruction into our own pane
+# and press Enter. Deliberately dumb — one sleep, one send-keys, no
+# retry loop; worst case the text sits in the composer for an
+# attached operator to see. No-op outside tmux (TMUX_PANE unset),
+# same guard as the auto-confirm watcher.
+nudge_resumed_codex() {
+    pane="${TMUX_PANE:-${TMUX_SESSION:-}}"
+    [ -z "$pane" ] && return 0
+    command -v tmux >/dev/null 2>&1 || return 0
+    sleep 5
+    tmux send-keys -t "$pane" "Restarted mid-shift: call inbox_peek to catch up on anything that arrived while you were down, then resume your role." Enter
+}
+
+# Consecutive fast codex-resume failures (see the self-heal block at
+# the bottom of the loop). Lives outside the loop so it survives
+# across restarts.
+CODEX_FAST_FAILS=0
+
 # Build the runtime invocation as the script's positional parameters.
 # Doing this in-line (instead of in a function) keeps the args quoted —
 # previous versions stuffed everything into a single $BIN_ARGS string and
@@ -332,6 +354,26 @@ while :; do
                     ln -s "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json"
                 fi
             fi
+            # Session persistence: codex writes JSONL rollouts under
+            # $CODEX_HOME/sessions/YYYY/MM/DD/ and has no deterministic
+            # session-id-at-spawn flag (unlike claude's --session-id).
+            # But the per-agent CODEX_HOME isolates the session store,
+            # so "the most recent session in this home" IS this agent's
+            # session — `codex resume --last` becomes exact. The
+            # subcommand must lead the argv (`codex resume --last
+            # [flags]`), so it's spliced in before the flags below. No
+            # bootstrap positional on the resume path: whether `resume`
+            # accepts a PROMPT is unverified upstream, so the one-shot
+            # nudge (armed after the case) re-grounds the agent instead.
+            # Self-healing like the claude branch: remove the sessions
+            # dir and the next spawn falls through to a fresh boot, no
+            # operator action needed.
+            CODEX_RESUME=0
+            if [ -n "$CODEX_HOME" ] && \
+                ls "$CODEX_HOME/sessions"/*/*/*/*.jsonl >/dev/null 2>&1; then
+                set -- resume --last
+                CODEX_RESUME=1
+            fi
             [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
             # Codex has no --effort flag; reasoning effort rides the
             # repeatable `-c KEY=VALUE` config override. Values pass
@@ -360,8 +402,9 @@ while :; do
             else
                 set -- "$@" -a never -s workspace-write
             fi
-            # The codex TUI takes the bootstrap as a positional PROMPT.
-            set -- "$@" "$BOOTSTRAP_PROMPT"
+            # The codex TUI takes the bootstrap as a positional PROMPT —
+            # fresh spawns only; a resumed session gets the nudge.
+            [ "$CODEX_RESUME" = 0 ] && set -- "$@" "$BOOTSTRAP_PROMPT"
             AUTO_CONFIRM=1
             ;;
         gemini)
@@ -386,6 +429,13 @@ while :; do
     fi
     AUTO_CONFIRM=0
 
+    NUDGE_PID=
+    if [ "${CODEX_RESUME:-0}" = 1 ]; then
+        nudge_resumed_codex &
+        NUDGE_PID=$!
+    fi
+
+    RUN_STARTED=$(date +%s)
     if command -v teamctl >/dev/null 2>&1; then
         teamctl --root "$TEAMCTL_ROOT" rl-watch "$AGENT" -- "$BIN" "$@"
     else
@@ -393,10 +443,15 @@ while :; do
         "$BIN" "$@"
     fi
     ec=$?
+    RUN_ENDED=$(date +%s)
 
     if [ -n "$AUTO_CONFIRM_PID" ]; then
         kill "$AUTO_CONFIRM_PID" 2>/dev/null
         wait "$AUTO_CONFIRM_PID" 2>/dev/null
+    fi
+    if [ -n "$NUDGE_PID" ]; then
+        kill "$NUDGE_PID" 2>/dev/null
+        wait "$NUDGE_PID" 2>/dev/null
     fi
 
     # Self-heal a session-id collision (see the resume-probe above). If we
@@ -414,6 +469,25 @@ while :; do
         continue
     fi
     FORCE_FRESH_SESSION=0
+
+    # A corrupt rollout can make `codex resume --last` die instantly on
+    # every boot — the resume probe re-matches the same rollout each
+    # time, so the restart loop would spin forever. Self-heal in the
+    # same spirit as the claude branch: after 3 consecutive resume-path
+    # exits that lasted under 60s, move the sessions dir aside so the
+    # next boot falls through to a fresh spawn. A long-lived session or
+    # a fresh-path boot resets the counter.
+    if [ "${CODEX_RESUME:-0}" = 1 ] && [ $((RUN_ENDED - RUN_STARTED)) -lt 60 ]; then
+        CODEX_FAST_FAILS=$((CODEX_FAST_FAILS + 1))
+        if [ "$CODEX_FAST_FAILS" -ge 3 ]; then
+            rm -rf "$CODEX_HOME/sessions.crash-bak"
+            mv "$CODEX_HOME/sessions" "$CODEX_HOME/sessions.crash-bak" 2>/dev/null
+            log "3 fast codex resume failures — moved $CODEX_HOME/sessions to $CODEX_HOME/sessions.crash-bak; next boot is fresh"
+            CODEX_FAST_FAILS=0
+        fi
+    else
+        CODEX_FAST_FAILS=0
+    fi
 
     log "runtime exited ec=$ec — restarting in 5s"
     sleep 5

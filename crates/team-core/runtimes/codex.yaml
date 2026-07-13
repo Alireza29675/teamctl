@@ -4,7 +4,10 @@
 # MCP stdio: codex has no --mcp-config flag; servers are read from
 # [mcp_servers.*] tables in the per-agent CODEX_HOME/config.toml that
 # team-core renders under state/codex-home/.
-# Session resume: profile-based (see `--profile`).
+# Session resume: rollout JSONLs ride the per-agent CODEX_HOME, so the
+# wrapper probes its sessions/ dir and reopens the newest one with
+# `codex resume --last`. Upstream has no deterministic session-id
+# flag — the isolated store is what makes --last exact.
 #
 # No default_model: codex picks its own configured default; upstream
 # model names rotate too fast to pin here.
@@ -18,7 +21,7 @@
 
 binary: codex
 supports_mcp: true
-session_resume: "profile"
+session_resume: "resume-last"
 
 rate_limit_patterns:
   - match: "(?i)rate.?limit"

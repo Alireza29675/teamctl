@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
 use team_core::render::{
-    boot_script_path, claude_settings_path, env_path, mcp_path, render_agent,
+    boot_script_path, claude_settings_path, codex_home_dir, env_path, mcp_path, render_agent,
     render_claude_settings, write_agent_skills, write_codex_config, write_role_prompt_concat,
     write_subagents_json,
 };
@@ -88,7 +88,7 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
         // running agents here; `reload --fresh` is the path to refresh a
         // running agent's conversation.
         if !running {
-            freshen_for_spec(&spec, &h.spec.runtime, fresh);
+            freshen_for_spec(&compose.root, &spec, &h.spec.runtime, fresh);
         }
         sup.up(&spec)?;
         println!("up · {}{}", h.id(), fresh_suffix(fresh && !running));
@@ -298,10 +298,15 @@ fn record_in_registry_in(dir: &Path, compose: &Compose, scoped: Option<&str>) {
 pub(crate) enum FreshenAction {
     /// `--fresh` not set: do nothing.
     Skip,
-    /// `--fresh` on a non-Claude runtime: warn and skip (parity gap).
+    /// `--fresh` on a runtime with no mapped session model (gemini):
+    /// warn and skip (parity gap).
     UnsupportedRuntime,
     /// `--fresh` on a Claude agent: move its session aside.
     Freshen,
+    /// `--fresh` on a codex agent: move its per-agent CODEX_HOME
+    /// sessions dir aside (`.bak` recovery copy) so the wrapper's
+    /// resume probe falls through to a fresh spawn.
+    WipeCodexSessions,
 }
 
 /// Resolve `(runtime, fresh)` to a [`FreshenAction`]. Pure — no I/O.
@@ -310,27 +315,33 @@ pub(crate) fn freshen_action(runtime: &str, fresh: bool) -> FreshenAction {
         FreshenAction::Skip
     } else if runtime == "claude-code" {
         FreshenAction::Freshen
+    } else if runtime == "codex" {
+        FreshenAction::WipeCodexSessions
     } else {
         FreshenAction::UnsupportedRuntime
     }
 }
 
-/// T-352: when `--fresh` is set, move the agent's Claude session JSONL
-/// aside just before it (re)spawns so the wrapper opens a brand-new
-/// conversation at the same deterministic UUID (re-running
-/// `BOOTSTRAP_PROMPT`). Durable on-disk files are never touched.
+/// T-352: when `--fresh` is set, drop the agent's session state just
+/// before it (re)spawns so the wrapper opens a brand-new conversation
+/// (re-running `BOOTSTRAP_PROMPT`). Claude: move the session JSONL
+/// aside (same deterministic UUID, `.bak` recovery copy kept). Codex:
+/// move the per-agent CODEX_HOME `sessions/` subdir to `sessions.bak`
+/// (same recovery-copy parity) — the wrapper's resume probe then finds
+/// no rollout and boots fresh; config.toml and the auth.json symlink
+/// live at the codex-home root and survive.
+/// Durable on-disk files are never touched.
 ///
-/// Claude runtime only: codex/gemini have different (or no) session
-/// resume, so we warn-and-skip rather than abort a mixed-runtime team
-/// (parity gap, v1). Best-effort — a move failure warns but never blocks
-/// the respawn (coming up on the existing conversation is strictly safer
-/// than refusing to start).
+/// Gemini has no session resume, so we warn-and-skip rather than abort
+/// a mixed-runtime team (parity gap). Best-effort — a failure warns but
+/// never blocks the respawn (coming up on the existing conversation is
+/// strictly safer than refusing to start).
 ///
 /// Call only for an agent that is actually being (re)spawned: freshening
 /// an agent that won't respawn would move its live session aside with no
 /// new conversation to replace it (a latent desync), so the callers gate
 /// on "about to start this agent" before calling here.
-pub(crate) fn freshen_for_spec(spec: &AgentSpec, runtime: &str, fresh: bool) {
+pub(crate) fn freshen_for_spec(root: &Path, spec: &AgentSpec, runtime: &str, fresh: bool) {
     let id = format!("{}:{}", spec.project, spec.agent);
     match freshen_action(runtime, fresh) {
         FreshenAction::Skip => {}
@@ -344,6 +355,26 @@ pub(crate) fn freshen_for_spec(spec: &AgentSpec, runtime: &str, fresh: bool) {
             };
             if let Err(e) = team_core::session::freshen_session(&home, &spec.project, &spec.agent) {
                 eprintln!("warn · {id} (--fresh: could not move session aside: {e})");
+            }
+        }
+        FreshenAction::WipeCodexSessions => {
+            // Move-aside, matching Claude's `.bak` recovery copy. An
+            // absent dir just means "nothing to freshen" (first spawn,
+            // or already fresh) — silently keep any earlier backup
+            // instead of clobbering it with nothing.
+            let home = codex_home_dir(root, &spec.project, &spec.agent);
+            let sessions = home.join("sessions");
+            if !sessions.exists() {
+                return;
+            }
+            let bak = home.join("sessions.bak");
+            if let Err(e) = fs::remove_dir_all(&bak) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("warn · {id} (--fresh: could not clear old sessions backup: {e})");
+                }
+            }
+            if let Err(e) = fs::rename(&sessions, &bak) {
+                eprintln!("warn · {id} (--fresh: could not move codex sessions aside: {e})");
             }
         }
     }
@@ -879,15 +910,16 @@ mod tests {
     /// pin them here.
     #[test]
     fn freshen_action_gates_on_fresh_and_runtime() {
-        // Watch-out (c): the codex/gemini parity carve-out. Not fresh →
-        // nothing, regardless of runtime. Fresh → freshen only Claude;
-        // every other runtime is a warn-and-skip, never an abort.
+        // Not fresh → nothing, regardless of runtime. Fresh → move
+        // Claude's session aside, move codex's per-agent sessions dir
+        // aside; gemini stays a warn-and-skip (parity gap), never an
+        // abort.
         assert_eq!(freshen_action("claude-code", false), FreshenAction::Skip);
         assert_eq!(freshen_action("codex", false), FreshenAction::Skip);
         assert_eq!(freshen_action("claude-code", true), FreshenAction::Freshen);
         assert_eq!(
             freshen_action("codex", true),
-            FreshenAction::UnsupportedRuntime
+            FreshenAction::WipeCodexSessions
         );
         assert_eq!(
             freshen_action("gemini", true),
@@ -1133,6 +1165,61 @@ mod tests {
             wrapper_codex_branch().contains("AUTO_CONFIRM=1"),
             "codex branch must opt into the auto-confirm watcher",
         );
+    }
+
+    /// Codex session resume: the per-agent CODEX_HOME isolates the
+    /// session store, so the wrapper probes it for rollout JSONLs
+    /// (sessions/YYYY/MM/DD layout) and reopens the newest one with
+    /// `codex resume --last` — subcommand before flags. The resume path
+    /// must NOT re-inject the bootstrap positional (whether `resume`
+    /// accepts a PROMPT is unverified upstream); a one-shot tmux nudge
+    /// re-grounds the agent instead. Pin the probe glob, the subcommand
+    /// shape, the fresh-only positional, and the nudge so a silent edit
+    /// can't regress any half.
+    #[test]
+    fn wrapper_codex_resume_branch_present() {
+        let codex = wrapper_codex_branch();
+        assert!(
+            codex.contains("set -- resume --last"),
+            "codex resume path must lead the argv with the resume subcommand",
+        );
+        assert!(
+            codex.contains("\"$CODEX_HOME/sessions\"/*/*/*/*.jsonl"),
+            "codex resume probe must glob the sessions/YYYY/MM/DD rollout layout",
+        );
+        assert!(
+            codex.contains("[ \"$CODEX_RESUME\" = 0 ] && set -- \"$@\" \"$BOOTSTRAP_PROMPT\""),
+            "codex must pass the bootstrap positional on fresh spawns only",
+        );
+        assert!(
+            DEFAULT_WRAPPER.contains("nudge_resumed_codex"),
+            "wrapper must define the resumed-codex wake-up nudge",
+        );
+        assert!(
+            DEFAULT_WRAPPER.contains("Restarted mid-shift: call inbox_peek"),
+            "nudge must point the resumed agent at inbox_peek catch-up",
+        );
+    }
+
+    /// Codex resume crash-loop self-heal: a corrupt rollout makes
+    /// `codex resume --last` die instantly on every boot, and the
+    /// resume probe re-matches it forever. The wrapper counts
+    /// consecutive fast resume-path exits and moves the sessions dir
+    /// to `sessions.crash-bak` after the third, so the next boot is
+    /// fresh. Pin the counter, the threshold, and the move-aside path
+    /// so a silent edit can't reintroduce the infinite crash loop.
+    #[test]
+    fn wrapper_codex_resume_crash_loop_self_heal_present() {
+        for marker in [
+            "CODEX_FAST_FAILS=$((CODEX_FAST_FAILS + 1))",
+            "[ \"$CODEX_FAST_FAILS\" -ge 3 ]",
+            "$CODEX_HOME/sessions.crash-bak",
+        ] {
+            assert!(
+                DEFAULT_WRAPPER.contains(marker),
+                "DEFAULT_WRAPPER missing marker: {marker}",
+            );
+        }
     }
 
     /// T-174: the wrapper picks `--resume` vs `--session-id` by
@@ -1618,5 +1705,80 @@ managers:
             let mode = std::fs::metadata(&boot).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o755, "boot.sh must be chmod 0o755");
         }
+    }
+
+    /// Minimal spec for exercising [`freshen_for_spec`] — only the
+    /// project/agent pair matters (they key the codex-home path).
+    fn spec_for(root: &Path, project: &str, agent: &str) -> AgentSpec {
+        AgentSpec {
+            project: project.into(),
+            agent: agent.into(),
+            tmux_session: format!("test-{project}-{agent}"),
+            wrapper: root.join("wrapper.sh"),
+            cwd: root.to_path_buf(),
+            env_file: root.join("env"),
+        }
+    }
+
+    /// T-352 parity: the codex `--fresh` arm moves the sessions dir
+    /// aside as a `sessions.bak` recovery copy (matching Claude's
+    /// `.bak`), leaves config.toml and the auth.json symlink at the
+    /// codex-home root untouched, treats a missing sessions dir as a
+    /// silent no-op (keeping any earlier backup), and replaces a
+    /// stale backup from an earlier `--fresh`.
+    #[test]
+    fn freshen_codex_moves_sessions_aside_keeping_home_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let spec = spec_for(root, "hello", "dev");
+        let home = codex_home_dir(root, "hello", "dev");
+        let sessions = home.join("sessions");
+        let bak = home.join("sessions.bak");
+
+        // Stage a rollout plus the root-level files the wrapper relies on.
+        std::fs::create_dir_all(sessions.join("2026/07/01")).unwrap();
+        std::fs::write(sessions.join("2026/07/01/rollout-1.jsonl"), "v1").unwrap();
+        std::fs::write(home.join("config.toml"), "[mcp_servers.team]").unwrap();
+        let real_auth = root.join("real-auth.json");
+        std::fs::write(&real_auth, "{}").unwrap();
+        std::os::unix::fs::symlink(&real_auth, home.join("auth.json")).unwrap();
+
+        freshen_for_spec(root, &spec, "codex", true);
+        assert!(!sessions.exists(), "sessions dir must be moved aside");
+        assert_eq!(
+            std::fs::read_to_string(bak.join("2026/07/01/rollout-1.jsonl")).unwrap(),
+            "v1",
+            "recovery copy must carry the rollout",
+        );
+        assert!(home.join("config.toml").is_file(), "config.toml survives");
+        assert!(
+            home.join("auth.json")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "auth.json symlink survives as a symlink",
+        );
+
+        // Missing sessions dir: silent no-op that keeps the backup.
+        freshen_for_spec(root, &spec, "codex", true);
+        assert!(
+            bak.join("2026/07/01/rollout-1.jsonl").is_file(),
+            "no-op freshen must not clobber the existing backup",
+        );
+
+        // A newer session replaces the pre-existing .bak wholesale.
+        std::fs::create_dir_all(sessions.join("2026/07/02")).unwrap();
+        std::fs::write(sessions.join("2026/07/02/rollout-2.jsonl"), "v2").unwrap();
+        freshen_for_spec(root, &spec, "codex", true);
+        assert!(!sessions.exists());
+        assert!(
+            !bak.join("2026/07/01/rollout-1.jsonl").exists(),
+            "stale backup must be replaced, not merged into",
+        );
+        assert_eq!(
+            std::fs::read_to_string(bak.join("2026/07/02/rollout-2.jsonl")).unwrap(),
+            "v2",
+        );
     }
 }
