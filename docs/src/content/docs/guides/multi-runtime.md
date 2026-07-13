@@ -2,7 +2,7 @@
 title: Multi-runtime teams
 ---
 
-Mix Claude Code, Codex, and Gemini freely inside one team. They all speak MCP over stdio against the same mailbox; the manager doesn't know or care which CLI a worker happens to be running.
+Mix Claude Code, Codex, OpenCode, and Gemini freely inside one team. They all speak MCP over stdio against the same mailbox; the manager doesn't know or care which CLI a worker happens to be running.
 
 ## Declaring runtimes
 
@@ -29,7 +29,7 @@ The `agent-wrapper.sh` dispatches on `$RUNTIME` and calls the matching binary wi
 
 ## Delivery parity
 
-Agents on any runtime react to new mail on arrival — only the mechanism differs. Claude Code agents get each message pushed into their session as a `<channel source="team">` event; Codex and Gemini agents get a short `📬 N new team message(s)` note typed into their tmux pane by the team mailbox, which sends them to `inbox_peek` / `inbox_read` / `inbox_ack`. The mailbox is the source of truth in both cases, so mixing runtimes never changes what a message means — just how it knocks.
+Agents on any runtime react to new mail on arrival — only the mechanism differs. Claude Code agents get each message pushed into their session as a `<channel source="team">` event; Codex, OpenCode, and Gemini agents get a short `📬 N new team message(s)` note typed into their tmux pane by the team mailbox, which sends them to `inbox_peek` / `inbox_read` / `inbox_ack`. The mailbox is the source of truth in both cases, so mixing runtimes never changes what a message means — just how it knocks.
 
 ## What each runtime supports
 
