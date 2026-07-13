@@ -239,7 +239,7 @@ fn force_restart_scoped(
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
-            super::up::freshen_for_spec(&spec, &h.spec.runtime, fresh);
+            super::up::freshen_for_spec(&compose.root, &spec, &h.spec.runtime, fresh);
             sup.up(&spec)?;
         }
         println!(
@@ -372,7 +372,7 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
-            super::up::freshen_for_spec(&spec, &h.spec.runtime, fresh);
+            super::up::freshen_for_spec(&compose.root, &spec, &h.spec.runtime, fresh);
             sup.up(&spec)?;
         }
         println!(
@@ -388,7 +388,7 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
-            super::up::freshen_for_spec(&spec, &h.spec.runtime, fresh);
+            super::up::freshen_for_spec(&compose.root, &spec, &h.spec.runtime, fresh);
             sup.up(&spec)?;
             println!("added   · {id}{}", super::up::fresh_suffix(fresh));
         }
@@ -404,7 +404,7 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
             if sup.state(&spec)? == AgentState::Stopped {
-                super::up::freshen_for_spec(&spec, &h.spec.runtime, fresh);
+                super::up::freshen_for_spec(&compose.root, &spec, &h.spec.runtime, fresh);
                 sup.up(&spec)?;
                 println!("started · {id}{}", super::up::fresh_suffix(fresh));
             }

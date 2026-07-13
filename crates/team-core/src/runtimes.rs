@@ -29,8 +29,9 @@ pub struct Runtime {
     /// no Rust caller reads this field today. The actual resume
     /// strategy is hard-coded per-runtime in `agent-wrapper.sh`:
     /// claude-code uses deterministic UUIDv5 `--session-id` (T-118),
-    /// codex resumes via `--profile`, gemini has no equivalent. Kept
-    /// to avoid breaking any operator-authored `runtimes/*.yaml`
+    /// codex reopens its newest rollout via `codex resume --last`
+    /// scoped to the per-agent CODEX_HOME, gemini has no equivalent.
+    /// Kept to avoid breaking any operator-authored `runtimes/*.yaml`
     /// override that still names the field.
     #[serde(default)]
     pub session_resume: Option<String>,
