@@ -245,8 +245,8 @@ async fn main() -> Result<()> {
 
     // T-086-H: register the manager's runtime-appropriate slash commands
     // with Telegram so the operator gets autocomplete on `/`. Manager-scoped
-    // CC bots register the curated `CC_SLASH_COMMANDS` list; non-CC and
-    // unscoped bots register nothing (clean degrade per Decision 6). The
+    // CC and Codex bots register their curated command lists; other runtimes
+    // and unscoped bots register nothing (clean degrade per Decision 6). The
     // registration is best-effort — a Telegram API error is logged but
     // doesn't abort startup, since slash-passthrough (PR-G) still works
     // when the operator types the chord manually.
@@ -664,8 +664,9 @@ async fn handle_message(bot: Bot, msg: Message, state: Arc<State>) -> ResponseRe
     } else if trimmed.starts_with('/') && state.manager.is_some() {
         // T-086-G slash-passthrough: any unrecognised slash command on a
         // manager-scoped bot gets typed straight into the manager's tmux
-        // session via `tmux send-keys`. Feature-gated on `runtime: claude-code`
-        // per Decision 6 (manager-only routing). Trust posture is "operator
+        // session via `tmux send-keys`. Feature-gated on slash-REPL runtimes
+        // (claude-code, codex) per Decision 6 (manager-only routing). Trust
+        // posture is "operator
         // owns the bot" per Decision 7 — no allowlist on slash content; the
         // bot is per-operator and chat-id-gated, the trust boundary is the
         // same as the operator's existing `tmux attach` access.
@@ -1592,7 +1593,7 @@ fn start_help_body(is_help: bool, name: Option<&str>) -> String {
             "teamctl commands:\n\
              /pending — show pending approvals\n\
              /dm <project>:<agent> <text> — send to a different agent (rare)\n\
-             /<cmd> — slash-passthrough to {name}'s tmux session (Claude Code only)\n\
+             /<cmd> — slash-passthrough to {name}'s tmux session (Claude Code and Codex)\n\
              \n\
              Just type a message to chat with {name}."
         ),
@@ -1645,15 +1646,17 @@ enum SlashOutcome {
 
 /// Pure decision: given the manager id (`<project>:<role>`), the manager's
 /// runtime, and the configured tmux prefix, decide whether slash-passthrough
-/// fires and against which tmux session. Non-Claude-Code runtimes are
-/// rejected per Decision 6 (manager-only / CC-only routing); the rejection
-/// message names the actual runtime so the operator sees why.
+/// fires and against which tmux session. Claude Code and Codex both run a
+/// slash-command REPL that reports unknown commands itself, so both get
+/// passthrough; other runtimes are rejected per Decision 6 (manager-only
+/// routing) and the rejection message names the actual runtime so the
+/// operator sees why.
 fn slash_outcome(manager: &str, runtime: &str, tmux_prefix: &str) -> SlashOutcome {
-    if runtime != "claude-code" {
+    if runtime != "claude-code" && runtime != "codex" {
         return SlashOutcome::Reject {
             reason: format!(
-                "slash-passthrough is only supported on Claude Code agents \
-                 (this manager runs `{runtime}`)."
+                "slash-passthrough is only supported on Claude Code and Codex \
+                 agents (this manager runs `{runtime}`)."
             ),
         };
     }
@@ -1729,14 +1732,33 @@ const CC_SLASH_COMMANDS: &[(&str, &str)] = &[
     ("vim", "Toggle between vim and default editing modes"),
 ];
 
+/// Curated subset of Codex CLI slash commands surfaced via Telegram's
+/// `setMyCommands` API, mirroring `CC_SLASH_COMMANDS` above. Conservative
+/// by construction: only commands verified against the upstream OpenAI
+/// docs are listed — extend as further commands are verified rather than
+/// guessing at the full set. The same Telegram charset constraint applies
+/// (`[a-z0-9_]` only), and the same maintenance note: hand-refresh on
+/// Codex CLI version bumps; operators can always type unlisted commands
+/// manually and slash-passthrough routes them to tmux just fine.
+const CODEX_SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("agent", "Inspect or switch subagent threads"),
+    ("compact", "Compact the conversation context"),
+    ("hooks", "Review and trust hooks"),
+];
+
 /// Build the runtime-appropriate `BotCommand` list for `setMyCommands`. CC
-/// managers get `CC_SLASH_COMMANDS`; everything else (codex, gemini,
-/// unknown, unscoped) gets an empty list — clean degrade per Decision 6
-/// (manager-only / CC-only routing). Pulled out as a free function so the
-/// per-runtime mapping is unit-testable without a real Telegram bot.
+/// managers get `CC_SLASH_COMMANDS`, Codex managers get
+/// `CODEX_SLASH_COMMANDS`; everything else (gemini, unknown, unscoped)
+/// gets an empty list — clean degrade per Decision 6 (manager-only
+/// routing). Pulled out as a free function so the per-runtime mapping is
+/// unit-testable without a real Telegram bot.
 fn commands_for_runtime(runtime: Option<&str>) -> Vec<BotCommand> {
     match runtime {
         Some("claude-code") => CC_SLASH_COMMANDS
+            .iter()
+            .map(|(c, d)| BotCommand::new(*c, *d))
+            .collect(),
+        Some("codex") => CODEX_SLASH_COMMANDS
             .iter()
             .map(|(c, d)| BotCommand::new(*c, *d))
             .collect(),
@@ -3794,7 +3816,7 @@ mod tests {
         assert!(body.contains("/pending"), "help must list /pending");
         assert!(body.contains("/dm"), "help must list /dm");
         assert!(
-            body.contains("slash-passthrough to Director's tmux session (Claude Code only)"),
+            body.contains("slash-passthrough to Director's tmux session (Claude Code and Codex)"),
             "help must list slash-passthrough naming the manager: {body}"
         );
         assert!(
@@ -3848,21 +3870,15 @@ mod tests {
     }
 
     #[test]
-    fn slash_outcome_rejects_codex_runtime_with_named_runtime() {
-        // Decision 6 ratify: non-CC managers reject slash-passthrough
-        // and the rejection message must name the actual runtime so the
-        // operator sees why nothing fired.
+    fn slash_outcome_passes_through_for_codex_runtime() {
+        // Codex's TUI is a slash-command REPL like Claude Code's and
+        // reports unknown commands itself, so passthrough parity is safe.
         let outcome = slash_outcome("writing:manager", "codex", "t-");
-        let SlashOutcome::Reject { reason } = outcome else {
-            panic!("non-CC runtime must reject");
-        };
-        assert!(
-            reason.contains("Claude Code"),
-            "rejection should reference Claude Code: {reason}"
-        );
-        assert!(
-            reason.contains("codex"),
-            "rejection should name the actual runtime: {reason}"
+        assert_eq!(
+            outcome,
+            SlashOutcome::Passthrough {
+                session: "t-writing-manager".into(),
+            }
         );
     }
 
@@ -3934,11 +3950,19 @@ mod tests {
     }
 
     #[test]
-    fn commands_for_runtime_returns_empty_for_codex() {
-        // Decision 6 manager-only / CC-only routing: non-CC managers
-        // register no autocomplete. Operator can still type slashes
-        // manually but won't see the CC menu.
-        assert!(commands_for_runtime(Some("codex")).is_empty());
+    fn commands_for_runtime_returns_full_codex_list_for_codex() {
+        let cmds = commands_for_runtime(Some("codex"));
+        assert_eq!(
+            cmds.len(),
+            CODEX_SLASH_COMMANDS.len(),
+            "codex manager registers the full curated list"
+        );
+        // Pin the exact set — order and descriptions included — so an
+        // edit to CODEX_SLASH_COMMANDS shows up here consciously.
+        for (cmd, (name, desc)) in cmds.iter().zip(CODEX_SLASH_COMMANDS) {
+            assert_eq!(cmd.command, *name);
+            assert_eq!(cmd.description, *desc);
+        }
     }
 
     #[test]
@@ -3987,6 +4011,36 @@ mod tests {
         // Telegram requires `BotCommand.description` to be 3-256 chars.
         // Pinning here for the same reason as the command-name test.
         for (cmd, desc) in CC_SLASH_COMMANDS {
+            assert!(
+                desc.len() >= 3 && desc.len() <= 256,
+                "description for `{cmd}` violates 3-256 char limit (got {} chars: {desc:?})",
+                desc.len()
+            );
+        }
+    }
+
+    #[test]
+    fn codex_slash_command_names_satisfy_telegram_constraints() {
+        // Same Telegram `[a-z0-9_]` / 1-32 char constraint as the CC list
+        // — trips here before a future addition hits the API and gets
+        // silently rejected.
+        for (cmd, _desc) in CODEX_SLASH_COMMANDS {
+            assert!(
+                !cmd.is_empty() && cmd.len() <= 32,
+                "command `{cmd}` violates 1-32 char limit"
+            );
+            assert!(
+                cmd.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "command `{cmd}` contains chars Telegram rejects (only [a-z0-9_])"
+            );
+        }
+    }
+
+    #[test]
+    fn codex_slash_command_descriptions_satisfy_telegram_constraints() {
+        // Telegram requires `BotCommand.description` to be 3-256 chars.
+        for (cmd, desc) in CODEX_SLASH_COMMANDS {
             assert!(
                 desc.len() >= 3 && desc.len() <= 256,
                 "description for `{cmd}` violates 3-256 char limit (got {} chars: {desc:?})",
