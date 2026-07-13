@@ -191,6 +191,17 @@ impl PickerState {
 /// Render the current screen into `buf` — the single rendering entry point,
 /// shared by the live loop (`draw`) and the snapshot helper.
 fn render(state: &PickerState, area: Rect, buf: &mut Buffer) {
+    // The full branch/browser/modal layouts need room for fixed-height art,
+    // borders, and two readable options. Ratatui's constrained rows can sit
+    // just outside a 1-row buffer, so render a compact resize prompt instead
+    // of risking an out-of-bounds write on a tiny terminal.
+    if area.width < 48 || area.height < 12 {
+        Paragraph::new("Terminal too small\nResize to continue")
+            .style(Style::default().fg(state.caps.muted()))
+            .alignment(Alignment::Center)
+            .render(area, buf);
+        return;
+    }
     match state.screen {
         Screen::Branch => render_branch(state, area, buf),
         Screen::Browse => render_browse(state, area, buf),
@@ -291,7 +302,7 @@ fn render_branch(state: &PickerState, area: Rect, buf: &mut Buffer) {
     Paragraph::new(opt0).render(line_area(rows[5]), buf);
     Paragraph::new(opt1).render(line_area(rows[6]), buf);
 
-    Paragraph::new("↑/↓ select · Enter choose · Esc cancel")
+    Paragraph::new("↑/↓ select · Enter choose · Esc/q cancel")
         .style(muted)
         .alignment(Alignment::Center)
         .render(rows[8], buf);
@@ -311,7 +322,7 @@ fn render_browse(state: &PickerState, area: Rect, buf: &mut Buffer) {
     render_list(state, panes[0], buf);
     render_detail(state, panes[1], buf);
 
-    Paragraph::new("↑/↓ select · Enter choose · Esc back")
+    Paragraph::new("↑/↓ select · Enter options · Esc back · q cancel")
         .style(Style::default().fg(state.caps.muted()))
         .alignment(Alignment::Center)
         .render(vchunks[1], buf);
@@ -453,10 +464,10 @@ fn render_create_modal(state: &PickerState, area: Rect, buf: &mut Buffer) {
     Paragraph::new(option(
         1,
         "Create and customize",
-        "scaffold, then open teamctl adjust",
+        "scaffold, then open Claude Code to customize",
     ))
     .render(rows[3], buf);
-    Paragraph::new("↑/↓ select · Enter confirm · Esc back")
+    Paragraph::new("↑/↓ select · Enter confirm · Esc back · q cancel")
         .style(Style::default().fg(state.caps.muted()))
         .alignment(Alignment::Center)
         .render(rows[6], buf);
@@ -788,5 +799,17 @@ mod tests {
         state.on_key(KeyCode::Enter); // modal open
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(state.on_event(key), Some(Outcome::Cancelled));
+    }
+
+    #[test]
+    fn picker_and_modal_do_not_panic_on_tiny_terminals() {
+        for (width, height) in [(0, 0), (1, 1), (20, 5), (40, 8)] {
+            let state = PickerState::new(mono(), vec![fixture_entry()]);
+            let _ = render_to_buffer(&state, width, height);
+
+            let mut modal = PickerState::new(mono(), vec![fixture_entry()]).browsing();
+            modal.on_key(KeyCode::Enter);
+            let _ = render_to_buffer(&modal, width, height);
+        }
     }
 }

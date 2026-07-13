@@ -21,4 +21,4 @@ expression: "buf_to_string(&render_to_buffer(&state, 100, 20))"
 │                                ││                                                                │
 │                                ││                                                                │
 └────────────────────────────────┘└────────────────────────────────────────────────────────────────┘
-                                ↑/↓ select · Enter choose · Esc back
+                          ↑/↓ select · Enter options · Esc back · q cancel

@@ -347,9 +347,11 @@ pub fn run(
     let tpl = match choice.choice {
         Choice::Cancelled => return Ok(()),
         Choice::Guided => {
-            // Picker-selected guided: confirm + exec, same as the
-            // explicit-flag branch above.
-            if !confirm("This will open Claude Code and run `/teamctl:init`. Continue?")? {
+            // The rich picker selection is already an explicit confirmation;
+            // the numbered fallback still gets the legacy Y/n guard.
+            if !choice.already_confirmed
+                && !confirm("This will open Claude Code and run `/teamctl:init`. Continue?")?
+            {
                 bail!("aborted");
             }
             exec_guided()?;
@@ -446,14 +448,9 @@ pub fn run(
     println!("✓ {} scaffolded.", target.display());
     println!();
 
-    if choice.post_create == PostCreate::Adjust {
-        super::adjust::run_confirmed_at(&parent).with_context(|| {
-            format!(
-                "{} was created, but customization could not start",
-                target.display()
-            )
-        })?;
-    }
+    finish_post_create(choice.post_create, &parent, &target, |root| {
+        super::adjust::run_confirmed_at(root)
+    })?;
 
     // The agent the operator most likely wants to attach to first — see
     // `lead_attach_target`. `None` for an agentless template (e.g.
@@ -742,6 +739,23 @@ fn choice_line(c: &Choice) -> (&'static str, &'static str) {
     }
 }
 
+fn finish_post_create(
+    post_create: PostCreate,
+    team_root: &Path,
+    target: &Path,
+    run_adjust: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    if post_create == PostCreate::Adjust {
+        run_adjust(team_root).with_context(|| {
+            format!(
+                "{} was created, but customization could not start",
+                target.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 /// Picker UX. Shows Ideate & Build / Essentials / Guided / Blank in that
 /// order with Ideate & Build as the default (Enter selects it). Returns a
 /// `Choice` so the caller can branch to exec-claude vs. file-scaffold
@@ -751,9 +765,27 @@ fn choice_line(c: &Choice) -> (&'static str, &'static str) {
 /// caller (so the picker is pure-input → pure-output). That keeps
 /// this function testable without piping a `claude` mock.
 fn choose_template_interactive() -> Result<SelectedChoice> {
-    if !RICH_PICKER_TEMPLATE_KEYS.is_empty() {
-        let catalog = picker_catalog_for_keys(RICH_PICKER_TEMPLATE_KEYS)?;
-        match try_rich_picker(&RealInitPickerHost, &catalog) {
+    choose_template_with(
+        &RealInitPickerHost,
+        RICH_PICKER_TEMPLATE_KEYS,
+        choose_template_interactive_text,
+    )
+}
+
+fn choose_template_with(
+    host: &dyn InitPickerHost,
+    catalog_keys: &[&str],
+    fallback: impl FnOnce() -> Result<Choice>,
+) -> Result<SelectedChoice> {
+    if !catalog_keys.is_empty() {
+        let catalog = match picker_catalog_for_keys(catalog_keys) {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                eprintln!("Rich picker unavailable ({error}); using the basic picker.");
+                return Ok(SelectedChoice::legacy(fallback()?));
+            }
+        };
+        match try_rich_picker(host, &catalog) {
             PickerAttempt::Selected(response) => {
                 return response_to_choice(response, &catalog);
             }
@@ -766,7 +798,7 @@ fn choose_template_interactive() -> Result<SelectedChoice> {
             PickerAttempt::Fallback(None) => {}
         }
     }
-    Ok(SelectedChoice::legacy(choose_template_interactive_text()?))
+    Ok(SelectedChoice::legacy(fallback()?))
 }
 
 fn try_rich_picker(host: &dyn InitPickerHost, catalog: &PickerCatalog) -> PickerAttempt {
@@ -1062,7 +1094,7 @@ pub fn template_list_for_cli() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     struct MockPickerHost {
         stdin_tty: bool,
@@ -1194,6 +1226,61 @@ mod tests {
     }
 
     #[test]
+    fn catalog_build_failure_degrades_to_the_basic_picker() {
+        let host = MockPickerHost::success(PickerResponse::CoDesign);
+        let fallback_called = Cell::new(false);
+        let selected = choose_template_with(&host, &["missing-template"], || {
+            fallback_called.set(true);
+            Ok(Choice::Template(
+                TEMPLATES.iter().find(|t| t.key == "blank").unwrap(),
+            ))
+        })
+        .unwrap();
+
+        assert!(fallback_called.get());
+        assert!(matches!(selected.choice, Choice::Template(t) if t.key == "blank"));
+        assert!(host.catalogs.borrow().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_picker_host_keeps_catalog_alive_and_pins_process_contract() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("teamctl-ui");
+        let captured = dir.path().join("captured.json");
+        let script = format!(
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--version\" ]; then\n\
+               echo 'teamctl-ui {}'\n\
+               exit 0\n\
+             fi\n\
+             [ \"$1\" = \"--init-picker\" ] || exit 41\n\
+             [ \"$2\" = \"--catalog\" ] || exit 42\n\
+             cat \"$3\" > \"{}\" || exit 43\n\
+             echo '{{\"action\":\"co_design\"}}'\n",
+            env!("CARGO_PKG_VERSION"),
+            captured.display()
+        );
+        fs::write(&bin, script).unwrap();
+        let mut permissions = fs::metadata(&bin).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&bin, permissions).unwrap();
+
+        let host = RealInitPickerHost;
+        assert!(host.picker_is_compatible(&bin));
+        let json = br#"{"version":1,"entries":[]}"#;
+        let child = host.run_picker(&bin, json).unwrap();
+        assert_eq!(child.exit_code, Some(0));
+        assert_eq!(
+            serde_json::from_slice::<PickerResponse>(&child.stdout).unwrap(),
+            PickerResponse::CoDesign
+        );
+        assert_eq!(fs::read(captured).unwrap(), json);
+    }
+
+    #[test]
     fn picker_response_maps_modal_choice_without_a_second_confirmation() {
         let catalog = picker_catalog_for_keys(&["ideate-and-build"]).unwrap();
         let create = response_to_choice(
@@ -1216,6 +1303,48 @@ mod tests {
         .unwrap();
         assert_eq!(customize.post_create, PostCreate::Adjust);
         assert!(customize.already_confirmed);
+
+        let co_design = response_to_choice(PickerResponse::CoDesign, &catalog).unwrap();
+        assert!(matches!(co_design.choice, Choice::Guided));
+        assert!(co_design.already_confirmed);
+    }
+
+    #[test]
+    fn customize_runs_after_creation_in_the_team_root_and_keeps_partial_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let team_root = dir.path().join("named-team");
+        let target = team_root.join(".team");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(
+            target.join("team-compose.yaml"),
+            "version: 2.0.0\nprojects: []\n",
+        )
+        .unwrap();
+        let seen_root = RefCell::new(None::<PathBuf>);
+
+        let error = finish_post_create(PostCreate::Adjust, &team_root, &target, |root| {
+            *seen_root.borrow_mut() = Some(root.to_path_buf());
+            bail!("claude missing")
+        })
+        .unwrap_err();
+
+        assert_eq!(seen_root.borrow().as_deref(), Some(team_root.as_path()));
+        assert!(target.join("team-compose.yaml").is_file());
+        let message = format!("{error:#}");
+        assert!(message.contains("was created"), "{message}");
+        assert!(
+            message.contains("customization could not start"),
+            "{message}"
+        );
+        assert!(message.contains("claude missing"), "{message}");
+
+        let called = Cell::new(false);
+        finish_post_create(PostCreate::Finish, &team_root, &target, |_| {
+            called.set(true);
+            Ok(())
+        })
+        .unwrap();
+        assert!(!called.get(), "Create as-is must not launch Adjust");
     }
 
     #[test]
