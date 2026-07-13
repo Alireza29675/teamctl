@@ -6,6 +6,10 @@
 //! - `claude/<project>-<agent>.json`   — wrapper-managed Claude Code
 //!   settings (currently a `PreToolUse` deny hook for synchronous-prompt
 //!   tools that strand a headless pane). Claude-code agents only.
+//! - `codex-home/<project>-<agent>/config.toml` — per-agent Codex home
+//!   carrying the same MCP servers as the JSON above in the
+//!   `[mcp_servers.<name>]` table form codex reads (codex has no
+//!   `--mcp-config` flag). Codex agents only.
 //! - `role_prompts/<project>-<agent>.md` (multi-file role_prompt only) —
 //!   the ordered concatenation of every source file declared in the
 //!   role's `role_prompt: [...]` list. Re-materialized on every render
@@ -110,6 +114,18 @@ pub fn lastseen_path(root: &Path, project: &str, agent: &str) -> PathBuf {
 /// identity baked into the path.
 pub fn boot_script_path(root: &Path) -> PathBuf {
     root.join("bin/boot.sh")
+}
+
+/// Absolute path to the per-agent Codex home directory. `CODEX_HOME`
+/// relocates codex's entire state root — config, sessions, history — so
+/// pointing each codex agent at its own rendered home is the clean
+/// per-process isolation mechanism: MCP tables and instructions can't
+/// collide across agents. render writes `<this>/config.toml`; the wrapper
+/// exports `CODEX_HOME=<this>` and symlinks the operator's `auth.json` in
+/// so agents share the existing login.
+pub fn codex_home_dir(root: &Path, project: &str, agent: &str) -> PathBuf {
+    root.join("state/codex-home")
+        .join(format!("{project}-{agent}"))
 }
 
 /// Rendered env + MCP content for a single agent.
@@ -749,6 +765,15 @@ fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
         let scope = agent_scope_dir(&compose.root, h.project, h.agent);
         s.push_str(&format!("CLAUDE_AGENT_SCOPE={}\n", scope.display()));
     }
+    // Codex has no `--mcp-config` flag — its MCP servers live in
+    // `[mcp_servers.*]` tables inside `$CODEX_HOME/config.toml`, and
+    // `CODEX_HOME` relocates codex's whole state root. Point each codex
+    // agent at its own rendered home (written by [`write_codex_config`])
+    // so the wrapper can export it; other runtimes must not see the var.
+    if h.spec.runtime == "codex" {
+        let home = codex_home_dir(&compose.root, h.project, h.agent);
+        s.push_str(&format!("CODEX_HOME={}\n", home.display()));
+    }
     s
 }
 
@@ -807,30 +832,52 @@ pub fn write_role_prompt_concat(compose: &Compose, h: AgentHandle<'_>) -> io::Re
     std::fs::write(&dest, buf)
 }
 
-fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> String {
+/// Args for the built-in `team` MCP stdio server. Single source of truth
+/// shared by [`render_mcp`] (JSON) and [`render_codex_config`] (TOML in
+/// the per-agent `CODEX_HOME`) so the two transports can never drift.
+fn team_server_args(compose: &Compose, h: AgentHandle<'_>) -> Vec<String> {
     let mailbox = compose.root.join(&compose.global.broker.path);
+    vec![
+        "--agent-id".into(),
+        format!("{}:{}", h.project, h.agent),
+        "--mailbox".into(),
+        mailbox.display().to_string(),
+        // T-109: compact_self resolves the caller's tmux pane
+        // as `<prefix><project>-<agent>`. Pass the configured
+        // prefix explicitly so teams overriding the default
+        // (`a-`, `oss-`, …) route the slash command to the
+        // right session. team-bot gets the same arg threaded
+        // from `teamctl bot up`; this keeps the two MCP-side
+        // and bot-side resolvers in sync.
+        "--tmux-prefix".into(),
+        compose.global.supervisor.tmux_prefix.clone(),
+        // T-32b: compose root used by `read_attachment`
+        // for `attachments:` policy + tempfile staging.
+        // Always passed so the per-agent team-mcp can
+        // serve attachment reads; the staging dir is
+        // computed under this root.
+        "--compose-root".into(),
+        compose.root.display().to_string(),
+    ]
+}
+
+/// Whether declared `mcps:` render for this agent's runtime. Fail open
+/// when the descriptor is missing: an unknown runtime is flagged at
+/// validate, and a load failure shouldn't silently drop declared servers.
+fn runtime_supports_mcp(compose: &Compose, h: AgentHandle<'_>) -> bool {
+    let runtimes = crate::runtimes::load_all(&compose.root).unwrap_or_default();
+    runtimes
+        .get(h.spec.runtime.as_str())
+        .map(|r| r.supports_mcp)
+        .unwrap_or(true)
+}
+
+fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> String {
     let mut v = serde_json::json!({
         "mcpServers": {
             "team": {
                 "command": team_mcp_bin,
-                "args": [
-                    "--agent-id", format!("{}:{}", h.project, h.agent),
-                    "--mailbox", mailbox.display().to_string(),
-                    // T-109: compact_self resolves the caller's tmux pane
-                    // as `<prefix><project>-<agent>`. Pass the configured
-                    // prefix explicitly so teams overriding the default
-                    // (`a-`, `oss-`, …) route the slash command to the
-                    // right session. team-bot gets the same arg threaded
-                    // from `teamctl bot up`; this keeps the two MCP-side
-                    // and bot-side resolvers in sync.
-                    "--tmux-prefix", compose.global.supervisor.tmux_prefix.clone(),
-                    // T-32b: compose root used by `read_attachment`
-                    // for `attachments:` policy + tempfile staging.
-                    // Always passed so the per-agent team-mcp can
-                    // serve attachment reads; the staging dir is
-                    // computed under this root.
-                    "--compose-root", compose.root.display().to_string(),
-                ],
+                "args": team_server_args(compose, h),
                 "env": {}
             }
         }
@@ -845,15 +892,7 @@ fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> Stri
     // validate) so it can never shadow the bus. env values pass through
     // verbatim; the runtime performs any `${VAR}` expansion.
     if !h.spec.mcps.is_empty() {
-        let runtimes = crate::runtimes::load_all(&compose.root).unwrap_or_default();
-        // Fail open when the descriptor is missing: an unknown runtime is
-        // flagged at validate, and a load failure shouldn't silently drop
-        // declared servers.
-        let supports_mcp = runtimes
-            .get(h.spec.runtime.as_str())
-            .map(|r| r.supports_mcp)
-            .unwrap_or(true);
-        if supports_mcp {
+        if runtime_supports_mcp(compose, h) {
             let servers = v["mcpServers"]
                 .as_object_mut()
                 .expect("mcpServers is a json object");
@@ -879,6 +918,130 @@ fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> Stri
     }
 
     serde_json::to_string_pretty(&v).expect("json")
+}
+
+/// Per-agent Codex `config.toml` for `runtime: codex` agents. Returns
+/// `None` for every other runtime. Codex has no `--mcp-config` flag —
+/// MCP servers are read from `[mcp_servers.<name>]` tables in
+/// `$CODEX_HOME/config.toml` — so this file is the codex-shaped mirror of
+/// [`render_mcp`]'s JSON: the unconditional `team` bus plus declared
+/// `mcps:` under the same `supports_mcp` gate (render_mcp already warns
+/// when the gate drops them, so this stays quiet). TOML is hand-rendered
+/// with proper string escaping — team-core carries no toml crate and one
+/// table shape doesn't earn the dependency.
+pub fn render_codex_config(
+    compose: &Compose,
+    h: AgentHandle<'_>,
+    team_mcp_bin: &str,
+) -> Option<String> {
+    if h.spec.runtime != "codex" {
+        return None;
+    }
+    let mut s = String::from(
+        "# teamctl-managed: rewritten on every `teamctl up` / `reload`.\n\
+         # Customize MCP servers through the compose file's `mcps:` field.\n",
+    );
+    push_mcp_server_table(
+        &mut s,
+        "team",
+        team_mcp_bin,
+        &team_server_args(compose, h),
+        &Default::default(),
+    );
+    if !h.spec.mcps.is_empty() && runtime_supports_mcp(compose, h) {
+        for (name, server) in &h.spec.mcps {
+            if name == "team" {
+                continue; // non-clobberable bus; validate rejects this too
+            }
+            push_mcp_server_table(&mut s, name, &server.command, &server.args, &server.env);
+        }
+    }
+    Some(s)
+}
+
+/// Write (or clear) the per-agent Codex `config.toml`. Mirrors
+/// [`write_subagents_json`]: the scoped + full render paths both call it
+/// so a `mcps:` edit flows into the agent at the next render. For
+/// non-codex agents only the managed `config.toml` is removed — never the
+/// home dir itself, which may hold codex session history worth keeping.
+pub fn write_codex_config(
+    compose: &Compose,
+    h: AgentHandle<'_>,
+    team_mcp_bin: &str,
+) -> io::Result<()> {
+    let dest = codex_home_dir(&compose.root, h.project, h.agent).join("config.toml");
+    match render_codex_config(compose, h, team_mcp_bin) {
+        Some(toml) => {
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&dest, toml)
+        }
+        None => match std::fs::remove_file(&dest) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        },
+    }
+}
+
+/// Append one `[mcp_servers.<name>]` table (plus its `.env` sub-table
+/// when non-empty) in the shape codex reads from `config.toml`.
+fn push_mcp_server_table(
+    buf: &mut String,
+    name: &str,
+    command: &str,
+    args: &[String],
+    env: &std::collections::BTreeMap<String, String>,
+) {
+    buf.push_str(&format!("\n[mcp_servers.{}]\n", toml_key(name)));
+    buf.push_str(&format!("command = {}\n", toml_str(command)));
+    let args: Vec<String> = args.iter().map(|a| toml_str(a)).collect();
+    buf.push_str(&format!("args = [{}]\n", args.join(", ")));
+    if !env.is_empty() {
+        buf.push_str(&format!("\n[mcp_servers.{}.env]\n", toml_key(name)));
+        for (k, v) in env {
+            buf.push_str(&format!("{} = {}\n", toml_key(k), toml_str(v)));
+        }
+    }
+}
+
+/// Render a string as a TOML basic string (double-quoted). Backslash,
+/// quote, and control characters are the only escapes basic strings
+/// require; everything else passes through verbatim (values are not
+/// interpolated, matching render's no-`${VAR}`-expansion rule).
+fn toml_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {
+                out.push_str(&format!("\\u{:04X}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Render a TOML key: bare when it fits TOML's bare-key charset, quoted
+/// otherwise (server names and env keys come from operator YAML and
+/// aren't constrained to bare-safe characters).
+fn toml_key(k: &str) -> String {
+    let bare = !k.is_empty()
+        && k.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if bare {
+        k.to_string()
+    } else {
+        toml_str(k)
+    }
 }
 
 #[cfg(test)]
@@ -1183,6 +1346,145 @@ mod tests {
             "declared server skipped when runtime lacks supports_mcp"
         );
         assert_eq!(servers.len(), 1);
+    }
+
+    #[test]
+    fn env_emits_codex_home_for_codex_runtime() {
+        // Codex has no --mcp-config flag; the wrapper's codex arm reads
+        // CODEX_HOME from the env file and exports it so codex finds the
+        // rendered [mcp_servers.*] config.toml.
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "codex".into();
+        let h = c.agents().next().unwrap();
+        let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+        assert!(
+            env.contains("CODEX_HOME=/teamctl/state/codex-home/hello-mgr\n"),
+            "env was: {env}"
+        );
+    }
+
+    #[test]
+    fn env_omits_codex_home_for_non_codex_runtimes() {
+        // Only the codex arm consumes CODEX_HOME; leaking it into other
+        // runtimes' envs would relocate their state if a same-named knob
+        // ever appears. Pin the gate for claude-code and gemini both.
+        for runtime in ["claude-code", "gemini"] {
+            let mut c = fixture();
+            c.projects[0].managers.get_mut("mgr").unwrap().runtime = runtime.into();
+            let h = c.agents().next().unwrap();
+            let (env, _) = render_agent(&c, h, "/usr/local/bin/team-mcp");
+            assert!(
+                !env.contains("CODEX_HOME="),
+                "{runtime} must not get CODEX_HOME: {env}"
+            );
+        }
+    }
+
+    #[test]
+    fn codex_config_present_with_team_server_for_codex_runtime() {
+        let mut c = fixture();
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "codex".into();
+        let h = c.agents().next().unwrap();
+        let toml = render_codex_config(&c, h, "/usr/local/bin/team-mcp")
+            .expect("codex agent must get a config.toml");
+        assert!(toml.contains("[mcp_servers.team]"), "toml was: {toml}");
+        assert!(
+            toml.contains("command = \"/usr/local/bin/team-mcp\""),
+            "toml was: {toml}"
+        );
+        // Same args as the JSON transport — the shared team_server_args
+        // helper is the single source of truth.
+        assert!(
+            toml.contains("\"--agent-id\", \"hello:mgr\""),
+            "toml was: {toml}"
+        );
+        assert!(
+            toml.contains("\"--tmux-prefix\", \"a-\""),
+            "toml was: {toml}"
+        );
+    }
+
+    #[test]
+    fn codex_config_absent_for_non_codex_runtimes() {
+        // claude/gemini get their MCP servers via the JSON file; a stray
+        // config.toml would be dead weight on disk.
+        let c = fixture();
+        let h = c.agents().next().unwrap();
+        assert!(render_codex_config(&c, h, "/usr/local/bin/team-mcp").is_none());
+    }
+
+    #[test]
+    fn codex_config_includes_declared_servers() {
+        // Declared `mcps:` land as their own [mcp_servers.<name>] tables
+        // next to the team bus, mirroring the JSON transport's merge.
+        let mut c = fixture();
+        {
+            let m = c.projects[0].managers.get_mut("mgr").unwrap();
+            m.runtime = "codex".into();
+            let mut gh = server("npx", &["-y", "@modelcontextprotocol/server-github"]);
+            gh.env
+                .insert("GITHUB_TOKEN".into(), "${GITHUB_TOKEN}".into());
+            let mut mcps = BTreeMap::new();
+            mcps.insert("github".into(), gh);
+            m.mcps = mcps;
+        }
+        let h = c.agents().next().unwrap();
+        let toml = render_codex_config(&c, h, "/usr/local/bin/team-mcp").unwrap();
+        assert!(toml.contains("[mcp_servers.team]"), "toml was: {toml}");
+        assert!(toml.contains("[mcp_servers.github]"), "toml was: {toml}");
+        assert!(toml.contains("command = \"npx\""), "toml was: {toml}");
+        assert!(
+            toml.contains("args = [\"-y\", \"@modelcontextprotocol/server-github\"]"),
+            "toml was: {toml}"
+        );
+        assert!(
+            toml.contains("[mcp_servers.github.env]\nGITHUB_TOKEN = \"${GITHUB_TOKEN}\""),
+            "env must land in a sub-table, verbatim: {toml}"
+        );
+    }
+
+    #[test]
+    fn codex_config_escapes_toml_strings() {
+        // A quote or backslash in an env value must not break the TOML —
+        // basic strings escape both (team-core hand-renders, no toml crate).
+        let mut c = fixture();
+        {
+            let m = c.projects[0].managers.get_mut("mgr").unwrap();
+            m.runtime = "codex".into();
+            let mut srv = server("run", &[]);
+            srv.env
+                .insert("TRICKY".into(), "say \"hi\" C:\\path".into());
+            let mut mcps = BTreeMap::new();
+            mcps.insert("x".into(), srv);
+            m.mcps = mcps;
+        }
+        let h = c.agents().next().unwrap();
+        let toml = render_codex_config(&c, h, "/usr/local/bin/team-mcp").unwrap();
+        assert!(
+            toml.contains("TRICKY = \"say \\\"hi\\\" C:\\\\path\""),
+            "toml was: {toml}"
+        );
+    }
+
+    #[test]
+    fn write_codex_config_writes_then_clears_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = fixture();
+        c.root = dir.path().to_path_buf();
+        let dest = codex_home_dir(&c.root, "hello", "mgr").join("config.toml");
+
+        // codex runtime → config materialized under the per-agent home.
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "codex".into();
+        let h = c.agents().next().unwrap();
+        write_codex_config(&c, h, "/usr/local/bin/team-mcp").unwrap();
+        assert!(dest.exists(), "codex config.toml should be written");
+
+        // Runtime switched away → the managed config is removed (the home
+        // dir itself survives: it may hold codex session history).
+        c.projects[0].managers.get_mut("mgr").unwrap().runtime = "claude-code".into();
+        let h = c.agents().next().unwrap();
+        write_codex_config(&c, h, "/usr/local/bin/team-mcp").unwrap();
+        assert!(!dest.exists(), "stale codex config.toml should be removed");
     }
 
     #[test]
