@@ -1,8 +1,9 @@
-//! `compact_self` MCP tool: manager + claude-code gates and the
-//! fire-and-forget dispatch shape. The actual tmux side effect is not
-//! exercised here — the handler returns immediately and runs the
-//! send-keys on the blocking pool, so the test only asserts on the MCP
-//! response shape and the absence of a stored mailbox row.
+//! `compact_self` MCP tool: the runtime gate (claude-code and codex
+//! pass, others reject) and the fire-and-forget dispatch shape. The
+//! actual tmux side effect is not exercised here — the handler returns
+//! immediately and runs the send-keys on the blocking pool, so the test
+//! only asserts on the MCP response shape and the absence of a stored
+//! mailbox row.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -87,10 +88,18 @@ fn seed(mailbox: &std::path::Path) {
         [],
     )
     .unwrap();
-    // codex-runtime manager — used to pin the runtime gate end-to-end.
+    // codex-runtime manager — codex ships /compact, so it passes the gate.
     conn.execute(
         "INSERT OR IGNORE INTO agents (id, project_id, role, runtime, is_manager, reports_to)
          VALUES ('p:codex','p','codex','codex',1,NULL)",
+        [],
+    )
+    .unwrap();
+    // gemini-runtime manager — no known /compact equivalent, used to pin
+    // the runtime gate end-to-end.
+    conn.execute(
+        "INSERT OR IGNORE INTO agents (id, project_id, role, runtime, is_manager, reports_to)
+         VALUES ('p:gem','p','gem','gemini',1,NULL)",
         [],
     )
     .unwrap();
@@ -171,10 +180,11 @@ fn compact_self_dispatch_works_for_worker_too() {
 }
 
 #[test]
-fn compact_self_rejects_non_claude_code_manager() {
-    // Runtime gate at the wire: a manager on a non-claude-code runtime
-    // (codex here) is rejected. /compact is Claude-Code-only; rather
-    // than fire send-keys blindly we surface a clean MCP error.
+fn compact_self_dispatch_works_for_codex_manager() {
+    // Codex's TUI ships a `/compact` slash command with the same
+    // semantics as Claude Code's, so a codex agent passes the runtime
+    // gate and lands the same dispatched response, routed to its own
+    // tmux pane.
     let tmp = tempdir().unwrap();
     let mailbox = tmp.path().join("m.db");
     seed(&mailbox);
@@ -187,8 +197,30 @@ fn compact_self_rejects_non_claude_code_manager() {
     );
     p.shutdown();
 
+    let sc = &r["result"]["structuredContent"];
+    assert_eq!(sc["status"], "dispatched");
+    assert_eq!(sc["session"], "t-p-codex");
+}
+
+#[test]
+fn compact_self_rejects_unsupported_runtime_manager() {
+    // Runtime gate at the wire: a manager on a runtime without a known
+    // /compact command (gemini here) is rejected. Rather than fire
+    // send-keys blindly we surface a clean MCP error.
+    let tmp = tempdir().unwrap();
+    let mailbox = tmp.path().join("m.db");
+    seed(&mailbox);
+
+    let mut p = Peer::spawn(&bin(), "p:gem", &mailbox);
+    let _ = p.call("initialize", json!({}));
+    let r = p.call(
+        "tools/call",
+        json!({ "name": "compact_self", "arguments": {} }),
+    );
+    p.shutdown();
+
     assert!(
         r["error"].is_object() || r["result"]["isError"].as_bool() == Some(true),
-        "expected an error response for non-claude-code compact_self, got {r}"
+        "expected an error response for unsupported-runtime compact_self, got {r}"
     );
 }

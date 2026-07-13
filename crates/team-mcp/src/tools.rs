@@ -265,7 +265,7 @@ pub fn schema() -> Value {
         },
         {
             "name": "compact_self",
-            "description": "Compact your own context window via Claude Code's `/compact` command. Available on `claude-code` runtimes only (other runtimes don't recognize the slash command). \n\n**This is destructive: prior conversation detail is summarized and irretrievably trimmed.** Use only when explicitly instructed by your role (e.g. \"compact after every completed task\") or when you have clearly finished a major chunk of work and want to free space for the next one. Do not call this casually — every call permanently loses turns from your working window. \n\nFire-and-forget: the call returns immediately, and the `/compact` slash command lands in your tmux pane within a few milliseconds. Compaction itself runs asynchronously inside your session. The tool only routes; it does not block on the compaction completing.",
+            "description": "Compact your own context window via the `/compact` slash command. Available on `claude-code` and `codex` runtimes (both ship `/compact`; other runtimes don't recognize the slash command). \n\n**This is destructive: prior conversation detail is summarized and irretrievably trimmed.** Use only when explicitly instructed by your role (e.g. \"compact after every completed task\") or when you have clearly finished a major chunk of work and want to free space for the next one. Do not call this casually — every call permanently loses turns from your working window. \n\nFire-and-forget: the call returns immediately, and the `/compact` slash command lands in your tmux pane within a few milliseconds. Compaction itself runs asynchronously inside your session. The tool only routes; it does not block on the compaction completing.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
@@ -935,20 +935,23 @@ fn resolve_audit_path(compose_root: &std::path::Path, p: &std::path::Path) -> st
 
 /// T-109: deliver `/compact` to the calling agent's own tmux pane via
 /// `tmux send-keys`. Open to any agent (workers and managers) on
-/// `claude-code` runtimes — the destructive warning lives in the schema
-/// description, role instructions decide when to call it. Fire-and-forget:
-/// the MCP call returns immediately; the slash command lands in the
-/// agent's pane on the blocking pool. Detachable — when Anthropic ships
-/// native agent-driven compaction, this whole handler + its registry
-/// entries delete in one PR.
+/// runtimes whose TUI ships a `/compact` slash command — Claude Code and
+/// Codex both do, with identical semantics. The gate exists for runtimes
+/// without a known compact command (gemini has no verified equivalent);
+/// sending `/compact` there would just land as input. The destructive
+/// warning lives in the schema description, role instructions decide
+/// when to call it. Fire-and-forget: the MCP call returns immediately;
+/// the slash command lands in the agent's pane on the blocking pool.
+/// Detachable — when the runtimes ship native agent-driven compaction,
+/// this whole handler + its registry entries delete in one PR.
 async fn compact_self(ctx: &Ctx) -> Result<Value, String> {
     let runtime = ctx
         .store
         .runtime_for(&ctx.agent_id)
         .map_err(|e| e.to_string())?;
-    if runtime.as_deref() != Some("claude-code") {
+    if !matches!(runtime.as_deref(), Some("claude-code") | Some("codex")) {
         return Err(format!(
-            "compact_self: /compact is only supported on Claude Code agents \
+            "compact_self: /compact is only supported on Claude Code and Codex agents \
              (caller={} runs `{}`)",
             ctx.agent_id,
             runtime.as_deref().unwrap_or("unknown"),
@@ -991,8 +994,8 @@ async fn compact_self(ctx: &Ctx) -> Result<Value, String> {
 /// Argv for the tmux send-keys invocation that delivers `/compact` to
 /// the caller's pane. Pulled out so unit tests pin the exact arg shape
 /// without spinning up tmux. The trailing `Enter` keyword is what tells
-/// tmux to fire a Return after the body — that's what triggers Claude
-/// Code to actually process the slash command.
+/// tmux to fire a Return after the body — that's what triggers the
+/// agent's CLI to actually process the slash command.
 fn compact_self_argv(session: &str) -> [&str; 5] {
     ["send-keys", "-t", session, "/compact", "Enter"]
 }
@@ -1824,24 +1827,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compact_self_non_claude_code_runtime_is_rejected() {
-        // /compact is a Claude Code slash command. Other runtimes don't
-        // recognize it; sending it would just land as input. Reject so
-        // the failure mode is crisp and the tool's description stays
-        // honest.
+    async fn compact_self_dispatches_for_codex_runtime() {
+        // Codex's TUI ships a `/compact` slash command with the same
+        // semantics as Claude Code's, so the same tmux send-keys
+        // mechanism works — a codex agent passes the runtime gate and
+        // gets the same dispatch record.
         let f = NamedTempFile::new().unwrap();
         let store = Store::open(f.path()).unwrap();
         store
             .upsert_agent("p:mgr", "p", "P", "manager", "codex", true)
             .unwrap();
         let ctx = Ctx::new("p:mgr".to_string(), store, "t-".to_string());
+        let resp = compact_self(&ctx).await.unwrap();
+        assert_eq!(resp["structuredContent"]["status"], "dispatched");
+        assert_eq!(resp["structuredContent"]["session"], "t-p-mgr");
+    }
+
+    #[tokio::test]
+    async fn compact_self_unsupported_runtime_is_rejected() {
+        // Runtimes without a known `/compact` command (gemini here)
+        // don't recognize the slash command; sending it would just land
+        // as input. Reject so the failure mode is crisp and the tool's
+        // description stays honest.
+        let f = NamedTempFile::new().unwrap();
+        let store = Store::open(f.path()).unwrap();
+        store
+            .upsert_agent("p:mgr", "p", "P", "manager", "gemini", true)
+            .unwrap();
+        let ctx = Ctx::new("p:mgr".to_string(), store, "t-".to_string());
         let err = compact_self(&ctx).await.unwrap_err();
         assert!(
-            err.contains("Claude Code"),
+            err.contains("Claude Code and Codex"),
             "error names the runtime gate: {err}"
         );
         assert!(
-            err.contains("codex"),
+            err.contains("gemini"),
             "error names the actual runtime: {err}"
         );
     }
