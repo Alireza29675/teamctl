@@ -2,15 +2,22 @@
 title: Runtimes
 ---
 
-A **runtime** is the CLI binary behind an agent. teamctl ships adapters for the three major AI coding CLIs — they can all mix freely inside one team.
+A **runtime** is the CLI binary behind an agent. teamctl ships adapters for the four major AI coding CLIs — they can all mix freely inside one team.
 
 | Runtime | Binary | MCP | Session resume | Inbox delivery | Notes |
 |---|---|---|---|---|---|
 | Claude Code | `claude` | yes | always-on (deterministic UUID; `--session-id` to create, `--resume` to attach) | channel push (`<channel>` events) | The default. Strongest for planning + tool use. |
 | Codex CLI | `codex` | yes (via per-agent `CODEX_HOME` config.toml) | `resume --last` scoped to per-agent `CODEX_HOME` | team-mailbox tmux nudge (📬 note in the pane) | OpenAI's CLI. Good for deep reasoning on patches. |
+| OpenCode | `opencode` | yes (per-agent `OPENCODE_CONFIG` json) | `-c` scoped to per-agent `OPENCODE_DB` | team-mailbox tmux nudge (📬 note in the pane) | Provider-agnostic. Always set `model:` explicitly — see below. |
 | Gemini CLI | `gemini` | yes (0.3+) | n/a (loop-restart) | team-mailbox tmux nudge (📬 note in the pane) | 1M-token context makes it great for research. |
 
-**Inbox delivery** is how an agent learns new mail arrived. Claude Code gets it pushed into the session as `<channel source="team">` events (Claude Code Channels). Codex and Gemini treat MCP as strictly request/response and drop unsolicited notifications, so `team-mcp` types a short `📬 N new team message(s)` nudge into the agent's tmux pane instead; the agent then drains its mailbox via `inbox_peek` / `inbox_read` / `inbox_ack`. Either way, agents react on arrival — nobody polls.
+**Inbox delivery** is how an agent learns new mail arrived. Claude Code gets it pushed into the session as `<channel source="team">` events (Claude Code Channels). Codex, OpenCode, and Gemini treat MCP as strictly request/response and drop unsolicited notifications, so `team-mcp` types a short `📬 N new team message(s)` nudge into the agent's tmux pane instead; the agent then drains its mailbox via `inbox_peek` / `inbox_read` / `inbox_ack`. Either way, agents react on arrival — nobody polls.
+
+**OpenCode has three sharp edges** teamctl covers, but two need the operator's attention:
+
+- **Always set `model:`** on opencode agents, in `provider/model` form (e.g. `openai/gpt-5.4-mini-fast`). With no model pinned, opencode defaults to the priciest model the account is authed for.
+- **Auth must exist** at `~/.local/share/opencode/auth.json` (`opencode auth login`). Missing auth does **not** error — opencode silently falls back to free anonymous models. The wrapper logs a warning when auth is absent, but the agent keeps running on the free tier until you fix it.
+- **Autoupdate is disabled by teamctl** (`OPENCODE_DISABLE_AUTOUPDATE=1` plus `autoupdate: false` in the rendered config): the TUI otherwise upgrades the shared binary in place at boot — a mid-fleet binary swap.
 
 For Claude Code, every spawn uses a UUIDv5 derived deterministically from `teamctl:<project>:<agent>`. The wrapper passes `--session-id <uuid>` to create the session on first spawn, and `--resume <uuid>` on every subsequent spawn once the session jsonl exists. Same UUID either way, so an agent's context survives `teamctl down`/`up`, crash recovery, and host reboots without operator action. If the session-file at that UUID is ever removed (manual cleanup, claude session-dir reset), the wrapper falls back to `--session-id` and claude recreates a fresh session at the same UUID. Self-healing by construction.
 
