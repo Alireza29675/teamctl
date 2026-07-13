@@ -215,33 +215,17 @@ fn spawn_channel_watcher(
     initialized: Arc<Notify>,
     lazy_inbox: bool,
 ) {
-    // Delivery mode is resolved once, here at spawn: this process serves
-    // exactly one agent (`--agent-id` is fixed for the process lifetime),
-    // and `teamctl up` registers the agent's runtime in the mailbox
-    // (`register_all_public`) *before* spawning the tmux session whose
-    // runtime spawns us. A compose edit that flips the runtime goes
-    // through `teamctl up`/`reload`, which restarts the agent's session —
-    // and this team-mcp child with it — so a stale mode can't outlive a
-    // runtime change.
-    let runtime = match store.runtime_for(&agent_id) {
-        Ok(r) => r,
+    // Session name for the nudge path, derived once — it depends only on
+    // the fixed tmux prefix + agent id. `None` when the agent id is
+    // malformed (nudges skipped, logged once). The delivery *mode* is NOT
+    // latched here: it's re-resolved inside the poll loop, on every tick
+    // that found new rows (see there for why).
+    let nudge_session = match tools::pane_session(&tmux_prefix, &agent_id) {
+        Ok(s) => Some(s),
         Err(e) => {
-            tracing::warn!(error = %e, "channel watcher runtime lookup failed");
+            tracing::warn!(error = %e, "channel watcher nudge disabled");
             None
         }
-    };
-    let mode = delivery_mode(runtime.as_deref());
-    // Session name for the nudge path; `None` for claude (never nudged)
-    // or when the agent id is malformed (nudges skipped, logged once).
-    let nudge_session = match mode {
-        DeliveryMode::Channel => None,
-        DeliveryMode::Nudge => match tools::pane_session(&tmux_prefix, &agent_id) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                tracing::warn!(error = %e, "channel watcher nudge disabled");
-                None
-            }
-        },
     };
     // High-water mark captured *synchronously* at spawn — before the
     // tokio task is scheduled. Computing it inside the task after
@@ -322,29 +306,56 @@ fn spawn_channel_watcher(
             // recovered by the next arrival's nudge (the high-water mark
             // advances regardless) and by the agent's own `inbox_peek`
             // habit from the bootstrap prompt.
+            //
+            // The delivery mode is re-resolved on every tick with rows to
+            // deliver — one indexed sqlite read, and only when there's
+            // something to announce keeps it near-free. Latching it at
+            // spawn was wrong: scoped `teamctl reload <project>` / scoped
+            // `up` restart sessions via `render_project_public` without
+            // re-running `register_all_public`, so a compose runtime flip
+            // CAN outlive this process's spawn-time snapshot. On lookup
+            // *error* we fall back to Channel for this tick rather than
+            // latching Nudge: for claude that's exactly right (the channel
+            // event above already went out), and a codex agent merely
+            // misses one nudge — the next tick's nudge or its own
+            // `inbox_peek` habit recovers it. A registered-but-unknown
+            // runtime string still nudges (see `delivery_mode`).
             if fresh > 0 {
-                if let Some(session) = nudge_session.clone() {
-                    tokio::task::spawn_blocking(move || {
-                        let argv = inbox_nudge_argv(&session, fresh);
-                        match std::process::Command::new("tmux").args(argv).output() {
-                            Ok(o) if !o.status.success() => {
-                                let stderr = String::from_utf8_lossy(&o.stderr);
-                                tracing::warn!(
-                                    session = %session,
-                                    error = %stderr.trim(),
-                                    "inbox nudge: tmux send-keys failed",
-                                );
+                let mode = match store.runtime_for(&agent_id) {
+                    Ok(runtime) => delivery_mode(runtime.as_deref()),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "channel watcher runtime lookup failed — \
+                             assuming channel delivery for this tick",
+                        );
+                        DeliveryMode::Channel
+                    }
+                };
+                if mode == DeliveryMode::Nudge {
+                    if let Some(session) = nudge_session.clone() {
+                        tokio::task::spawn_blocking(move || {
+                            let argv = inbox_nudge_argv(&session, fresh);
+                            match std::process::Command::new("tmux").args(argv).output() {
+                                Ok(o) if !o.status.success() => {
+                                    let stderr = String::from_utf8_lossy(&o.stderr);
+                                    tracing::warn!(
+                                        session = %session,
+                                        error = %stderr.trim(),
+                                        "inbox nudge: tmux send-keys failed",
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        session = %session,
+                                        error = %e,
+                                        "inbox nudge: tmux invoke failed",
+                                    );
+                                }
+                                _ => {}
                             }
-                            Err(e) => {
-                                tracing::warn!(
-                                    session = %session,
-                                    error = %e,
-                                    "inbox nudge: tmux invoke failed",
-                                );
-                            }
-                            _ => {}
-                        }
-                    });
+                        });
+                    }
                 }
             }
             last_seen = max_id;
@@ -368,6 +379,9 @@ enum DeliveryMode {
 /// Only claude-code honours channel pushes; codex, gemini, unknown
 /// runtimes, and unregistered agents (`None`) all get the tmux nudge —
 /// for a pane that doesn't exist the nudge just fails and is dropped.
+/// Lookup *errors* never reach here: the watcher falls back to Channel
+/// for that tick at the call site, keeping this pure over the
+/// registered value.
 fn delivery_mode(runtime: Option<&str>) -> DeliveryMode {
     match runtime {
         Some("claude-code") => DeliveryMode::Channel,
