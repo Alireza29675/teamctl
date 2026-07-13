@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
 use team_core::render::{
-    boot_script_path, claude_settings_path, codex_home_dir, env_path, mcp_path, render_agent,
-    render_claude_settings, write_agent_skills, write_codex_config, write_opencode_config,
-    write_role_prompt_concat, write_subagents_json,
+    boot_script_path, claude_settings_path, codex_home_dir, env_path, mcp_path, opencode_home_dir,
+    render_agent, render_claude_settings, write_agent_skills, write_codex_config,
+    write_opencode_config, write_role_prompt_concat, write_subagents_json,
 };
 use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
@@ -392,9 +392,14 @@ pub(crate) fn freshen_for_spec(root: &Path, spec: &AgentSpec, runtime: &str, fre
             // sidecars) instead of a directory tree. An absent db means
             // "nothing to freshen" — silently keep any earlier backup.
             // opencode.json at the home root is untouched.
-            let home = team_core::render::opencode_home_dir(root, &spec.project, &spec.agent);
-            let db = home.join("agent.db");
-            if !db.exists() {
+            let home = opencode_home_dir(root, &spec.project, &spec.agent);
+            // "Nothing to freshen" means db AND sidecars all absent —
+            // gating on the db alone would strand an orphan -wal/-shm
+            // left by a previous partial move.
+            if ["agent.db", "agent.db-shm", "agent.db-wal"]
+                .iter()
+                .all(|n| !home.join(n).exists())
+            {
                 return;
             }
             let bak = home.join("db.bak");

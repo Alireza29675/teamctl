@@ -58,6 +58,7 @@ One subtlety on MCP env: `${VAR}` placeholders in `mcps:` env values are Claude-
 | Claude Code · Sonnet | fast, cheap tool use; frontend refactors |
 | Codex · GPT-5 | deep reasoning on complex backend patches |
 | Gemini · 3.0 Pro | 1M-token context for research / large-corpus reads |
+| OpenCode · any provider | provider-agnostic mixing; always pin `model:` (`provider/model`) — its own default is the priciest authed model |
 
 ## Cost
 

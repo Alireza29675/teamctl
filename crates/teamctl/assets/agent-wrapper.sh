@@ -451,6 +451,13 @@ while :; do
             if [ ! -f "$HOME/.local/share/opencode/auth.json" ]; then
                 log "opencode has no credentials — it will silently run on free anonymous models; run \`opencode auth login\`"
             fi
+            # Same silent-failure family: a missing rendered config means
+            # opencode boots with zero MCP servers — mailbox severed, no
+            # diagnostic from opencode itself. render rewrites the file on
+            # every up/reload, so this only fires on manual state surgery.
+            if [ -n "$OPENCODE_CONFIG" ] && [ ! -f "$OPENCODE_CONFIG" ]; then
+                log "opencode config missing at $OPENCODE_CONFIG — MCP/team mailbox will be absent; re-run teamctl up"
+            fi
             # Session resume: the per-agent OPENCODE_DB isolates the
             # session store, and `-c` reopens the most recent session in
             # the current directory within that db — exact per agent,
