@@ -36,4 +36,4 @@ env:
 > adapters. claude-code agents now auto-resume via deterministic
 > UUIDv5 session ids; other runtimes either resume natively or don't.
 
-You'd also need a `run_aider` branch in `bin/agent-wrapper.sh` that knows how to pass `--mcp-config` and `--system-instruction` to `aider`.
+You'd also need an `aider)` case in `bin/agent-wrapper.sh` that knows how to pass `aider`'s own MCP-config and system-instruction flags. The shipped cases show the range: claude-code and gemini take the rendered JSON via `--mcp-config`, while codex has no such flag — its MCP servers are rendered as `[mcp_servers.*]` tables into a per-agent `CODEX_HOME/config.toml`.
