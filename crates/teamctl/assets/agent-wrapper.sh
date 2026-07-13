@@ -82,7 +82,7 @@ fi
 # Code Channels push `<channel>` events into the session, but every
 # other runtime treats MCP as strictly request/response and drops
 # unsolicited notifications — for those agents team-mcp types a short
-# "📬 N new team message(s)" nudge into the pane instead, and telling
+# 📬 sender-plus-preview nudge into the pane instead, and telling
 # them "you do not need to poll, events arrive" would leave them idle
 # forever waiting for events that never come.
 if [ -z "${BOOTSTRAP_PROMPT:-}" ]; then
@@ -91,7 +91,7 @@ if [ -z "${BOOTSTRAP_PROMPT:-}" ]; then
             BOOTSTRAP_PROMPT="Begin your shift as ${AGENT}. Team traffic is delivered to you as \`<channel source=\"team\">\` events via Claude Code Channels -- you do not need to poll. By default the body is a short \"📬 1 new message ...\" stub (meta.lazy=\"1\"); call \`inbox_read\` with the meta.id to fetch the full body and resolve it in one step. If the stub doesn't merit handling, call \`inbox_ack\` to dismiss. When the body lands inline (no meta.lazy, e.g. operator used \`/readnow\`), act on it directly and call \`inbox_ack\` on the id when done. Between events, idle. Use \`inbox_peek\` only for non-destructive catch-up after a restart."
             ;;
         *)
-            BOOTSTRAP_PROMPT="Begin your shift as ${AGENT}. Call inbox_peek now to catch up on anything already waiting. Team traffic arrives as short '📬 N new team message(s)' notes typed into this session by the team mailbox -- when one lands, call inbox_peek, then inbox_read each meta.id and inbox_ack when handled. Between notes, idle. Never reply to the 📬 note itself; the mailbox is the source of truth."
+            BOOTSTRAP_PROMPT="Begin your shift as ${AGENT}. Call inbox_peek now to catch up on anything already waiting. Team traffic arrives as one-line notes typed into this session by the team mailbox, shaped like '📬 sender: \"short preview…\" (+N more)' -- when one lands, call inbox_peek, then inbox_read each meta.id and inbox_ack when handled. Between notes, idle. Never reply to the 📬 note itself; the mailbox is the source of truth."
             ;;
     esac
 fi

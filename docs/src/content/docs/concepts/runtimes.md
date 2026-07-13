@@ -11,7 +11,7 @@ A **runtime** is the CLI binary behind an agent. teamctl ships adapters for the 
 | OpenCode | `opencode` | yes (per-agent `OPENCODE_CONFIG` json) | `-c` scoped to per-agent `OPENCODE_DB` | team-mailbox tmux nudge (📬 note in the pane) | Provider-agnostic. Always set `model:` explicitly — see below. |
 | Gemini CLI | `gemini` | yes (0.3+) | n/a (loop-restart) | team-mailbox tmux nudge (📬 note in the pane) | 1M-token context makes it great for research. |
 
-**Inbox delivery** is how an agent learns new mail arrived. Claude Code gets it pushed into the session as `<channel source="team">` events (Claude Code Channels). Codex, OpenCode, and Gemini treat MCP as strictly request/response and drop unsolicited notifications, so `team-mcp` types a short `📬 N new team message(s)` nudge into the agent's tmux pane instead; the agent then drains its mailbox via `inbox_peek` / `inbox_read` / `inbox_ack`. Either way, agents react on arrival — nobody polls.
+**Inbox delivery** is how an agent learns new mail arrived. Claude Code gets it pushed into the session as `<channel source="team">` events (Claude Code Channels). Codex, OpenCode, and Gemini treat MCP as strictly request/response and drop unsolicited notifications, so `team-mcp` types a short `📬 sender: "short preview…" (+N more)` nudge into the agent's tmux pane instead; the agent then drains its mailbox via `inbox_peek` / `inbox_read` / `inbox_ack`. Since the nudge arrives as keystrokes, the preview is sanitized — single line, control characters stripped — so message bodies can't inject input into the pane. Either way, agents react on arrival — nobody polls.
 
 **OpenCode has three sharp edges** teamctl covers, but two need the operator's attention:
 
