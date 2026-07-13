@@ -345,25 +345,12 @@ fn spawn_channel_watcher(
                         (nudge_session.clone(), first_fresh.take())
                     {
                         tokio::task::spawn_blocking(move || {
-                            let argv = inbox_nudge_argv(&session, &sender, &body, fresh);
-                            match std::process::Command::new("tmux").args(argv).output() {
-                                Ok(o) if !o.status.success() => {
-                                    let stderr = String::from_utf8_lossy(&o.stderr);
-                                    tracing::warn!(
-                                        session = %session,
-                                        error = %stderr.trim(),
-                                        "inbox nudge: tmux send-keys failed",
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        session = %session,
-                                        error = %e,
-                                        "inbox nudge: tmux invoke failed",
-                                    );
-                                }
-                                _ => {}
-                            }
+                            let line = inbox_nudge_line(&sender, &body, fresh);
+                            // Split type-then-submit: codex strands a
+                            // same-write `\r` in the composer, so a bare
+                            // `send-keys "<line>" Enter` leaves the note
+                            // unsent. See tmux_type_and_submit.
+                            tools::tmux_type_and_submit(&session, &line, "inbox nudge");
                         });
                     }
                 }
@@ -412,7 +399,7 @@ fn delivery_mode(runtime: Option<&str>) -> DeliveryMode {
 /// surface — both go through `pane_safe_line`, and the line always opens
 /// with the fixed `📬 ` prefix so no message can put its own first byte
 /// on the composer line (a leading `/` would run as a slash command).
-fn inbox_nudge_argv(session: &str, sender: &str, body: &str, new_rows: usize) -> [String; 5] {
+fn inbox_nudge_line(sender: &str, body: &str, new_rows: usize) -> String {
     const PREVIEW_CHARS: usize = 80;
     let sender = pane_safe_line(sender);
     let clean = pane_safe_line(body);
@@ -431,16 +418,10 @@ fn inbox_nudge_argv(session: &str, sender: &str, body: &str, new_rows: usize) ->
     } else {
         format!("📬 {sender}: \"{preview}\"{more}")
     };
-    [
-        "send-keys".into(),
-        "-t".into(),
-        session.into(),
-        format!(
-            "{head} — call inbox_peek, \
-             then inbox_read each meta.id and inbox_ack when handled."
-        ),
-        "Enter".into(),
-    ]
+    format!(
+        "{head} — call inbox_peek, \
+         then inbox_read each meta.id and inbox_ack when handled."
+    )
 }
 
 /// Sanitize untrusted text for a line *typed* into a tmux pane: collapse
@@ -579,28 +560,21 @@ mod tests {
     }
 
     #[test]
-    fn inbox_nudge_argv_batches_count_and_ends_with_enter_keyword() {
-        // Pin the wire shape: one send-keys per poll tick, the first
-        // row's sender + preview and the batch remainder baked into the
-        // body, and `Enter` as a separate argv element so tmux fires a
-        // Return and the runtime submits the note.
-        let argv = inbox_nudge_argv("t-p-mgr", "hello:hugo", "standup in 5", 3);
-        assert_eq!(argv[0], "send-keys");
-        assert_eq!(argv[1], "-t");
-        assert_eq!(argv[2], "t-p-mgr");
+    fn inbox_nudge_line_batches_count_and_previews() {
+        // The first row's sender + preview and the batch remainder are
+        // baked into one line. Submission is the split type-then-Enter in
+        // tools::tmux_type_and_submit — pinned there, not here.
         assert_eq!(
-            argv[3],
+            inbox_nudge_line("hello:hugo", "standup in 5", 3),
             "📬 hello:hugo: \"standup in 5\" (+2 more) — call inbox_peek, \
              then inbox_read each meta.id and inbox_ack when handled."
         );
-        assert_eq!(argv[4], "Enter");
 
         // Exactly one fresh row: no `(+N more)` tail.
-        let single = inbox_nudge_argv("t-p-mgr", "hello:hugo", "ping", 1);
+        let single = inbox_nudge_line("hello:hugo", "ping", 1);
         assert!(
-            !single[3].contains("more"),
-            "single-row nudge must not carry a batch tail: {}",
-            single[3]
+            !single.contains("more"),
+            "single-row nudge must not carry a batch tail: {single}",
         );
     }
 
@@ -610,11 +584,10 @@ mod tests {
         // starting with `/` runs as a slash command. The fixed `📬 `
         // prefix guarantees no untrusted sender or body ever supplies
         // the line's first byte.
-        let argv = inbox_nudge_argv("s", "/quit", "/compact", 1);
+        let line = inbox_nudge_line("/quit", "/compact", 1);
         assert!(
-            argv[3].starts_with("📬 "),
-            "nudge must open with the fixed prefix: {}",
-            argv[3]
+            line.starts_with("📬 "),
+            "nudge must open with the fixed prefix: {line}",
         );
     }
 
@@ -642,11 +615,10 @@ mod tests {
     fn inbox_nudge_sanitizes_sender_too() {
         // The sender column is data as much as the body is — it must go
         // through the same pane-safe treatment.
-        let argv = inbox_nudge_argv("s", "evil\nname\x1b", "hi", 1);
+        let line = inbox_nudge_line("evil\nname\x1b", "hi", 1);
         assert!(
-            argv[3].starts_with("📬 evil name: \"hi\""),
-            "sender must come out control-free and single-line: {}",
-            argv[3]
+            line.starts_with("📬 evil name: \"hi\""),
+            "sender must come out control-free and single-line: {line}",
         );
     }
 
@@ -655,25 +627,23 @@ mod tests {
         // `chars().take()` truncation must hold for multibyte scalars —
         // no panic, 80 chars plus the ellipsis, never 81.
         let body = "🦀".repeat(200);
-        let argv = inbox_nudge_argv("s", "hello:dev", &body, 1);
+        let line = inbox_nudge_line("hello:dev", &body, 1);
         assert!(
-            argv[3].contains(&format!("\"{}…\"", "🦀".repeat(80))),
-            "preview must cap at 80 chars with an ellipsis: {}",
-            argv[3]
+            line.contains(&format!("\"{}…\"", "🦀".repeat(80))),
+            "preview must cap at 80 chars with an ellipsis: {line}",
         );
-        assert!(!argv[3].contains(&"🦀".repeat(81)));
+        assert!(!line.contains(&"🦀".repeat(81)));
     }
 
     #[test]
     fn inbox_nudge_empty_body_still_produces_a_sane_line() {
         // Whitespace-only (or kind-only, empty-text) rows must not yield
         // a dangling empty quote.
-        let argv = inbox_nudge_argv("s", "hello:dev", "  \n\t ", 2);
+        let line = inbox_nudge_line("hello:dev", "  \n\t ", 2);
         assert!(
-            argv[3].starts_with("📬 hello:dev: new message (+1 more)"),
-            "empty body must fall back to a plain announcement: {}",
-            argv[3]
+            line.starts_with("📬 hello:dev: new message (+1 more)"),
+            "empty body must fall back to a plain announcement: {line}",
         );
-        assert!(argv[3].contains("inbox_peek"));
+        assert!(line.contains("inbox_peek"));
     }
 }
