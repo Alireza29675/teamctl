@@ -1673,20 +1673,39 @@ fn slash_outcome(manager: &str, runtime: &str, tmux_prefix: &str) -> SlashOutcom
     }
 }
 
-/// Argv for the tmux send-keys invocation. Pulled out so unit tests pin the
-/// exact arg shape without spinning up tmux. The literal `Enter` keyword is
-/// what tells tmux to fire a Return after the body, which is what triggers
-/// the Claude Code prompt to actually process the slash command.
-fn tmux_send_keys_argv<'a>(session: &'a str, body: &'a str) -> [&'a str; 5] {
-    ["send-keys", "-t", session, body, "Enter"]
+/// Phase-1 argv: type `body` literally into the target pane. `-l` keeps slash
+/// command text such as "Enter" or "C-c" from being interpreted as tmux keys.
+fn tmux_type_body_argv<'a>(session: &'a str, body: &'a str) -> [&'a str; 5] {
+    ["send-keys", "-t", session, "-l", body]
+}
+
+/// Phase-2 argv: a separate `Enter` key event that submits the composer.
+fn tmux_submit_argv(session: &str) -> [&str; 4] {
+    ["send-keys", "-t", session, "Enter"]
 }
 
 /// Real-world tmux send-keys wrapper. On failure, returns the verbatim error
 /// (R12 family — surface the cause to the operator rather than silent drop).
 fn tmux_send_keys(session: &str, body: &str) -> Result<(), String> {
-    let argv = tmux_send_keys_argv(session, body);
     let output = Command::new("tmux")
-        .args(argv)
+        .args(tmux_type_body_argv(session, body))
+        .output()
+        .map_err(|e| format!("invoke tmux: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let trimmed = stderr.trim();
+        if trimmed.is_empty() {
+            return Err(format!("tmux exit {}", output.status));
+        }
+        return Err(format!("tmux exit {}: {trimmed}", output.status));
+    }
+
+    // Codex folds body+Enter delivered in one pty write into the composer;
+    // a distinct Enter after the TUI renders submits the command cleanly.
+    std::thread::sleep(std::time::Duration::from_millis(400));
+
+    let output = Command::new("tmux")
+        .args(tmux_submit_argv(session))
         .output()
         .map_err(|e| format!("invoke tmux: {e}"))?;
     if !output.status.success() {
@@ -3938,27 +3957,48 @@ mod tests {
     }
 
     #[test]
-    fn tmux_send_keys_argv_pins_send_keys_target_body_enter_shape() {
-        // Pinning the argv shape so a future refactor that drops the
-        // trailing literal `Enter` (which is what makes Claude Code
-        // actually process the slash command) shows up as a test fail
-        // rather than a silent passthrough that types but never submits.
-        let argv = tmux_send_keys_argv("t-writing-manager", "/clear");
+    fn tmux_type_body_argv_pins_literal_body_shape() {
+        // `-l` makes the slash command body literal text, not tmux key names.
+        let argv = tmux_type_body_argv("t-writing-manager", "/clear");
         assert_eq!(
             argv,
-            ["send-keys", "-t", "t-writing-manager", "/clear", "Enter"]
+            ["send-keys", "-t", "t-writing-manager", "-l", "/clear"]
         );
     }
 
     #[test]
-    fn tmux_send_keys_argv_passes_body_verbatim_no_quote_munging() {
+    fn tmux_submit_argv_pins_separate_enter_shape() {
+        // Codex strands slash commands when body and Enter land in one write;
+        // keep the submit as its own tmux invocation.
+        assert_eq!(
+            tmux_submit_argv("t-writing-manager"),
+            ["send-keys", "-t", "t-writing-manager", "Enter"]
+        );
+    }
+
+    #[test]
+    fn tmux_type_body_argv_passes_body_verbatim_no_quote_munging() {
         // `Command::args` doesn't shell-quote — argv positions are passed
         // straight through. Tests pin that bodies with spaces / quotes
         // travel as a single arg without our code adding quoting that
         // tmux would then take literally.
-        let argv = tmux_send_keys_argv("sess", "/compact focus on the cascade");
-        assert_eq!(argv[3], "/compact focus on the cascade");
-        assert_eq!(argv[4], "Enter");
+        let argv = tmux_type_body_argv("sess", "/compact focus on the cascade");
+        assert_eq!(argv[4], "/compact focus on the cascade");
+    }
+
+    #[test]
+    fn tmux_type_body_argv_keeps_key_names_literal() {
+        let argv = tmux_type_body_argv("sess", "/note press Enter then C-c");
+        assert_eq!(
+            argv,
+            [
+                "send-keys",
+                "-t",
+                "sess",
+                "-l",
+                "/note press Enter then C-c"
+            ]
+        );
     }
 
     // ── T-086-H setMyCommands registration ────────────────────────
