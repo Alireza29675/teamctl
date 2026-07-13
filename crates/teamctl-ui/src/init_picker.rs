@@ -461,13 +461,8 @@ fn render_create_modal(state: &PickerState, area: Rect, buf: &mut Buffer) {
         .style(Style::default().add_modifier(Modifier::BOLD))
         .render(rows[0], buf);
     Paragraph::new(option(0, "Create as-is", "scaffold the ready-made team")).render(rows[2], buf);
-    Paragraph::new(option(
-        1,
-        "Create and customize",
-        "scaffold, then open Claude Code to customize",
-    ))
-    .render(rows[3], buf);
-    Paragraph::new("↑/↓ select · Enter confirm · Esc back · q cancel")
+    Paragraph::new(option(1, "Customize", "scaffold, then open Claude Code")).render(rows[3], buf);
+    Paragraph::new("↑/↓ move · Enter confirm · Esc back · q quit")
         .style(Style::default().fg(state.caps.muted()))
         .alignment(Alignment::Center)
         .render(rows[6], buf);
@@ -771,6 +766,14 @@ mod tests {
         let mut state = PickerState::new(mono(), vec![fixture_entry()]).browsing();
         state.on_key(KeyCode::Enter);
         insta::assert_snapshot!(buf_to_string(&render_to_buffer(&state, 100, 20)));
+    }
+
+    #[test]
+    fn create_action_modal_minimum_size_snapshot() {
+        let mut state = PickerState::new(mono(), vec![fixture_entry()]).browsing();
+        state.on_key(KeyCode::Enter);
+        state.on_key(KeyCode::Down);
+        insta::assert_snapshot!(buf_to_string(&render_to_buffer(&state, 48, 12)));
     }
 
     #[test]

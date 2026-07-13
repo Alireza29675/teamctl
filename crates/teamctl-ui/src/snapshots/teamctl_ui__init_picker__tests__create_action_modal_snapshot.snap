@@ -11,11 +11,11 @@ expression: "buf_to_string(&render_to_buffer(&state, 100, 20))"
 │               │ How should teamctl create Product Team?                          │a 0×s 0×h 0×m  │
 │               │                                                                  │4.6 · 6×a 0×s  │
 │               │ ▸ Create as-is  scaffold the ready-made team                     │· 2×a 0×s 0×h  │
-│               │   Create and customize  scaffold, then open Claude Code to custo │               │
+│               │   Customize  scaffold, then open Claude Code                     │               │
 │               │                                                                  │               │
 │               │                                                                  │               │
 │               │                                                                  │               │
-│               │         ↑/↓ select · Enter confirm · Esc back · q cancel         │               │
+│               │           ↑/↓ move · Enter confirm · Esc back · q quit           │               │
 │               └──────────────────────────────────────────────────────────────────┘               │
 │                                ││                                                                │
 │                                ││                                                                │

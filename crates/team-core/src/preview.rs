@@ -41,6 +41,13 @@ pub enum ShapeKind {
 /// standalone `teamctl-ui` picker.
 pub const PICKER_PROTOCOL_VERSION: u32 = 1;
 
+/// Optional modifier to `teamctl-ui --version` that asks it to print its init
+/// picker protocol version on a second line. Keeping `--version` as the first
+/// argument makes the probe safe with older UI binaries: they ignore this
+/// modifier, print only their package version, and exit without entering the
+/// terminal UI.
+pub const PICKER_PROTOCOL_VERSION_ARG: &str = "--init-picker-protocol-version";
+
 /// Catalog handed from `teamctl` (which owns and parses the templates) to
 /// `teamctl-ui` (which only renders and selects from them).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

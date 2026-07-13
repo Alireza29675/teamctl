@@ -85,6 +85,11 @@ fn handle_info_flags() -> bool {
     match std::env::args().nth(1).as_deref() {
         Some("--version" | "-V") => {
             println!("teamctl-ui {}", env!("CARGO_PKG_VERSION"));
+            if std::env::args().nth(2).as_deref()
+                == Some(team_core::preview::PICKER_PROTOCOL_VERSION_ARG)
+            {
+                println!("{}", team_core::preview::PICKER_PROTOCOL_VERSION);
+            }
             true
         }
         Some("--help" | "-h") => {

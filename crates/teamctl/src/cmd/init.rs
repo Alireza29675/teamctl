@@ -39,7 +39,7 @@ use include_dir::{include_dir, Dir};
 use team_core::compose::{Global, Project};
 use team_core::preview::{
     team_shape, PickerCatalog, PickerCatalogEntry, PickerResponse, PreviewCounts,
-    PICKER_PROTOCOL_VERSION,
+    PICKER_PROTOCOL_VERSION, PICKER_PROTOCOL_VERSION_ARG,
 };
 
 #[derive(Clone, Copy)]
@@ -229,15 +229,25 @@ impl InitPickerHost for RealInitPickerHost {
     }
 
     fn picker_is_compatible(&self, bin: &Path) -> bool {
+        let expected_package = format!("teamctl-ui {}", env!("CARGO_PKG_VERSION"));
+        let expected_protocol = PICKER_PROTOCOL_VERSION.to_string();
         Command::new(bin)
+            // `--version` must stay first: pre-handshake UI binaries already
+            // handle it non-interactively and safely ignore the modifier.
             .arg("--version")
+            .arg(PICKER_PROTOCOL_VERSION_ARG)
             .stdin(Stdio::null())
             .stderr(Stdio::null())
             .output()
             .ok()
             .filter(|output| output.status.success())
             .and_then(|output| String::from_utf8(output.stdout).ok())
-            .is_some_and(|line| line.trim() == format!("teamctl-ui {}", env!("CARGO_PKG_VERSION")))
+            .is_some_and(|output| {
+                let mut lines = output.lines();
+                lines.next() == Some(expected_package.as_str())
+                    && lines.next() == Some(expected_protocol.as_str())
+                    && lines.next().is_none()
+            })
     }
 
     fn run_picker(&self, bin: &Path, catalog_json: &[u8]) -> Result<PickerChild> {
@@ -813,7 +823,7 @@ fn try_rich_picker(host: &dyn InitPickerHost, catalog: &PickerCatalog) -> Picker
     };
     if !host.picker_is_compatible(&bin) {
         return PickerAttempt::Fallback(Some(
-            "installed teamctl-ui version does not match teamctl".to_string(),
+            "installed teamctl-ui version or picker protocol does not match teamctl".to_string(),
         ));
     }
     let catalog_json = match serde_json::to_vec(catalog) {
@@ -1254,6 +1264,9 @@ mod tests {
             "#!/bin/sh\n\
              if [ \"$1\" = \"--version\" ]; then\n\
                echo 'teamctl-ui {}'\n\
+               if [ \"$2\" = \"{}\" ]; then\n\
+                 echo '{}'\n\
+               fi\n\
                exit 0\n\
              fi\n\
              [ \"$1\" = \"--init-picker\" ] || exit 41\n\
@@ -1261,6 +1274,8 @@ mod tests {
              cat \"$3\" > \"{}\" || exit 43\n\
              echo '{{\"action\":\"co_design\"}}'\n",
             env!("CARGO_PKG_VERSION"),
+            PICKER_PROTOCOL_VERSION_ARG,
+            PICKER_PROTOCOL_VERSION,
             captured.display()
         );
         fs::write(&bin, script).unwrap();
@@ -1278,6 +1293,51 @@ mod tests {
             PickerResponse::CoDesign
         );
         assert_eq!(fs::read(captured).unwrap(), json);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_picker_host_rejects_missing_or_wrong_protocol_at_matching_package_version() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("teamctl-ui");
+        let write_script = |protocol: Option<u32>| {
+            let protocol_arm = protocol.map_or_else(String::new, |version| {
+                format!(
+                    "if [ \"$2\" = \"{PICKER_PROTOCOL_VERSION_ARG}\" ]; then\n\
+                       echo '{version}'\n\
+                     fi\n"
+                )
+            });
+            let script = format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"--version\" ]; then\n\
+                   echo 'teamctl-ui {}'\n\
+                   {protocol_arm}\
+                   exit 0\n\
+                 fi\n\
+                 exit 41\n",
+                env!("CARGO_PKG_VERSION"),
+            );
+            fs::write(&bin, script).unwrap();
+            let mut permissions = fs::metadata(&bin).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&bin, permissions).unwrap();
+        };
+
+        let host = RealInitPickerHost;
+        write_script(None);
+        assert!(
+            !host.picker_is_compatible(&bin),
+            "same package version without the capability must fall back"
+        );
+
+        write_script(Some(PICKER_PROTOCOL_VERSION + 1));
+        assert!(
+            !host.picker_is_compatible(&bin),
+            "same package version with a different protocol must fall back"
+        );
     }
 
     #[test]
