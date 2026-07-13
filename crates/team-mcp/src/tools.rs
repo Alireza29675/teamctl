@@ -964,26 +964,7 @@ async fn compact_self(ctx: &Ctx) -> Result<Value, String> {
     // doesn't observe send-keys errors (that's the point of fire-and-forget).
     let session_for_spawn = session.clone();
     tokio::task::spawn_blocking(move || {
-        let argv = compact_self_argv(&session_for_spawn);
-        match std::process::Command::new("tmux").args(argv).output() {
-            Ok(o) if !o.status.success() => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                let trimmed = stderr.trim();
-                tracing::warn!(
-                    session = %session_for_spawn,
-                    error = %trimmed,
-                    "compact_self: tmux send-keys failed",
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    session = %session_for_spawn,
-                    error = %e,
-                    "compact_self: tmux invoke failed",
-                );
-            }
-            _ => {}
-        }
+        tmux_type_and_submit(&session_for_spawn, "/compact", "compact_self");
     });
     Ok(content_json(&json!({
         "status": "dispatched",
@@ -991,13 +972,65 @@ async fn compact_self(ctx: &Ctx) -> Result<Value, String> {
     })))
 }
 
-/// Argv for the tmux send-keys invocation that delivers `/compact` to
-/// the caller's pane. Pulled out so unit tests pin the exact arg shape
-/// without spinning up tmux. The trailing `Enter` keyword is what tells
-/// tmux to fire a Return after the body — that's what triggers the
-/// agent's CLI to actually process the slash command.
+/// Phase-1 argv: type `line` into a pane literally. `-l` disables tmux
+/// key-name lookup so a message body containing "Enter"/"C-c"/";" is sent
+/// as text, not interpreted as keys; the single-argv form (no shell)
+/// keeps arbitrary bytes injection-safe. Pulled out so tests pin the
+/// shape without spinning up tmux.
+fn type_line_argv<'a>(session: &'a str, line: &'a str) -> [&'a str; 5] {
+    ["send-keys", "-t", session, "-l", line]
+}
+
+/// Phase-2 argv: a bare `Enter` key event that submits the composer.
+fn submit_argv(session: &str) -> [&str; 4] {
+    ["send-keys", "-t", session, "Enter"]
+}
+
+/// Type a line into a tmux pane and submit it, as two separate
+/// `send-keys` invocations with a beat between them.
+///
+/// Why split, not `send-keys "<line>" Enter`: codex's line editor folds a
+/// `\r` that arrives in the *same* pty write as the text into the
+/// composer (a soft newline) instead of submitting — the note then
+/// strands in the input box until a human presses Enter. A distinct Enter
+/// key event, after the TUI has consumed the text on its next render
+/// tick, submits cleanly. Verified live against codex 0.144.3 (needs the
+/// split) and opencode 1.17 (submits either way, so the split is safe for
+/// both). Blocking (one short sleep); callers run it on the blocking
+/// pool. `label` names the caller in the warn line.
+pub(crate) fn tmux_type_and_submit(session: &str, line: &str, label: &str) {
+    let type_out = std::process::Command::new("tmux")
+        .args(type_line_argv(session, line))
+        .output();
+    match type_out {
+        Ok(o) if !o.status.success() => {
+            tracing::warn!(
+                session = %session,
+                error = %String::from_utf8_lossy(&o.stderr).trim(),
+                "{label}: tmux type failed",
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(session = %session, error = %e, "{label}: tmux invoke failed");
+            return;
+        }
+        _ => {}
+    }
+    // Let the TUI render and reset its input state before the submit; a
+    // same-tick `\r` is what codex folds into the composer.
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    if let Err(e) = std::process::Command::new("tmux")
+        .args(submit_argv(session))
+        .output()
+    {
+        tracing::warn!(session = %session, error = %e, "{label}: tmux submit failed");
+    }
+}
+
+#[cfg(test)]
 fn compact_self_argv(session: &str) -> [&str; 5] {
-    ["send-keys", "-t", session, "/compact", "Enter"]
+    type_line_argv(session, "/compact")
 }
 
 /// Compose the tmux session name for `agent_id` under `tmux_prefix`,
@@ -1763,13 +1796,31 @@ mod tests {
     // ── T-109 compact_self ─────────────────────────────────────────
 
     #[test]
-    fn compact_self_argv_uses_enter_keyword_after_compact_body() {
-        // Pin the wire shape: tmux receives `Enter` as a separate argv
-        // element, NOT `\n` embedded in the body. That's what makes tmux
-        // fire a Return after `/compact`, which is what makes Claude Code
-        // actually process the slash command.
-        let argv = compact_self_argv("t-p-mgr");
-        assert_eq!(argv, ["send-keys", "-t", "t-p-mgr", "/compact", "Enter"]);
+    fn compact_self_types_body_literally_then_submits_separately() {
+        // Two-phase wire shape: `/compact` is typed with `-l` (literal),
+        // then `Enter` is a SEPARATE send-keys invocation — not `\r` in the
+        // same write. Codex folds a same-write `\r` into the composer
+        // instead of submitting, so the split is what makes the slash
+        // command actually fire.
+        assert_eq!(
+            compact_self_argv("t-p-mgr"),
+            ["send-keys", "-t", "t-p-mgr", "-l", "/compact"]
+        );
+        assert_eq!(
+            submit_argv("t-p-mgr"),
+            ["send-keys", "-t", "t-p-mgr", "Enter"]
+        );
+    }
+
+    #[test]
+    fn type_line_argv_is_literal_so_bodies_are_not_read_as_keys() {
+        // `-l` guards a body containing tmux key names (Enter, C-c) or a
+        // separator (;) from being interpreted — it's sent as text.
+        let argv = type_line_argv("t-p-mgr", "press Enter; then C-c");
+        assert_eq!(
+            argv,
+            ["send-keys", "-t", "t-p-mgr", "-l", "press Enter; then C-c"]
+        );
     }
 
     #[test]
