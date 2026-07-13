@@ -307,6 +307,10 @@ pub(crate) enum FreshenAction {
     /// sessions dir aside (`.bak` recovery copy) so the wrapper's
     /// resume probe falls through to a fresh spawn.
     WipeCodexSessions,
+    /// `--fresh` on an opencode agent: move its per-agent session db
+    /// (plus -shm/-wal sidecars) into a `db.bak/` recovery copy so the
+    /// wrapper's resume probe falls through to a fresh spawn.
+    WipeOpencodeSessions,
 }
 
 /// Resolve `(runtime, fresh)` to a [`FreshenAction`]. Pure — no I/O.
@@ -317,6 +321,8 @@ pub(crate) fn freshen_action(runtime: &str, fresh: bool) -> FreshenAction {
         FreshenAction::Freshen
     } else if runtime == "codex" {
         FreshenAction::WipeCodexSessions
+    } else if runtime == "opencode" {
+        FreshenAction::WipeOpencodeSessions
     } else {
         FreshenAction::UnsupportedRuntime
     }
@@ -329,7 +335,10 @@ pub(crate) fn freshen_action(runtime: &str, fresh: bool) -> FreshenAction {
 /// move the per-agent CODEX_HOME `sessions/` subdir to `sessions.bak`
 /// (same recovery-copy parity) — the wrapper's resume probe then finds
 /// no rollout and boots fresh; config.toml and the auth.json symlink
-/// live at the codex-home root and survive.
+/// live at the codex-home root and survive. OpenCode: move the
+/// per-agent session db (+ -shm/-wal sidecars) into `db.bak/` (same
+/// parity) — the resume probe finds no db and boots fresh;
+/// opencode.json at the home root survives.
 /// Durable on-disk files are never touched.
 ///
 /// Gemini has no session resume, so we warn-and-skip rather than abort
@@ -375,6 +384,37 @@ pub(crate) fn freshen_for_spec(root: &Path, spec: &AgentSpec, runtime: &str, fre
             }
             if let Err(e) = fs::rename(&sessions, &bak) {
                 eprintln!("warn · {id} (--fresh: could not move codex sessions aside: {e})");
+            }
+        }
+        FreshenAction::WipeOpencodeSessions => {
+            // Same move-aside parity as codex, adapted to opencode's
+            // session store: one sqlite db (plus optional -shm/-wal
+            // sidecars) instead of a directory tree. An absent db means
+            // "nothing to freshen" — silently keep any earlier backup.
+            // opencode.json at the home root is untouched.
+            let home = team_core::render::opencode_home_dir(root, &spec.project, &spec.agent);
+            let db = home.join("agent.db");
+            if !db.exists() {
+                return;
+            }
+            let bak = home.join("db.bak");
+            if let Err(e) = fs::remove_dir_all(&bak) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("warn · {id} (--fresh: could not clear old db backup: {e})");
+                }
+            }
+            if let Err(e) = fs::create_dir_all(&bak) {
+                eprintln!("warn · {id} (--fresh: could not create db backup dir: {e})");
+                return;
+            }
+            for name in ["agent.db", "agent.db-shm", "agent.db-wal"] {
+                let src = home.join(name);
+                if !src.exists() {
+                    continue; // sidecars only exist while WAL is active
+                }
+                if let Err(e) = fs::rename(&src, bak.join(name)) {
+                    eprintln!("warn · {id} (--fresh: could not move {name} aside: {e})");
+                }
             }
         }
     }
@@ -922,14 +962,19 @@ mod tests {
     fn freshen_action_gates_on_fresh_and_runtime() {
         // Not fresh → nothing, regardless of runtime. Fresh → move
         // Claude's session aside, move codex's per-agent sessions dir
-        // aside; gemini stays a warn-and-skip (parity gap), never an
-        // abort.
+        // aside, move opencode's per-agent session db aside; gemini
+        // stays a warn-and-skip (parity gap), never an abort.
         assert_eq!(freshen_action("claude-code", false), FreshenAction::Skip);
         assert_eq!(freshen_action("codex", false), FreshenAction::Skip);
+        assert_eq!(freshen_action("opencode", false), FreshenAction::Skip);
         assert_eq!(freshen_action("claude-code", true), FreshenAction::Freshen);
         assert_eq!(
             freshen_action("codex", true),
             FreshenAction::WipeCodexSessions
+        );
+        assert_eq!(
+            freshen_action("opencode", true),
+            FreshenAction::WipeOpencodeSessions
         );
         assert_eq!(
             freshen_action("gemini", true),
@@ -1952,6 +1997,59 @@ managers:
         assert_eq!(
             std::fs::read_to_string(bak.join("2026/07/02/rollout-2.jsonl")).unwrap(),
             "v2",
+        );
+    }
+
+    /// OpenCode `--fresh` parity: the session db moves into a `db.bak/`
+    /// recovery copy together with its -shm/-wal sidecars (absent
+    /// sidecars skipped), opencode.json at the home root is untouched,
+    /// a missing db is a silent no-op (keeping any earlier backup),
+    /// and a later `--fresh` replaces a stale backup wholesale.
+    #[test]
+    fn freshen_opencode_moves_db_aside_keeping_home_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let spec = spec_for(root, "hello", "dev");
+        let home = team_core::render::opencode_home_dir(root, "hello", "dev");
+        let bak = home.join("db.bak");
+
+        // Stage the db + one sidecar plus the managed config the
+        // wrapper relies on (the -shm sidecar is deliberately absent —
+        // WAL sidecars only exist while sqlite holds the db open).
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("agent.db"), "v1").unwrap();
+        std::fs::write(home.join("agent.db-wal"), "wal1").unwrap();
+        std::fs::write(home.join("opencode.json"), "{}").unwrap();
+
+        freshen_for_spec(root, &spec, "opencode", true);
+        assert!(!home.join("agent.db").exists(), "db must be moved aside");
+        assert!(!home.join("agent.db-wal").exists(), "sidecar moves too");
+        assert_eq!(std::fs::read_to_string(bak.join("agent.db")).unwrap(), "v1");
+        assert_eq!(
+            std::fs::read_to_string(bak.join("agent.db-wal")).unwrap(),
+            "wal1",
+        );
+        assert!(
+            home.join("opencode.json").is_file(),
+            "managed config survives"
+        );
+
+        // Missing db: silent no-op that keeps the backup.
+        freshen_for_spec(root, &spec, "opencode", true);
+        assert_eq!(
+            std::fs::read_to_string(bak.join("agent.db")).unwrap(),
+            "v1",
+            "no-op freshen must not clobber the existing backup",
+        );
+
+        // A newer session replaces the pre-existing db.bak wholesale.
+        std::fs::write(home.join("agent.db"), "v2").unwrap();
+        freshen_for_spec(root, &spec, "opencode", true);
+        assert!(!home.join("agent.db").exists());
+        assert_eq!(std::fs::read_to_string(bak.join("agent.db")).unwrap(), "v2");
+        assert!(
+            !bak.join("agent.db-wal").exists(),
+            "stale backup must be replaced, not merged into",
         );
     }
 }
