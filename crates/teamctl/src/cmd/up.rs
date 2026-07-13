@@ -303,9 +303,9 @@ pub(crate) enum FreshenAction {
     UnsupportedRuntime,
     /// `--fresh` on a Claude agent: move its session aside.
     Freshen,
-    /// `--fresh` on a codex agent: wipe its per-agent CODEX_HOME
-    /// sessions dir so the wrapper's resume probe falls through to a
-    /// fresh spawn.
+    /// `--fresh` on a codex agent: move its per-agent CODEX_HOME
+    /// sessions dir aside (`.bak` recovery copy) so the wrapper's
+    /// resume probe falls through to a fresh spawn.
     WipeCodexSessions,
 }
 
@@ -326,9 +326,10 @@ pub(crate) fn freshen_action(runtime: &str, fresh: bool) -> FreshenAction {
 /// before it (re)spawns so the wrapper opens a brand-new conversation
 /// (re-running `BOOTSTRAP_PROMPT`). Claude: move the session JSONL
 /// aside (same deterministic UUID, `.bak` recovery copy kept). Codex:
-/// remove the per-agent CODEX_HOME `sessions/` subdir — the wrapper's
-/// resume probe then finds no rollout and boots fresh; config.toml and
-/// the auth.json symlink live at the codex-home root and survive.
+/// move the per-agent CODEX_HOME `sessions/` subdir to `sessions.bak`
+/// (same recovery-copy parity) — the wrapper's resume probe then finds
+/// no rollout and boots fresh; config.toml and the auth.json symlink
+/// live at the codex-home root and survive.
 /// Durable on-disk files are never touched.
 ///
 /// Gemini has no session resume, so we warn-and-skip rather than abort
@@ -357,13 +358,23 @@ pub(crate) fn freshen_for_spec(root: &Path, spec: &AgentSpec, runtime: &str, fre
             }
         }
         FreshenAction::WipeCodexSessions => {
-            let sessions = codex_home_dir(root, &spec.project, &spec.agent).join("sessions");
-            if let Err(e) = fs::remove_dir_all(&sessions) {
-                // Absent dir just means "nothing to freshen" (first
-                // spawn, or already fresh) — not worth a warning.
+            // Move-aside, matching Claude's `.bak` recovery copy. An
+            // absent dir just means "nothing to freshen" (first spawn,
+            // or already fresh) — silently keep any earlier backup
+            // instead of clobbering it with nothing.
+            let home = codex_home_dir(root, &spec.project, &spec.agent);
+            let sessions = home.join("sessions");
+            if !sessions.exists() {
+                return;
+            }
+            let bak = home.join("sessions.bak");
+            if let Err(e) = fs::remove_dir_all(&bak) {
                 if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("warn · {id} (--fresh: could not remove codex sessions: {e})");
+                    eprintln!("warn · {id} (--fresh: could not clear old sessions backup: {e})");
                 }
+            }
+            if let Err(e) = fs::rename(&sessions, &bak) {
+                eprintln!("warn · {id} (--fresh: could not move codex sessions aside: {e})");
             }
         }
     }
@@ -900,8 +911,9 @@ mod tests {
     #[test]
     fn freshen_action_gates_on_fresh_and_runtime() {
         // Not fresh → nothing, regardless of runtime. Fresh → move
-        // Claude's session aside, wipe codex's per-agent sessions dir;
-        // gemini stays a warn-and-skip (parity gap), never an abort.
+        // Claude's session aside, move codex's per-agent sessions dir
+        // aside; gemini stays a warn-and-skip (parity gap), never an
+        // abort.
         assert_eq!(freshen_action("claude-code", false), FreshenAction::Skip);
         assert_eq!(freshen_action("codex", false), FreshenAction::Skip);
         assert_eq!(freshen_action("claude-code", true), FreshenAction::Freshen);
@@ -1672,5 +1684,80 @@ managers:
             let mode = std::fs::metadata(&boot).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o755, "boot.sh must be chmod 0o755");
         }
+    }
+
+    /// Minimal spec for exercising [`freshen_for_spec`] — only the
+    /// project/agent pair matters (they key the codex-home path).
+    fn spec_for(root: &Path, project: &str, agent: &str) -> AgentSpec {
+        AgentSpec {
+            project: project.into(),
+            agent: agent.into(),
+            tmux_session: format!("test-{project}-{agent}"),
+            wrapper: root.join("wrapper.sh"),
+            cwd: root.to_path_buf(),
+            env_file: root.join("env"),
+        }
+    }
+
+    /// T-352 parity: the codex `--fresh` arm moves the sessions dir
+    /// aside as a `sessions.bak` recovery copy (matching Claude's
+    /// `.bak`), leaves config.toml and the auth.json symlink at the
+    /// codex-home root untouched, treats a missing sessions dir as a
+    /// silent no-op (keeping any earlier backup), and replaces a
+    /// stale backup from an earlier `--fresh`.
+    #[test]
+    fn freshen_codex_moves_sessions_aside_keeping_home_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let spec = spec_for(root, "hello", "dev");
+        let home = codex_home_dir(root, "hello", "dev");
+        let sessions = home.join("sessions");
+        let bak = home.join("sessions.bak");
+
+        // Stage a rollout plus the root-level files the wrapper relies on.
+        std::fs::create_dir_all(sessions.join("2026/07/01")).unwrap();
+        std::fs::write(sessions.join("2026/07/01/rollout-1.jsonl"), "v1").unwrap();
+        std::fs::write(home.join("config.toml"), "[mcp_servers.team]").unwrap();
+        let real_auth = root.join("real-auth.json");
+        std::fs::write(&real_auth, "{}").unwrap();
+        std::os::unix::fs::symlink(&real_auth, home.join("auth.json")).unwrap();
+
+        freshen_for_spec(root, &spec, "codex", true);
+        assert!(!sessions.exists(), "sessions dir must be moved aside");
+        assert_eq!(
+            std::fs::read_to_string(bak.join("2026/07/01/rollout-1.jsonl")).unwrap(),
+            "v1",
+            "recovery copy must carry the rollout",
+        );
+        assert!(home.join("config.toml").is_file(), "config.toml survives");
+        assert!(
+            home.join("auth.json")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "auth.json symlink survives as a symlink",
+        );
+
+        // Missing sessions dir: silent no-op that keeps the backup.
+        freshen_for_spec(root, &spec, "codex", true);
+        assert!(
+            bak.join("2026/07/01/rollout-1.jsonl").is_file(),
+            "no-op freshen must not clobber the existing backup",
+        );
+
+        // A newer session replaces the pre-existing .bak wholesale.
+        std::fs::create_dir_all(sessions.join("2026/07/02")).unwrap();
+        std::fs::write(sessions.join("2026/07/02/rollout-2.jsonl"), "v2").unwrap();
+        freshen_for_spec(root, &spec, "codex", true);
+        assert!(!sessions.exists());
+        assert!(
+            !bak.join("2026/07/01/rollout-1.jsonl").exists(),
+            "stale backup must be replaced, not merged into",
+        );
+        assert_eq!(
+            std::fs::read_to_string(bak.join("2026/07/02/rollout-2.jsonl")).unwrap(),
+            "v2",
+        );
     }
 }
