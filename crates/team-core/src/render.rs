@@ -890,7 +890,10 @@ fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> Stri
     // mailbox transport: it stays unconditional and non-clobberable — a
     // declared server named `team` is skipped here (and rejected at
     // validate) so it can never shadow the bus. env values pass through
-    // verbatim; the runtime performs any `${VAR}` expansion.
+    // verbatim — render never expands `${VAR}` placeholders, since that
+    // would write resolved secrets to disk. Claude Code expands them at
+    // launch; codex does NOT interpolate config.toml values, so validate
+    // warns on codex agents (McpEnvInterpolationUnsupported).
     if !h.spec.mcps.is_empty() {
         if runtime_supports_mcp(compose, h) {
             let servers = v["mcpServers"]
@@ -1327,7 +1330,7 @@ mod tests {
         assert_eq!(v["mcpServers"]["github"]["args"][0], "-y");
         assert_eq!(
             v["mcpServers"]["github"]["env"]["GITHUB_TOKEN"], "${GITHUB_TOKEN}",
-            "env values must pass through verbatim — the runtime expands ${{VAR}}"
+            "env values must pass through verbatim — claude expands ${{VAR}} at launch"
         );
         assert_eq!(v["mcpServers"].as_object().unwrap().len(), 2);
     }
@@ -1505,6 +1508,10 @@ mod tests {
     fn codex_config_includes_declared_servers() {
         // Declared `mcps:` land as their own [mcp_servers.<name>] tables
         // next to the team bus, mirroring the JSON transport's merge.
+        // The `${GITHUB_TOKEN}` placeholder passes through literally on
+        // purpose (expanding it here would write the resolved secret to
+        // disk) — but unlike claude, codex does NOT interpolate it at
+        // launch, so validate warns (McpEnvInterpolationUnsupported).
         let mut c = fixture();
         {
             let m = c.projects[0].managers.get_mut("mgr").unwrap();
@@ -1527,7 +1534,7 @@ mod tests {
         );
         assert!(
             toml.contains("[mcp_servers.github.env]\nGITHUB_TOKEN = \"${GITHUB_TOKEN}\""),
-            "env must land in a sub-table, verbatim: {toml}"
+            "env must land in a sub-table, verbatim — codex won't expand it: {toml}"
         );
     }
 

@@ -109,6 +109,60 @@ pub enum ValidationError {
     ReservedMcpServerName { project: String, agent: String },
 }
 
+/// Non-fatal findings: compose shapes that load and render fine but
+/// silently drop declared behavior. `teamctl validate` prints these
+/// without failing — the compose is still valid, the operator just
+/// isn't getting what they wrote.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ValidationWarning {
+    #[error("agent `{project}:{agent}` declares {count} hook(s) but runtime `{runtime}` does not support hooks — they will be ignored at render time")]
+    HooksUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+        count: usize,
+    },
+
+    #[error("agent `{project}:{agent}` declares {count} sub-agent(s) but runtime `{runtime}` does not support sub-agents — they will be ignored at render time")]
+    SubagentsUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+        count: usize,
+    },
+
+    #[error("agent `{project}:{agent}` declares {count} skill(s) but runtime `{runtime}` does not support skills — they will be ignored at render time")]
+    SkillsUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+        count: usize,
+    },
+
+    #[error("agent `{project}:{agent}` declares `effort:` but runtime `{runtime}` does not consume it — it will be ignored")]
+    EffortUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+    },
+
+    #[error("agent `{project}:{agent}` declares MCP server `{server}` with a `${{VAR}}` placeholder in env — runtime `{runtime}` does not interpolate env values, so the literal placeholder reaches the server; use a literal value or export the secret in the environment the server inherits")]
+    McpEnvInterpolationUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+        server: String,
+    },
+
+    #[error("agent `{project}:{agent}` sets `permission_mode: {mode}` but runtime `{runtime}` has no permission mapping — the setting is ignored at launch (the wrapper's gemini arm hardcodes --yolo)")]
+    PermissionModeUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+        mode: String,
+    },
+}
+
 /// T-160: max length for `display_name`. 64 is a sensible upper bound
 /// matching ratatui column widths in the TUI roster pane; longer names
 /// would force unsightly truncation downstream. Counted in Unicode
@@ -316,6 +370,106 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
     }
 
     errs
+}
+
+/// Capability-mismatch sweep, separate from [`validate`] so the
+/// errors-only contract (and every `up` / `down` / `reload` / bot call
+/// site) stays untouched. `teamctl validate` calls both and prints
+/// warnings without flipping the exit code.
+///
+/// Hooks, sub-agents, and skills are claude-code-only today — the render
+/// layer already `tracing::warn!`s when it drops them (render can run
+/// without validate), but those warns are invisible in normal CLI runs;
+/// this is the operator-visible surface. `effort:` is consumed by both
+/// claude-code (`--effort`) and codex (`-c model_reasoning_effort`); any
+/// other wrapper arm ignores `$EFFORT`. `permission_mode:` maps to flags
+/// in the claude-code and codex arms only. And `${VAR}` placeholders in
+/// declared MCP env values are expanded by claude-code alone — codex
+/// hands the server the literal string.
+pub fn validate_warnings(compose: &Compose) -> Vec<ValidationWarning> {
+    let mut warns = Vec::new();
+    for p in &compose.projects {
+        let check_agent =
+            |warns: &mut Vec<ValidationWarning>, id: &str, a: &crate::compose::Agent| {
+                if a.runtime == "claude-code" {
+                    return;
+                }
+                if !a.hooks.is_empty() {
+                    warns.push(ValidationWarning::HooksUnsupported {
+                        project: p.project.id.clone(),
+                        agent: id.into(),
+                        runtime: a.runtime.clone(),
+                        count: a.hooks.len(),
+                    });
+                }
+                if !a.subagents.is_empty() {
+                    warns.push(ValidationWarning::SubagentsUnsupported {
+                        project: p.project.id.clone(),
+                        agent: id.into(),
+                        runtime: a.runtime.clone(),
+                        count: a.subagents.len(),
+                    });
+                }
+                if !a.skills.is_empty() {
+                    warns.push(ValidationWarning::SkillsUnsupported {
+                        project: p.project.id.clone(),
+                        agent: id.into(),
+                        runtime: a.runtime.clone(),
+                        count: a.skills.len(),
+                    });
+                }
+                if a.effort.is_some() && a.runtime != "codex" {
+                    warns.push(ValidationWarning::EffortUnsupported {
+                        project: p.project.id.clone(),
+                        agent: id.into(),
+                        runtime: a.runtime.clone(),
+                    });
+                }
+                // Claude Code expands `${VAR}` placeholders in .mcp.json
+                // env values at launch; codex reads config.toml literally,
+                // so the placeholder string reaches the server process and
+                // auth silently breaks. Deliberately NOT fixed by expanding
+                // at render time — that would write resolved secrets to
+                // disk. Warn so the operator gives the server a literal
+                // value or exports the secret in the environment the MCP
+                // server process inherits.
+                if a.runtime == "codex" {
+                    for (server, srv) in &a.mcps {
+                        if srv.env.values().any(|v| v.contains("${")) {
+                            warns.push(ValidationWarning::McpEnvInterpolationUnsupported {
+                                project: p.project.id.clone(),
+                                agent: id.into(),
+                                runtime: a.runtime.clone(),
+                                server: server.clone(),
+                            });
+                        }
+                    }
+                }
+                // `permission_mode` maps to real flags only in the wrapper's
+                // claude-code and codex arms; the gemini arm hardcodes
+                // `--yolo`, so e.g. `permission_mode: attended` silently
+                // becomes bypass-everything — the most dangerous silent
+                // mismatch in the matrix. `None` is the schema default, so
+                // warning only on `Some` keeps untouched agents quiet.
+                if a.runtime != "codex" {
+                    if let Some(mode) = &a.permission_mode {
+                        warns.push(ValidationWarning::PermissionModeUnsupported {
+                            project: p.project.id.clone(),
+                            agent: id.into(),
+                            runtime: a.runtime.clone(),
+                            mode: mode.clone(),
+                        });
+                    }
+                }
+            };
+        for (id, a) in &p.managers {
+            check_agent(&mut warns, id, a);
+        }
+        for (id, a) in &p.workers {
+            check_agent(&mut warns, id, a);
+        }
+    }
+    warns
 }
 
 #[cfg(test)]
@@ -841,5 +995,197 @@ mod tests {
                 "semver `{ok}` must validate"
             );
         }
+    }
+
+    // ── capability-mismatch warnings (non-fatal) ─────────────────────────
+    //
+    // Hooks / sub-agents / skills are claude-code-only; effort is consumed
+    // by claude-code and codex but not gemini. The render layer drops the
+    // unsupported ones with a tracing warn that's invisible in normal CLI
+    // runs — `validate_warnings` is the operator-visible surface.
+
+    fn one_hook() -> crate::compose::HookSpec {
+        crate::compose::HookSpec {
+            event: "PreToolUse".into(),
+            matcher: None,
+            command: PathBuf::from("hooks/guard.sh"),
+        }
+    }
+
+    #[test]
+    fn clean_compose_produces_no_warnings() {
+        let c = toy_compose("dev");
+        assert_eq!(validate_warnings(&c), vec![]);
+    }
+
+    #[test]
+    fn codex_agent_with_hooks_warns() {
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.hooks = vec![one_hook(), one_hook()];
+        let warns = validate_warnings(&c);
+        assert!(
+            warns.iter().any(|w| matches!(
+                w,
+                ValidationWarning::HooksUnsupported { project, agent, runtime, count }
+                    if project == "hello" && agent == "mgr" && runtime == "codex" && *count == 2
+            )),
+            "expected HooksUnsupported, got {warns:?}",
+        );
+    }
+
+    #[test]
+    fn codex_agent_with_subagents_warns() {
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.subagents = vec![PathBuf::from("agents/reviewer.md")];
+        assert!(validate_warnings(&c)
+            .iter()
+            .any(|w| matches!(w, ValidationWarning::SubagentsUnsupported { count: 1, .. })));
+    }
+
+    #[test]
+    fn codex_agent_with_skills_warns() {
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.skills = vec![PathBuf::from("skills/release")];
+        assert!(validate_warnings(&c)
+            .iter()
+            .any(|w| matches!(w, ValidationWarning::SkillsUnsupported { count: 1, .. })));
+    }
+
+    /// An `mcps:` server whose env carries a `${VAR}` placeholder.
+    fn github_mcp_with_placeholder() -> crate::compose::McpServer {
+        crate::compose::McpServer {
+            command: "npx".into(),
+            args: vec!["-y".into(), "@modelcontextprotocol/server-github".into()],
+            env: [("GITHUB_TOKEN".to_string(), "${GITHUB_TOKEN}".to_string())]
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn claude_code_agent_with_all_capabilities_produces_no_warnings() {
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.hooks = vec![one_hook()];
+        mgr.subagents = vec![PathBuf::from("agents/reviewer.md")];
+        mgr.skills = vec![PathBuf::from("skills/release")];
+        mgr.effort = Some(crate::compose::EffortLevel::High);
+        // Both stay quiet on claude-code: it maps permission_mode to a
+        // real flag and expands `${VAR}` in MCP env values at launch.
+        mgr.permission_mode = Some("attended".into());
+        mgr.mcps
+            .insert("github".into(), github_mcp_with_placeholder());
+        assert_eq!(validate_warnings(&c), vec![]);
+    }
+
+    #[test]
+    fn codex_agent_with_effort_only_produces_no_warnings() {
+        // Effort IS wired for codex (`-c model_reasoning_effort` in the
+        // wrapper) — it must never trip the warning sweep.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.effort = Some(crate::compose::EffortLevel::High);
+        assert_eq!(validate_warnings(&c), vec![]);
+    }
+
+    #[test]
+    fn codex_agent_with_mcp_env_placeholder_warns() {
+        // Codex does not interpolate config.toml env values — the literal
+        // `${GITHUB_TOKEN}` string would reach the server and auth
+        // silently breaks.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.mcps
+            .insert("github".into(), github_mcp_with_placeholder());
+        let warns = validate_warnings(&c);
+        assert!(
+            warns.iter().any(|w| matches!(
+                w,
+                ValidationWarning::McpEnvInterpolationUnsupported { project, agent, runtime, server }
+                    if project == "hello" && agent == "mgr" && runtime == "codex" && server == "github"
+            )),
+            "expected McpEnvInterpolationUnsupported, got {warns:?}",
+        );
+    }
+
+    #[test]
+    fn codex_agent_with_literal_mcp_env_produces_no_warnings() {
+        // Literal env values are exactly what codex wants — no warning.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        let mut gh = github_mcp_with_placeholder();
+        gh.env
+            .insert("GITHUB_TOKEN".into(), "ghp_literal-token".into());
+        mgr.mcps.insert("github".into(), gh);
+        assert_eq!(validate_warnings(&c), vec![]);
+    }
+
+    #[test]
+    fn gemini_agent_with_permission_mode_warns() {
+        // The wrapper's gemini arm hardcodes --yolo, so an explicit
+        // `permission_mode: attended` silently becomes bypass-everything —
+        // the warning is the only visible trace of that mismatch.
+        let mut c = toy_compose("dev");
+        let wkr = c.projects[0].workers.get_mut("dev").unwrap();
+        wkr.runtime = "gemini".into();
+        wkr.permission_mode = Some("attended".into());
+        let warns = validate_warnings(&c);
+        assert!(
+            warns.iter().any(|w| matches!(
+                w,
+                ValidationWarning::PermissionModeUnsupported { agent, runtime, mode, .. }
+                    if agent == "dev" && runtime == "gemini" && mode == "attended"
+            )),
+            "expected PermissionModeUnsupported, got {warns:?}",
+        );
+    }
+
+    #[test]
+    fn gemini_agent_without_permission_mode_produces_no_permission_warning() {
+        // `None` is the schema default — only an explicitly-set mode warns.
+        let mut c = toy_compose("dev");
+        let wkr = c.projects[0].workers.get_mut("dev").unwrap();
+        wkr.runtime = "gemini".into();
+        assert!(!validate_warnings(&c)
+            .iter()
+            .any(|w| matches!(w, ValidationWarning::PermissionModeUnsupported { .. })));
+    }
+
+    #[test]
+    fn codex_agent_with_permission_mode_produces_no_warnings() {
+        // The codex arm maps permission_mode (attended / bypassPermissions
+        // / headless default) to real flags — never a mismatch.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.permission_mode = Some("bypassPermissions".into());
+        assert_eq!(validate_warnings(&c), vec![]);
+    }
+
+    #[test]
+    fn gemini_agent_with_effort_warns() {
+        // The wrapper's gemini arm never reads $EFFORT.
+        let mut c = toy_compose("dev");
+        let wkr = c.projects[0].workers.get_mut("dev").unwrap();
+        wkr.runtime = "gemini".into();
+        wkr.effort = Some(crate::compose::EffortLevel::Low);
+        let warns = validate_warnings(&c);
+        assert!(
+            warns.iter().any(|w| matches!(
+                w,
+                ValidationWarning::EffortUnsupported { agent, runtime, .. }
+                    if agent == "dev" && runtime == "gemini"
+            )),
+            "expected EffortUnsupported, got {warns:?}",
+        );
     }
 }
