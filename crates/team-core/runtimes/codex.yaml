@@ -8,6 +8,13 @@
 #
 # No default_model: codex picks its own configured default; upstream
 # model names rotate too fast to pin here.
+#
+# Provenance: the flag surface (`-c model_instructions_file` /
+# `-c model_reasoning_effort`, `-a`/`-s`/`--yolo`, `resume --last`, the
+# sessions/ layout, trust-dialog wording) was verified against the
+# upstream docs and the openai/codex issue tracker as of July 2026 —
+# NOT against a locally-run binary. `-c` keys fail SILENTLY if renamed
+# upstream, so re-verify this surface on codex CLI version bumps.
 
 binary: codex
 supports_mcp: true
