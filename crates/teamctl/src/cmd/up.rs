@@ -6,7 +6,8 @@ use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
 use team_core::render::{
     boot_script_path, claude_settings_path, env_path, mcp_path, render_agent,
-    render_claude_settings, write_agent_skills, write_role_prompt_concat, write_subagents_json,
+    render_claude_settings, write_agent_skills, write_codex_config, write_role_prompt_concat,
+    write_subagents_json,
 };
 use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
@@ -385,6 +386,11 @@ pub fn render_project_public(compose: &Compose, project_id: &str) -> Result<()> 
                 settings,
             )?;
         }
+        // Codex reads MCP servers from `[mcp_servers.*]` tables in its
+        // per-agent CODEX_HOME (no --mcp-config flag); render (or clear)
+        // that config.toml alongside the JSON.
+        write_codex_config(compose, h, &bin)
+            .with_context(|| format!("write codex config for {}:{}", h.project, h.agent))?;
         // Mirror render_all_public: the scoped path must also
         // re-materialize multi-file role_prompt concat or a scoped
         // reload after a source-file edit boots the agent against a
@@ -540,6 +546,11 @@ pub fn render_all_public(compose: &Compose) -> Result<()> {
                 settings,
             )?;
         }
+        // Codex reads MCP servers from `[mcp_servers.*]` tables in its
+        // per-agent CODEX_HOME (no --mcp-config flag); render (or clear)
+        // that config.toml alongside the JSON.
+        write_codex_config(compose, h, &bin)
+            .with_context(|| format!("write codex config for {}:{}", h.project, h.agent))?;
         // Re-materialize multi-file role_prompt concat unconditionally
         // so any edit to a source file flows into the agent's prompt at
         // the next render — single-form is a no-op (back-compat).
@@ -1025,6 +1036,92 @@ mod tests {
         assert!(
             DEFAULT_WRAPPER.contains("[ \"${PERMISSION_MODE:-}\" = \"attended\" ]"),
             "wrapper must keep the set -u-safe attended opt-out branch",
+        );
+    }
+
+    /// The `codex)` case body of the wrapper, sliced between the case
+    /// label and its `;;` terminator — so negative assertions (no
+    /// `--mcp-config`) can't be fouled by the claude-code branch's
+    /// legitimate use of the same flag.
+    fn wrapper_codex_branch() -> &'static str {
+        let start = DEFAULT_WRAPPER
+            .find("codex)")
+            .expect("DEFAULT_WRAPPER has a codex) case");
+        let body = &DEFAULT_WRAPPER[start..];
+        let end = body.find(";;").expect("codex) case terminated by ;;");
+        &body[..end]
+    }
+
+    /// Codex launch correctness: the real Codex CLI has no --mcp-config
+    /// or --instructions flags (TypeScript-era leftovers). MCP rides the
+    /// per-agent CODEX_HOME config.toml; instructions + reasoning effort
+    /// ride the repeatable `-c KEY=VALUE` override. Pin the shapes so a
+    /// silent wrapper edit can't reintroduce the phantom flags and break
+    /// every codex spawn at argv parsing.
+    #[test]
+    fn wrapper_codex_uses_config_overrides_not_phantom_flags() {
+        let codex = wrapper_codex_branch();
+        assert!(
+            codex.contains("-c \"model_reasoning_effort=$EFFORT\""),
+            "codex branch must pass effort via -c model_reasoning_effort",
+        );
+        assert!(
+            codex.contains("-c \"model_instructions_file=$SYSTEM_PROMPT_PATH\""),
+            "codex branch must pass the role prompt via -c model_instructions_file",
+        );
+        // Match the full flag usage, not the bare flag name — the codex
+        // branch's comments legitimately name the nonexistent flags to
+        // explain why the -c overrides are used instead.
+        assert!(
+            !codex.contains("--mcp-config \"$MCP_CONFIG\""),
+            "codex has no --mcp-config flag — MCP goes through CODEX_HOME/config.toml",
+        );
+        assert!(
+            !codex.contains("--instructions \"$SYSTEM_PROMPT_PATH\""),
+            "codex has no --instructions flag",
+        );
+        assert!(
+            codex.contains("export CODEX_HOME"),
+            "codex branch must export the per-agent CODEX_HOME",
+        );
+    }
+
+    /// Codex permission mapping mirrors the claude-code branch's
+    /// semantics: attended → codex's own interactive default (no flags),
+    /// bypassPermissions → --yolo, headless default → `-a never` plus the
+    /// workspace-write sandbox (approvals can't prompt in an unattended
+    /// pane; the sandbox boundary is the guardrail).
+    #[test]
+    fn wrapper_codex_permission_mapping_present() {
+        let codex = wrapper_codex_branch();
+        assert!(
+            codex.contains("-a never -s workspace-write"),
+            "codex headless default must be -a never -s workspace-write",
+        );
+        assert!(
+            codex.contains("--yolo"),
+            "codex bypassPermissions must map to --yolo",
+        );
+        assert!(
+            codex.contains("[ \"${PERMISSION_MODE:-}\" = \"attended\" ]"),
+            "codex branch must keep the set -u-safe attended opt-out",
+        );
+    }
+
+    /// Codex's first-run "trust this folder" dialog defaults to the
+    /// trust option, so the auto-confirm watcher accepts it with one
+    /// Enter — otherwise the first spawn in a new directory strands an
+    /// unattended pane. Pin the pattern (and the codex arm opting into
+    /// the watcher) so a silent edit can't re-strand codex boots.
+    #[test]
+    fn wrapper_codex_trust_dialog_auto_confirmed() {
+        assert!(
+            DEFAULT_WRAPPER.contains("Yes, I trust this folder"),
+            "auto-confirm watcher must match codex's trust-folder dialog",
+        );
+        assert!(
+            wrapper_codex_branch().contains("AUTO_CONFIRM=1"),
+            "codex branch must opt into the auto-confirm watcher",
         );
     }
 

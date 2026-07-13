@@ -1,16 +1,17 @@
 # Runtime adapter: OpenAI Codex CLI
 #
-# Launched by `bin/agent-wrapper.sh` in the `run_codex` branch.
-# MCP stdio: supported since codex-cli 0.14 (mid-2025).
+# Launched by the `codex)` case in `bin/agent-wrapper.sh`.
+# MCP stdio: codex has no --mcp-config flag; servers are read from
+# [mcp_servers.*] tables in the per-agent CODEX_HOME/config.toml that
+# team-core renders under state/codex-home/.
 # Session resume: profile-based (see `--profile`).
+#
+# No default_model: codex picks its own configured default; upstream
+# model names rotate too fast to pin here.
 
 binary: codex
 supports_mcp: true
 session_resume: "profile"
-default_model: gpt-5-codex
-env:
-  # Disable codex's own approval prompt — HITL gate in team-mcp handles this.
-  CODEX_APPROVAL_MODE: "auto-edit"
 
 rate_limit_patterns:
   - match: "(?i)rate.?limit"

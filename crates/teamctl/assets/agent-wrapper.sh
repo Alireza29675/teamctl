@@ -30,6 +30,11 @@ fi
 : "${MCP_CONFIG:=}"
 : "${CLAUDE_AGENTS_JSON:=}"
 : "${CLAUDE_AGENT_SCOPE:=}"
+# Rendered into the env file only for codex runtime (per-agent state
+# root carrying the [mcp_servers.*] config). Default to empty so the
+# codex arm's `[ -n "$CODEX_HOME" ]` guard is set -u-safe for other
+# runtimes and older env files.
+: "${CODEX_HOME:=}"
 : "${SYSTEM_PROMPT_PATH:=}"
 : "${CLAUDE_PROJECT_DIR:=.}"
 : "${TEAMCTL_ROOT:=$CLAUDE_PROJECT_DIR}"
@@ -75,7 +80,7 @@ log() {
     printf '[agent-wrapper %s] %s\n' "$AGENT" "$*" >&2
 }
 
-# Claude Code surfaces a handful of one-shot confirmation dialogs that
+# The runtimes surface a handful of one-shot confirmation dialogs that
 # strand a headless agent because no operator is at the keyboard:
 #
 #   - "Loading development channels"   — fires every wrapper start
@@ -109,18 +114,27 @@ log() {
 #     against claude 2.1.161. The owner opted to auto-accept this one
 #     silently for headless agents (no operator notice) so panes don't
 #     stall; the general fix for the whole prompt class is #421.
+#   - "Yes, I trust this folder"       — codex's first-run trust dialog,
+#     once per directory. The trust option is the default, so a single
+#     Enter accepts it — running `teamctl up` is itself the "I trust
+#     this directory" signal (same rationale as the claude-code trust
+#     pre-acceptance in `teamctl up`). Codex's "Hooks need review"
+#     prompt is deliberately NOT auto-accepted: that's a security
+#     review surface and belongs to an attached operator.
 #
 # The watcher polls our own tmux pane for any of these headers and
 # sends one Enter when matched, then sleeps 1s so the dialog clears
 # from the captured frame before the next poll (otherwise the same
-# match would re-fire). The first three patterns are claude chrome
-# strings that don't occur in normal output. The trust and MCP dialogs
-# are matched on a two-string co-occurrence rather than a single header,
-# so an agent that merely *prints* one of the phrases can't trigger a
-# stray Enter: trust needs "Quick safety check:" AND "trust this folder";
-# MCP needs "MCP servers may execute code" AND the footer chrome
-# "Enter to confirm · Esc" (the interpunct footer doesn't occur in prose,
-# so an agent discussing MCP security can't collide with it).
+# match would re-fire). The single-pattern strings are runtime chrome
+# that doesn't occur in normal output (the codex trust wording is
+# dialog-only, so it rides the same alternation). The claude trust and
+# MCP dialogs are matched on a two-string co-occurrence rather than a
+# single header, so an agent that merely *prints* one of the phrases
+# can't trigger a stray Enter: trust needs "Quick safety check:" AND
+# "trust this folder"; MCP needs "MCP servers may execute code" AND the
+# footer chrome "Enter to confirm · Esc" (the interpunct footer doesn't
+# occur in prose, so an agent discussing MCP security can't collide
+# with it).
 #
 # The watcher runs for the full lifetime of the runtime (the limit
 # prompt can fire at any point, not only at boot) and is reaped by
@@ -133,7 +147,7 @@ auto_confirm_known_dialogs() {
     while :; do
         frame=$(tmux capture-pane -t "$pane" -p 2>/dev/null)
         if printf '%s\n' "$frame" \
-            | grep -qE 'Loading development channels|Bypass Permissions mode|Stop and wait for limit to reset' \
+            | grep -qE 'Loading development channels|Bypass Permissions mode|Stop and wait for limit to reset|Yes, I trust this folder' \
             || { printf '%s\n' "$frame" | grep -q 'Quick safety check:' \
                  && printf '%s\n' "$frame" | grep -q 'trust this folder'; } \
             || { printf '%s\n' "$frame" | grep -q 'MCP servers may execute code' \
@@ -298,10 +312,52 @@ while :; do
         codex)
             BIN=codex
             set --
+            # Codex has no --mcp-config flag: MCP servers live in
+            # [mcp_servers.*] tables inside $CODEX_HOME/config.toml,
+            # rendered per-agent by team-core. CODEX_HOME relocates the
+            # entire state root (config, sessions, history) — the clean
+            # per-agent isolation mechanism — but it relocates
+            # credentials too, so symlink the operator's auth.json in;
+            # without it every agent would demand its own device-flow
+            # login.
+            if [ -n "$CODEX_HOME" ]; then
+                export CODEX_HOME
+                mkdir -p "$CODEX_HOME"
+                if [ -f "$HOME/.codex/auth.json" ] && [ ! -e "$CODEX_HOME/auth.json" ]; then
+                    ln -s "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json"
+                fi
+            fi
             [ -n "$MODEL" ] && set -- "$@" --model "$MODEL"
-            [ -n "$MCP_CONFIG" ] && set -- "$@" --mcp-config "$MCP_CONFIG"
-            [ -n "$SYSTEM_PROMPT_PATH" ] && set -- "$@" --instructions "$SYSTEM_PROMPT_PATH"
+            # Codex has no --effort flag; reasoning effort rides the
+            # repeatable `-c KEY=VALUE` config override. Values pass
+            # through verbatim — codex validates them.
+            [ -n "$EFFORT" ] && set -- "$@" -c "model_reasoning_effort=$EFFORT"
+            # Codex has no --instructions flag either. The
+            # model_instructions_file override supersedes codex's own
+            # project AGENTS.md discovery for this agent — deliberate:
+            # the rendered role prompt IS the agent's instruction set.
+            [ -n "$SYSTEM_PROMPT_PATH" ] && [ -f "$SYSTEM_PROMPT_PATH" ] && \
+                set -- "$@" -c "model_instructions_file=$SYSTEM_PROMPT_PATH"
+            # Permission mapping, mirroring the claude-code branch:
+            # attended means a human is at the keyboard, so codex keeps
+            # its own interactive approval default (on-request);
+            # bypassPermissions flows to --yolo (the opt-in
+            # bypass-everything escape hatch, no teamctl-specific
+            # variant); everything else (or unset) is headless —
+            # approvals can't prompt in an unattended pane, so `-a
+            # never` plus the workspace-write sandbox makes the sandbox
+            # boundary the guardrail: out-of-workspace actions fail
+            # visibly instead of stranding the pane on a prompt.
+            if [ "${PERMISSION_MODE:-}" = "attended" ]; then
+                :
+            elif [ "${PERMISSION_MODE:-}" = "bypassPermissions" ]; then
+                set -- "$@" --yolo
+            else
+                set -- "$@" -a never -s workspace-write
+            fi
+            # The codex TUI takes the bootstrap as a positional PROMPT.
             set -- "$@" "$BOOTSTRAP_PROMPT"
+            AUTO_CONFIRM=1
             ;;
         gemini)
             BIN=gemini
