@@ -177,6 +177,38 @@ fn validate_fails_on_unknown_dm_target() {
 }
 
 #[test]
+fn validate_warns_on_codex_hooks_but_still_succeeds() {
+    // Hooks are claude-code-only; declaring them on a codex agent is a
+    // capability mismatch that render silently drops. Validate must
+    // surface it as a warning WITHOUT flipping the exit code.
+    let tmp = tempdir().unwrap();
+    seed_compose(tmp.path());
+    let path = tmp.path().join("projects/hello.yaml");
+    let contents = fs::read_to_string(&path).unwrap().replace(
+        "    runtime: claude-code\n    model: claude-sonnet-4-6",
+        "    runtime: codex\n    hooks:\n      - event: PreToolUse\n        command: hooks/guard.sh",
+    );
+    fs::write(&path, contents).unwrap();
+
+    let out = Command::new(bin())
+        .args(["--root", tmp.path().to_str().unwrap(), "validate"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "warnings must not fail validate; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("warning:") && stderr.contains("does not support hooks"),
+        "stderr was: {stderr}"
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("ok"), "got: {stdout}");
+}
+
+#[test]
 fn send_injects_into_mailbox() {
     let tmp = tempdir().unwrap();
     seed_compose(tmp.path());

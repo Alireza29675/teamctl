@@ -31,6 +31,23 @@ The `agent-wrapper.sh` dispatches on `$RUNTIME` and calls the matching binary wi
 
 Agents on any runtime react to new mail on arrival — only the mechanism differs. Claude Code agents get each message pushed into their session as a `<channel source="team">` event; Codex and Gemini agents get a short `📬 N new team message(s)` note typed into their tmux pane by the team mailbox, which sends them to `inbox_peek` / `inbox_read` / `inbox_ack`. The mailbox is the source of truth in both cases, so mixing runtimes never changes what a message means — just how it knocks.
 
+## What each runtime supports
+
+Not every agent-spec field applies to every runtime:
+
+| Capability | Claude Code | Codex | Gemini |
+|---|---|---|---|
+| MCP (`mcps:` + built-in `team` mailbox) | ✓ | ✓ | ✓ |
+| `model` | ✓ | ✓ | ✓ |
+| `effort` | ✓ | ✓ | — |
+| `permission_mode` (incl. `attended`, `bypassPermissions`) | ✓ | ✓ | — |
+| Compaction on rate limit / Telegram slash passthrough | ✓ | ✓ | — |
+| `hooks` | ✓ | — | — |
+| `subagents` | ✓ | — | — |
+| `skills` | ✓ | — | — |
+
+A capability declared on a runtime that doesn't support it is ignored at render time. `teamctl validate` prints a warning for each such mismatch (validation still succeeds).
+
 ## When to pick which
 
 | Runtime | Strong at |

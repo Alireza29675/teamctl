@@ -109,6 +109,44 @@ pub enum ValidationError {
     ReservedMcpServerName { project: String, agent: String },
 }
 
+/// Non-fatal findings: compose shapes that load and render fine but
+/// silently drop declared behavior. `teamctl validate` prints these
+/// without failing — the compose is still valid, the operator just
+/// isn't getting what they wrote.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ValidationWarning {
+    #[error("agent `{project}:{agent}` declares {count} hook(s) but runtime `{runtime}` does not support hooks — they will be ignored at render time")]
+    HooksUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+        count: usize,
+    },
+
+    #[error("agent `{project}:{agent}` declares {count} sub-agent(s) but runtime `{runtime}` does not support sub-agents — they will be ignored at render time")]
+    SubagentsUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+        count: usize,
+    },
+
+    #[error("agent `{project}:{agent}` declares {count} skill(s) but runtime `{runtime}` does not support skills — they will be ignored at render time")]
+    SkillsUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+        count: usize,
+    },
+
+    #[error("agent `{project}:{agent}` declares `effort:` but runtime `{runtime}` does not consume it — it will be ignored")]
+    EffortUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+    },
+}
+
 /// T-160: max length for `display_name`. 64 is a sensible upper bound
 /// matching ratatui column widths in the TUI roster pane; longer names
 /// would force unsightly truncation downstream. Counted in Unicode
@@ -316,6 +354,67 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
     }
 
     errs
+}
+
+/// Capability-mismatch sweep, separate from [`validate`] so the
+/// errors-only contract (and every `up` / `down` / `reload` / bot call
+/// site) stays untouched. `teamctl validate` calls both and prints
+/// warnings without flipping the exit code.
+///
+/// Hooks, sub-agents, and skills are claude-code-only today — the render
+/// layer already `tracing::warn!`s when it drops them (render can run
+/// without validate), but those warns are invisible in normal CLI runs;
+/// this is the operator-visible surface. `effort:` is consumed by both
+/// claude-code (`--effort`) and codex (`-c model_reasoning_effort`); any
+/// other wrapper arm ignores `$EFFORT`.
+pub fn validate_warnings(compose: &Compose) -> Vec<ValidationWarning> {
+    let mut warns = Vec::new();
+    for p in &compose.projects {
+        let check_agent =
+            |warns: &mut Vec<ValidationWarning>, id: &str, a: &crate::compose::Agent| {
+                if a.runtime == "claude-code" {
+                    return;
+                }
+                if !a.hooks.is_empty() {
+                    warns.push(ValidationWarning::HooksUnsupported {
+                        project: p.project.id.clone(),
+                        agent: id.into(),
+                        runtime: a.runtime.clone(),
+                        count: a.hooks.len(),
+                    });
+                }
+                if !a.subagents.is_empty() {
+                    warns.push(ValidationWarning::SubagentsUnsupported {
+                        project: p.project.id.clone(),
+                        agent: id.into(),
+                        runtime: a.runtime.clone(),
+                        count: a.subagents.len(),
+                    });
+                }
+                if !a.skills.is_empty() {
+                    warns.push(ValidationWarning::SkillsUnsupported {
+                        project: p.project.id.clone(),
+                        agent: id.into(),
+                        runtime: a.runtime.clone(),
+                        count: a.skills.len(),
+                    });
+                }
+                if a.effort.is_some() && a.runtime != "codex" {
+                    warns.push(ValidationWarning::EffortUnsupported {
+                        project: p.project.id.clone(),
+                        agent: id.into(),
+                        runtime: a.runtime.clone(),
+                    });
+                }
+            };
+        for (id, a) in &p.managers {
+            check_agent(&mut warns, id, a);
+        }
+        for (id, a) in &p.workers {
+            check_agent(&mut warns, id, a);
+        }
+    }
+    warns
 }
 
 #[cfg(test)]
@@ -841,5 +940,105 @@ mod tests {
                 "semver `{ok}` must validate"
             );
         }
+    }
+
+    // ── capability-mismatch warnings (non-fatal) ─────────────────────────
+    //
+    // Hooks / sub-agents / skills are claude-code-only; effort is consumed
+    // by claude-code and codex but not gemini. The render layer drops the
+    // unsupported ones with a tracing warn that's invisible in normal CLI
+    // runs — `validate_warnings` is the operator-visible surface.
+
+    fn one_hook() -> crate::compose::HookSpec {
+        crate::compose::HookSpec {
+            event: "PreToolUse".into(),
+            matcher: None,
+            command: PathBuf::from("hooks/guard.sh"),
+        }
+    }
+
+    #[test]
+    fn clean_compose_produces_no_warnings() {
+        let c = toy_compose("dev");
+        assert_eq!(validate_warnings(&c), vec![]);
+    }
+
+    #[test]
+    fn codex_agent_with_hooks_warns() {
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.hooks = vec![one_hook(), one_hook()];
+        let warns = validate_warnings(&c);
+        assert!(
+            warns.iter().any(|w| matches!(
+                w,
+                ValidationWarning::HooksUnsupported { project, agent, runtime, count }
+                    if project == "hello" && agent == "mgr" && runtime == "codex" && *count == 2
+            )),
+            "expected HooksUnsupported, got {warns:?}",
+        );
+    }
+
+    #[test]
+    fn codex_agent_with_subagents_warns() {
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.subagents = vec![PathBuf::from("agents/reviewer.md")];
+        assert!(validate_warnings(&c)
+            .iter()
+            .any(|w| matches!(w, ValidationWarning::SubagentsUnsupported { count: 1, .. })));
+    }
+
+    #[test]
+    fn codex_agent_with_skills_warns() {
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.skills = vec![PathBuf::from("skills/release")];
+        assert!(validate_warnings(&c)
+            .iter()
+            .any(|w| matches!(w, ValidationWarning::SkillsUnsupported { count: 1, .. })));
+    }
+
+    #[test]
+    fn claude_code_agent_with_all_capabilities_produces_no_warnings() {
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.hooks = vec![one_hook()];
+        mgr.subagents = vec![PathBuf::from("agents/reviewer.md")];
+        mgr.skills = vec![PathBuf::from("skills/release")];
+        mgr.effort = Some(crate::compose::EffortLevel::High);
+        assert_eq!(validate_warnings(&c), vec![]);
+    }
+
+    #[test]
+    fn codex_agent_with_effort_only_produces_no_warnings() {
+        // Effort IS wired for codex (`-c model_reasoning_effort` in the
+        // wrapper) — it must never trip the warning sweep.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.effort = Some(crate::compose::EffortLevel::High);
+        assert_eq!(validate_warnings(&c), vec![]);
+    }
+
+    #[test]
+    fn gemini_agent_with_effort_warns() {
+        // The wrapper's gemini arm never reads $EFFORT.
+        let mut c = toy_compose("dev");
+        let wkr = c.projects[0].workers.get_mut("dev").unwrap();
+        wkr.runtime = "gemini".into();
+        wkr.effort = Some(crate::compose::EffortLevel::Low);
+        let warns = validate_warnings(&c);
+        assert!(
+            warns.iter().any(|w| matches!(
+                w,
+                ValidationWarning::EffortUnsupported { agent, runtime, .. }
+                    if agent == "dev" && runtime == "gemini"
+            )),
+            "expected EffortUnsupported, got {warns:?}",
+        );
     }
 }
