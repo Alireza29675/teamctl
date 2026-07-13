@@ -1296,6 +1296,55 @@ mod tests {
         }
     }
 
+    /// The bootstrap default block, sliced from the `[ -z ]` guard to its
+    /// closing `fi` — so per-runtime prompt assertions can't be fouled by
+    /// text elsewhere in the wrapper.
+    fn wrapper_bootstrap_block() -> &'static str {
+        let start = DEFAULT_WRAPPER
+            .find("if [ -z \"${BOOTSTRAP_PROMPT:-}\" ]; then")
+            .expect("DEFAULT_WRAPPER has the bootstrap default guard");
+        let body = &DEFAULT_WRAPPER[start..];
+        let end = body.find("\nfi").expect("bootstrap guard closed by fi");
+        &body[..end]
+    }
+
+    /// Delivery differs per runtime, so the bootstrap default must too:
+    /// claude-code keeps the Channels text (events pushed into the
+    /// session, no polling); every other runtime gets the honest story —
+    /// team-mcp types "📬 N new team message(s)" nudges into the pane,
+    /// and the agent starts with an `inbox_peek` catch-up. Telling a
+    /// non-claude agent "traffic is delivered as channel events" strands
+    /// it idle forever, because its runtime drops MCP notifications.
+    #[test]
+    fn wrapper_bootstrap_prompt_dispatches_on_runtime() {
+        let block = wrapper_bootstrap_block();
+        assert!(
+            block.contains("case \"$RUNTIME\" in"),
+            "bootstrap default must dispatch on $RUNTIME",
+        );
+        let (claude, other) = block
+            .split_once("*)")
+            .expect("bootstrap case has a catch-all arm");
+        assert!(
+            claude.contains("Claude Code Channels") && claude.contains("you do not need to poll"),
+            "claude-code prompt must keep the Channels delivery text",
+        );
+        assert!(
+            other.contains("Call inbox_peek now"),
+            "non-claude prompt must instruct the startup inbox_peek catch-up",
+        );
+        assert!(
+            other.contains("📬 N new team message(s)")
+                && other.contains("inbox_read")
+                && other.contains("inbox_ack"),
+            "non-claude prompt must describe the tmux nudge and the drain loop",
+        );
+        assert!(
+            !other.to_lowercase().contains("channel"),
+            "non-claude prompt must not claim channel-event delivery",
+        );
+    }
+
     fn compose_with_multi_role_prompt(root: &Path, project_id: &str) -> Compose {
         let mut managers = BTreeMap::new();
         managers.insert(
