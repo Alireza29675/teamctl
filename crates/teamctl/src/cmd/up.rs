@@ -1201,6 +1201,27 @@ mod tests {
         );
     }
 
+    /// Codex resume crash-loop self-heal: a corrupt rollout makes
+    /// `codex resume --last` die instantly on every boot, and the
+    /// resume probe re-matches it forever. The wrapper counts
+    /// consecutive fast resume-path exits and moves the sessions dir
+    /// to `sessions.crash-bak` after the third, so the next boot is
+    /// fresh. Pin the counter, the threshold, and the move-aside path
+    /// so a silent edit can't reintroduce the infinite crash loop.
+    #[test]
+    fn wrapper_codex_resume_crash_loop_self_heal_present() {
+        for marker in [
+            "CODEX_FAST_FAILS=$((CODEX_FAST_FAILS + 1))",
+            "[ \"$CODEX_FAST_FAILS\" -ge 3 ]",
+            "$CODEX_HOME/sessions.crash-bak",
+        ] {
+            assert!(
+                DEFAULT_WRAPPER.contains(marker),
+                "DEFAULT_WRAPPER missing marker: {marker}",
+            );
+        }
+    }
+
     /// T-174: the wrapper picks `--resume` vs `--session-id` by
     /// probing the on-disk session jsonl. A silent edit that drops
     /// the resume branch would re-trigger "Session ID is already in

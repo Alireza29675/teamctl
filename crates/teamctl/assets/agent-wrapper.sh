@@ -182,6 +182,11 @@ nudge_resumed_codex() {
     tmux send-keys -t "$pane" "Restarted mid-shift: call inbox_peek to catch up on anything that arrived while you were down, then resume your role." Enter
 }
 
+# Consecutive fast codex-resume failures (see the self-heal block at
+# the bottom of the loop). Lives outside the loop so it survives
+# across restarts.
+CODEX_FAST_FAILS=0
+
 # Build the runtime invocation as the script's positional parameters.
 # Doing this in-line (instead of in a function) keeps the args quoted —
 # previous versions stuffed everything into a single $BIN_ARGS string and
@@ -430,6 +435,7 @@ while :; do
         NUDGE_PID=$!
     fi
 
+    RUN_STARTED=$(date +%s)
     if command -v teamctl >/dev/null 2>&1; then
         teamctl --root "$TEAMCTL_ROOT" rl-watch "$AGENT" -- "$BIN" "$@"
     else
@@ -437,6 +443,7 @@ while :; do
         "$BIN" "$@"
     fi
     ec=$?
+    RUN_ENDED=$(date +%s)
 
     if [ -n "$AUTO_CONFIRM_PID" ]; then
         kill "$AUTO_CONFIRM_PID" 2>/dev/null
@@ -462,6 +469,25 @@ while :; do
         continue
     fi
     FORCE_FRESH_SESSION=0
+
+    # A corrupt rollout can make `codex resume --last` die instantly on
+    # every boot — the resume probe re-matches the same rollout each
+    # time, so the restart loop would spin forever. Self-heal in the
+    # same spirit as the claude branch: after 3 consecutive resume-path
+    # exits that lasted under 60s, move the sessions dir aside so the
+    # next boot falls through to a fresh spawn. A long-lived session or
+    # a fresh-path boot resets the counter.
+    if [ "${CODEX_RESUME:-0}" = 1 ] && [ $((RUN_ENDED - RUN_STARTED)) -lt 60 ]; then
+        CODEX_FAST_FAILS=$((CODEX_FAST_FAILS + 1))
+        if [ "$CODEX_FAST_FAILS" -ge 3 ]; then
+            rm -rf "$CODEX_HOME/sessions.crash-bak"
+            mv "$CODEX_HOME/sessions" "$CODEX_HOME/sessions.crash-bak" 2>/dev/null
+            log "3 fast codex resume failures — moved $CODEX_HOME/sessions to $CODEX_HOME/sessions.crash-bak; next boot is fresh"
+            CODEX_FAST_FAILS=0
+        fi
+    else
+        CODEX_FAST_FAILS=0
+    fi
 
     log "runtime exited ec=$ec — restarting in 5s"
     sleep 5
