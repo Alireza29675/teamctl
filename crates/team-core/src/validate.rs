@@ -145,6 +145,22 @@ pub enum ValidationWarning {
         agent: String,
         runtime: String,
     },
+
+    #[error("agent `{project}:{agent}` declares MCP server `{server}` with a `${{VAR}}` placeholder in env — runtime `{runtime}` does not interpolate env values, so the literal placeholder reaches the server; use a literal value or export the secret in the environment the server inherits")]
+    McpEnvInterpolationUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+        server: String,
+    },
+
+    #[error("agent `{project}:{agent}` sets `permission_mode: {mode}` but runtime `{runtime}` has no permission mapping — the setting is ignored at launch (the wrapper's gemini arm hardcodes --yolo)")]
+    PermissionModeUnsupported {
+        project: String,
+        agent: String,
+        runtime: String,
+        mode: String,
+    },
 }
 
 /// T-160: max length for `display_name`. 64 is a sensible upper bound
@@ -366,7 +382,10 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
 /// without validate), but those warns are invisible in normal CLI runs;
 /// this is the operator-visible surface. `effort:` is consumed by both
 /// claude-code (`--effort`) and codex (`-c model_reasoning_effort`); any
-/// other wrapper arm ignores `$EFFORT`.
+/// other wrapper arm ignores `$EFFORT`. `permission_mode:` maps to flags
+/// in the claude-code and codex arms only. And `${VAR}` placeholders in
+/// declared MCP env values are expanded by claude-code alone — codex
+/// hands the server the literal string.
 pub fn validate_warnings(compose: &Compose) -> Vec<ValidationWarning> {
     let mut warns = Vec::new();
     for p in &compose.projects {
@@ -405,6 +424,42 @@ pub fn validate_warnings(compose: &Compose) -> Vec<ValidationWarning> {
                         agent: id.into(),
                         runtime: a.runtime.clone(),
                     });
+                }
+                // Claude Code expands `${VAR}` placeholders in .mcp.json
+                // env values at launch; codex reads config.toml literally,
+                // so the placeholder string reaches the server process and
+                // auth silently breaks. Deliberately NOT fixed by expanding
+                // at render time — that would write resolved secrets to
+                // disk. Warn so the operator gives the server a literal
+                // value or exports the secret in the environment the MCP
+                // server process inherits.
+                if a.runtime == "codex" {
+                    for (server, srv) in &a.mcps {
+                        if srv.env.values().any(|v| v.contains("${")) {
+                            warns.push(ValidationWarning::McpEnvInterpolationUnsupported {
+                                project: p.project.id.clone(),
+                                agent: id.into(),
+                                runtime: a.runtime.clone(),
+                                server: server.clone(),
+                            });
+                        }
+                    }
+                }
+                // `permission_mode` maps to real flags only in the wrapper's
+                // claude-code and codex arms; the gemini arm hardcodes
+                // `--yolo`, so e.g. `permission_mode: attended` silently
+                // becomes bypass-everything — the most dangerous silent
+                // mismatch in the matrix. `None` is the schema default, so
+                // warning only on `Some` keeps untouched agents quiet.
+                if a.runtime != "codex" {
+                    if let Some(mode) = &a.permission_mode {
+                        warns.push(ValidationWarning::PermissionModeUnsupported {
+                            project: p.project.id.clone(),
+                            agent: id.into(),
+                            runtime: a.runtime.clone(),
+                            mode: mode.clone(),
+                        });
+                    }
                 }
             };
         for (id, a) in &p.managers {
@@ -1002,6 +1057,17 @@ mod tests {
             .any(|w| matches!(w, ValidationWarning::SkillsUnsupported { count: 1, .. })));
     }
 
+    /// An `mcps:` server whose env carries a `${VAR}` placeholder.
+    fn github_mcp_with_placeholder() -> crate::compose::McpServer {
+        crate::compose::McpServer {
+            command: "npx".into(),
+            args: vec!["-y".into(), "@modelcontextprotocol/server-github".into()],
+            env: [("GITHUB_TOKEN".to_string(), "${GITHUB_TOKEN}".to_string())]
+                .into_iter()
+                .collect(),
+        }
+    }
+
     #[test]
     fn claude_code_agent_with_all_capabilities_produces_no_warnings() {
         let mut c = toy_compose("dev");
@@ -1010,6 +1076,11 @@ mod tests {
         mgr.subagents = vec![PathBuf::from("agents/reviewer.md")];
         mgr.skills = vec![PathBuf::from("skills/release")];
         mgr.effort = Some(crate::compose::EffortLevel::High);
+        // Both stay quiet on claude-code: it maps permission_mode to a
+        // real flag and expands `${VAR}` in MCP env values at launch.
+        mgr.permission_mode = Some("attended".into());
+        mgr.mcps
+            .insert("github".into(), github_mcp_with_placeholder());
         assert_eq!(validate_warnings(&c), vec![]);
     }
 
@@ -1021,6 +1092,82 @@ mod tests {
         let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
         mgr.runtime = "codex".into();
         mgr.effort = Some(crate::compose::EffortLevel::High);
+        assert_eq!(validate_warnings(&c), vec![]);
+    }
+
+    #[test]
+    fn codex_agent_with_mcp_env_placeholder_warns() {
+        // Codex does not interpolate config.toml env values — the literal
+        // `${GITHUB_TOKEN}` string would reach the server and auth
+        // silently breaks.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.mcps
+            .insert("github".into(), github_mcp_with_placeholder());
+        let warns = validate_warnings(&c);
+        assert!(
+            warns.iter().any(|w| matches!(
+                w,
+                ValidationWarning::McpEnvInterpolationUnsupported { project, agent, runtime, server }
+                    if project == "hello" && agent == "mgr" && runtime == "codex" && server == "github"
+            )),
+            "expected McpEnvInterpolationUnsupported, got {warns:?}",
+        );
+    }
+
+    #[test]
+    fn codex_agent_with_literal_mcp_env_produces_no_warnings() {
+        // Literal env values are exactly what codex wants — no warning.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        let mut gh = github_mcp_with_placeholder();
+        gh.env
+            .insert("GITHUB_TOKEN".into(), "ghp_literal-token".into());
+        mgr.mcps.insert("github".into(), gh);
+        assert_eq!(validate_warnings(&c), vec![]);
+    }
+
+    #[test]
+    fn gemini_agent_with_permission_mode_warns() {
+        // The wrapper's gemini arm hardcodes --yolo, so an explicit
+        // `permission_mode: attended` silently becomes bypass-everything —
+        // the warning is the only visible trace of that mismatch.
+        let mut c = toy_compose("dev");
+        let wkr = c.projects[0].workers.get_mut("dev").unwrap();
+        wkr.runtime = "gemini".into();
+        wkr.permission_mode = Some("attended".into());
+        let warns = validate_warnings(&c);
+        assert!(
+            warns.iter().any(|w| matches!(
+                w,
+                ValidationWarning::PermissionModeUnsupported { agent, runtime, mode, .. }
+                    if agent == "dev" && runtime == "gemini" && mode == "attended"
+            )),
+            "expected PermissionModeUnsupported, got {warns:?}",
+        );
+    }
+
+    #[test]
+    fn gemini_agent_without_permission_mode_produces_no_permission_warning() {
+        // `None` is the schema default — only an explicitly-set mode warns.
+        let mut c = toy_compose("dev");
+        let wkr = c.projects[0].workers.get_mut("dev").unwrap();
+        wkr.runtime = "gemini".into();
+        assert!(!validate_warnings(&c)
+            .iter()
+            .any(|w| matches!(w, ValidationWarning::PermissionModeUnsupported { .. })));
+    }
+
+    #[test]
+    fn codex_agent_with_permission_mode_produces_no_warnings() {
+        // The codex arm maps permission_mode (attended / bypassPermissions
+        // / headless default) to real flags — never a mismatch.
+        let mut c = toy_compose("dev");
+        let mgr = c.projects[0].managers.get_mut("mgr").unwrap();
+        mgr.runtime = "codex".into();
+        mgr.permission_mode = Some("bypassPermissions".into());
         assert_eq!(validate_warnings(&c), vec![]);
     }
 

@@ -48,6 +48,8 @@ Not every agent-spec field applies to every runtime:
 
 A capability declared on a runtime that doesn't support it is ignored at render time. `teamctl validate` prints a warning for each such mismatch (validation still succeeds).
 
+One subtlety on MCP env: `${VAR}` placeholders in `mcps:` env values are Claude-Code-only — Claude Code expands them at launch, but Codex passes the literal `${VAR}` string to the server. For codex agents, give servers literal values or put the secret in the operator environment the MCP server process inherits.
+
 ## When to pick which
 
 | Runtime | Strong at |

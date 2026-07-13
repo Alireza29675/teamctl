@@ -1,0 +1,995 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ComposeSchema",
+  "description": "T-265: schema-generation aggregate. NOT a real YAML file and never deserialized — it exists only so `schema_for!` reaches BOTH the global `team-compose.yaml` tree (`Global`) AND the per-project file tree (`Project`, which `Global` only references by path via `ProjectRef`). Without it the drift gate would miss every per-project type — notably `Agent`, the most-churned schema surface — so a field added to `Agent` could ship without a `version:` bump. The fields are read only by the derived `JsonSchema` impl (which uses their *types*), hence `allow(dead_code)`.",
+  "type": "object",
+  "required": [
+    "global",
+    "project"
+  ],
+  "properties": {
+    "global": {
+      "$ref": "#/definitions/Global"
+    },
+    "project": {
+      "$ref": "#/definitions/Project"
+    }
+  },
+  "definitions": {
+    "Agent": {
+      "type": "object",
+      "properties": {
+        "autonomy": {
+          "default": "low_risk_only",
+          "type": "string"
+        },
+        "can_broadcast": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "can_dm": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "display_name": {
+          "description": "T-160: optional human-friendly label rendered by the TUI in place of the agent id (roster, details header, mailbox row attribution, statusline). Absent → render the agent id (current behavior). Validation: non-empty, ≤64 chars, UTF-8 anything. The agent id stays canonical for routing, tmux session names, CLI args, and YAML cross-refs (`can_dm`, `can_broadcast`, `reports_to`) — display_name is render-time only.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "description": "Per-agent reasoning effort. Renders as `EFFORT=<value>` in the agent env file; the wrapper passes it to the runtime (e.g. `claude --effort <value>`). Strict enum: typos like `hgih` fail compose validation rather than silently falling back to the wrapper default.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EffortLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hooks": {
+          "title": "383 Phase 2: per-agent Claude Code hooks, merged additively into",
+          "description": "the per-agent `settings.json` that render already builds, on top of the built-in interactive-prompt deny hook (which keeps precedence — see `render::render_claude_settings`). Commands are compose-root-relative paths, resolved like `role_prompt`. claude-only v1: declared on a non-`claude-code` agent they render nothing and render logs an \"unsupported runtime\" warning. Empty (the default) → settings unchanged.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HookSpec"
+          }
+        },
+        "interfaces": {
+          "description": "Per-manager human-facing interfaces. Today's only adapter is `telegram`; the shape is reserved for future adapters (`discord`, `imessage`, …) so a manager can declare every channel it speaks on in one place. Workers leave this unset.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AgentInterfaces"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mcps": {
+          "title": "383 Phase 4: per-agent MCP servers, merged into the rendered",
+          "description": "per-agent MCP config alongside the built-in `team` mailbox server (which stays unconditional and non-clobberable — a declared server named `team` is rejected at validate and skipped at render). Unlike hooks, MCP is runtime-agnostic: declared servers render for every runtime whose descriptor sets `supports_mcp`, and are skipped with a warning otherwise. Empty (the default) → MCP config unchanged.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/McpServer"
+          }
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_rate_limit": {
+          "description": "Override the global rate-limit hook chain for this agent.",
+          "default": null,
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "permission_mode": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reports_to": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role_prompt": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RolePrompt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtime": {
+          "default": "claude-code",
+          "type": "string"
+        },
+        "skills": {
+          "title": "383 Phase 3b: per-agent Claude Code skills declared in compose.",
+          "description": "Each entry is a compose-root-relative path to a skill directory (the folder holding `SKILL.md`), resolved like `role_prompt`. render materializes a per-agent scope dir under `state/agent-scope/<project>-<agent>/.claude/skills/` holding a symlink to each declared skill, and the wrapper passes that scope dir via `claude --add-dir` so the agent discovers its skills additively, on top of the project `.claude/skills/` (verified: `--add-dir` adds, never replaces — see the Phase-1 spike §9-E1). claude-only v1: declared on a non-`claude-code` agent they materialize nothing and render logs an \"unsupported runtime\" warning. Empty (the default) → no `--add-dir` flag.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subagents": {
+          "title": "383 Phase 3a: per-agent Claude Code sub-agents declared in compose.",
+          "description": "Each entry is a compose-root-relative path to a standard sub-agent markdown file (frontmatter `name` / `description` / optional `tools` / `model`, body → the sub-agent's system prompt), resolved like `role_prompt`. render transforms the list into Claude Code's `--agents` inline JSON so each agent gets its own sub-agents additively, on top of the project `.claude/agents/` and the built-in sub-agents (verified: `--agents` adds, never replaces), without an arbitrary-path flag (the only cwd-stationary mechanism — see the Phase-1 spike). claude-only v1: declared on a non-`claude-code` agent they render nothing and render logs an \"unsupported runtime\" warning. Empty (the default) → no `--agents` flag.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ultracode": {
+          "title": "461: per-agent ultracode opt-in. When `true`, teamctl emits",
+          "description": "`\"ultracode\": true` into the agent's Claude Code settings JSON (the file the wrapper passes via `--settings`); the resulting session behavior is Claude Code's, not teamctl's. ultracode is a Claude Code *setting* — not an effort level and not a CLI flag — so it's orthogonal to `effort:` above (which rides the `--effort` flag) and the two compose freely. Like the `enableAllProjectMcpServers` key in `render_claude_settings`, the name is vendor-owned: verified against Claude Code 2.1.175, and a future rename would silently no-op. claude-only v1: on non-claude runtimes the settings file is skipped and a declared opt-in warns (codex/gemini have no equivalent). Defaults to `false` → the settings JSON is byte-unchanged for agents that don't opt in.",
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
+    "AgentInterfaces": {
+      "description": "Container for per-manager interface adapters. Open shape so adding `discord:` / `imessage:` later is a strictly-additive YAML edit.",
+      "type": "object",
+      "properties": {
+        "telegram": {
+          "description": "1:1 Telegram bot for this manager. When set, `teamctl up` spawns a `team-bot` tmux session scoped to this manager so the human DMs the bot directly (no `/dm role text` required). Configured by `teamctl bot setup`.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TelegramConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "AttachmentScanner": {
+      "type": "object",
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "description": "Operator-provided executable. Spawned per attempt with the resolved path as a single argument; non-zero exit → reject.",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "default": 30,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "Attachments": {
+      "type": "object",
+      "properties": {
+        "allowed_roots": {
+          "description": "Roots the attachment path must be a descendant of after canonicalization. Default is the operator's `$HOME` (resolved at policy-check time, not at deserialize time, so a snapshot taken on machine A still resolves correctly on machine B).",
+          "default": [
+            "$HOME"
+          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "audit_log_path": {
+          "description": "When set, every attempt is appended to this file (path, sha256, size, accept/reject, scanner stderr). Relative paths resolve against the compose root.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "max_size_bytes": {
+          "default": 5242880,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "scanner": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AttachmentScanner"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tempfile_ttl_seconds": {
+          "description": "T-32b: TTL in seconds for staged tempfiles in `state/attachments-staging/`. The agent's `read_attachment` MCP tool returns a staging path; the file lives until the TTL expires (sweep on team-mcp startup) or the operator explicitly persists it via a future tool. Default 6h gives an LLM session enough room to round-trip without the staging dir bloating indefinitely.",
+          "default": 21600,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "AutoApprove": {
+      "type": "object",
+      "required": [
+        "action",
+        "until"
+      ],
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "agent": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "until": {
+          "description": "RFC 3339 timestamp in UTC.",
+          "type": "string"
+        }
+      }
+    },
+    "Broker": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "default": "state/mailbox.db",
+          "type": "string"
+        },
+        "type": {
+          "default": "sqlite",
+          "type": "string"
+        }
+      }
+    },
+    "Budget": {
+      "type": "object",
+      "properties": {
+        "daily_usd_limit": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "message_ttl_hours": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "per_project_usd_limit": {
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "warn_threshold_pct": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "Channel": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "members": {
+          "description": "Either a list of agent ids or the literal string `\"*\"`.",
+          "default": [],
+          "allOf": [
+            {
+              "$ref": "#/definitions/ChannelMembers"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "ChannelMembers": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "EffortLevel": {
+      "description": "Reasoning-effort level forwarded to the runtime. Maps 1:1 to `claude --effort <value>` today; if the runtime taxonomy evolves we extend the enum and bump the schema version.",
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "Global": {
+      "description": "Top-level `team-compose.yaml`.",
+      "type": "object",
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "attachments": {
+          "description": "T-32 file attachments. Optional — omit the entire block to get default behavior (enabled, 5MB cap, `$HOME` allowed root, no scanner, no audit log). Each field is also optional.",
+          "default": {
+            "allowed_roots": [
+              "$HOME"
+            ],
+            "audit_log_path": null,
+            "enabled": true,
+            "max_size_bytes": 5242880,
+            "scanner": null,
+            "tempfile_ttl_seconds": 21600
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Attachments"
+            }
+          ]
+        },
+        "broker": {
+          "default": {
+            "path": "state/mailbox.db",
+            "type": "sqlite"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Broker"
+            }
+          ]
+        },
+        "budget": {
+          "default": {
+            "daily_usd_limit": null,
+            "message_ttl_hours": null,
+            "per_project_usd_limit": {},
+            "warn_threshold_pct": null
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Budget"
+            }
+          ]
+        },
+        "hitl": {
+          "default": {
+            "auto_approve_windows": [],
+            "globally_sensitive_actions": [
+              "publish",
+              "release",
+              "payment",
+              "external_email",
+              "external_api_post",
+              "merge_to_main",
+              "dns_change",
+              "deploy"
+            ]
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Hitl"
+            }
+          ]
+        },
+        "interfaces": {
+          "description": "Human-facing inbound channels. Telegram is one adapter; Discord, iMessage, CLI, and webhook share the same shape.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Interface"
+          }
+        },
+        "projects": {
+          "description": "Relative paths from the compose root.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProjectRef"
+          }
+        },
+        "rate_limits": {
+          "default": {
+            "default_on_hit": [],
+            "fallback_wait_seconds": 0,
+            "hooks": []
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RateLimits"
+            }
+          ]
+        },
+        "supervisor": {
+          "default": {
+            "drain_timeout_secs": 10,
+            "tmux_prefix": "a-",
+            "type": "tmux"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/SupervisorCfg"
+            }
+          ]
+        },
+        "version": {
+          "$ref": "#/definitions/SchemaVersion"
+        }
+      }
+    },
+    "Hitl": {
+      "type": "object",
+      "properties": {
+        "auto_approve_windows": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AutoApprove"
+          }
+        },
+        "globally_sensitive_actions": {
+          "default": [
+            "publish",
+            "release",
+            "payment",
+            "external_email",
+            "external_api_post",
+            "merge_to_main",
+            "dns_change",
+            "deploy"
+          ],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "HookSpec": {
+      "description": "One per-agent Claude Code hook declared in compose (#383 Phase 2).\n\nMaps onto Claude Code's `settings.json` hook shape: an `event` bucket (`PreToolUse`, `PostToolUse`, `Stop`, …) holding entries of `{ matcher, hooks: [{ type: \"command\", command }] }`. teamctl does not enumerate the runtime's event names — `event` is passed through verbatim so a new Claude Code event works without a teamctl release.",
+      "type": "object",
+      "required": [
+        "command",
+        "event"
+      ],
+      "properties": {
+        "command": {
+          "description": "Compose-root-relative path to the hook command, resolved the same way as `role_prompt: roles/x.md` and rendered into the settings file as an absolute path. v1 is a single executable path (no inline args) — matching the issue's `command: hooks/guard.sh` shape.",
+          "type": "string"
+        },
+        "event": {
+          "description": "Claude Code hook event the command fires on, e.g. `PreToolUse`.",
+          "type": "string"
+        },
+        "matcher": {
+          "description": "Optional tool-name regex (`Bash`, `Edit|Write`). Omitted → the hook matches every tool for the event, matching Claude Code's own behavior when `matcher` is absent.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ImageModelConfig": {
+      "title": "132 PR-1: AI image-generation config for child-bot profile",
+      "description": "pictures. Mirrors the `SttConfig` shape (provider / api_key_env / model). v1 provider is `openai`; adding a future provider is one match arm in the call site.",
+      "type": "object",
+      "required": [
+        "api_key_env",
+        "model",
+        "provider"
+      ],
+      "properties": {
+        "api_key_env": {
+          "description": "Env var holding the provider's API key (mirrors `bot_token_env` and `SttConfig.api_key_env`). The actual secret lives in `.team/.env` and is resolved by `teamctl bot setup` at wizard time.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Provider model id (e.g. `gpt-image-2` for OpenAI; snapshot id `gpt-image-2-2026-04-21` for pinning).",
+          "type": "string"
+        },
+        "provider": {
+          "description": "Provider arm. v1: `openai`.",
+          "type": "string"
+        }
+      }
+    },
+    "Interface": {
+      "type": "object",
+      "required": [
+        "name",
+        "type"
+      ],
+      "properties": {
+        "config": {
+          "description": "Adapter-specific config (bot token, channel id, allowlist, …).",
+          "default": null
+        },
+        "name": {
+          "description": "Free-form name; used in logs and to route approvals.",
+          "type": "string"
+        },
+        "type": {
+          "description": "Adapter type: `telegram`, `discord`, `imessage`, `cli`, `webhook`, ...",
+          "type": "string"
+        }
+      }
+    },
+    "ManagerBotConfig": {
+      "title": "132 PR-1: manager-bot config. Mirrors the env-var-name pattern of",
+      "description": "`TelegramConfig.bot_token_env` — the actual BotFather token lives in `.team/.env`, this field names the env var that holds it.",
+      "type": "object",
+      "required": [
+        "token_env"
+      ],
+      "properties": {
+        "token_env": {
+          "description": "Env var holding the manager bot's BotFather token. The operator-facing setup steps (BotFather click path to enable the Managed Bots capability) are documented in `docs/`; this schema pins the env-var name the wizard reads at setup time.",
+          "type": "string"
+        }
+      }
+    },
+    "McpServer": {
+      "description": "One per-agent MCP server declared in compose (#383 Phase 4).\n\nSerializes straight into the runtime's MCP config entry — `command` / `args` / `env` map onto the same shape the built-in `team` server emits. The HTTP (`url` / `headers`) transport variant is deferred (spike E2) until a concrete need lands.",
+      "type": "object",
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "args": {
+          "description": "Arguments passed to `command`. Empty (the default) → `[]`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "command": {
+          "description": "Executable that launches the MCP server, resolved on `$PATH` by the runtime (e.g. `npx`, `docker`).",
+          "type": "string"
+        },
+        "env": {
+          "description": "Environment variables for the server process. Values pass through verbatim — render does no interpolation, matching how teamctl treats env elsewhere. `${VAR}` placeholders are expanded by Claude Code at launch; codex does NOT interpolate them (validate warns — see `ValidationWarning::McpEnvInterpolationUnsupported`).",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ProfilePictureConfig": {
+      "title": "132 PR-1: profile-picture rendering settings for spawned child",
+      "description": "bots. `image_model` is opt-in for AI-generated avatars; `fallback` names the rendering used when `image_model` is absent OR generation fails OR the API key is missing. Q3 (owner-ratified, tg 3445): initials-in-colored-circle, no embedded emoji-font binary growth.",
+      "type": "object",
+      "properties": {
+        "fallback": {
+          "description": "Fallback rendering when `image_model` is absent or fails. v1 has one variant (`Initials`); the field is explicit so future variants (per-agent override, `None`-to-skip) slot in additively without breaking existing YAML.",
+          "default": "initials",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProfilePictureFallback"
+            }
+          ]
+        },
+        "image_model": {
+          "description": "AI image-generation config. When set + API key resolves, the wizard generates a square 512×512 image seeded from the agent's name + role and applies it via Bot API `setProfilePhoto`. Any failure path (missing API key, generation error, upload error) falls through to `fallback`.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ImageModelConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ProfilePictureFallback": {
+      "title": "132 PR-1: profile-picture fallback rendering. Q3-ratified to",
+      "description": "initials-in-colored-circle for v1. Enum-shaped so future variants (e.g. `Emoji`, `None`) land additively; current single variant is the default so omitting `fallback:` in YAML keeps the contract.",
+      "oneOf": [
+        {
+          "description": "Render a deterministic colored circle with the agent's uppercase initials (Slack-style). Deterministic = same agent name always renders the same circle, so rebuilds don't shuffle.",
+          "type": "string",
+          "enum": [
+            "initials"
+          ]
+        }
+      ]
+    },
+    "Project": {
+      "description": "Per-project file, e.g. `projects/hello.yaml`.",
+      "type": "object",
+      "required": [
+        "project",
+        "version"
+      ],
+      "properties": {
+        "channels": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Channel"
+          }
+        },
+        "interfaces": {
+          "description": "Project-scoped human-facing interfaces (#132 PR-1). Mirrors the per-agent `Agent.interfaces` shape one level up — `telegram` is today's only adapter, with room for future `discord:` / `imessage:` under the same `ProjectInterfaces` container. Hosts the shared bot-family config (manager bot for managed-bots flow, profile-picture defaults) that's scoped to one project's bot family but spawns N per-agent children — not per-agent because it's shared infra, not global because each project deserves its own bot-family identity. Absent → existing manual BotFather per-manager flow runs verbatim (zero-touch).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProjectInterfaces"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "managers": {
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Agent"
+          }
+        },
+        "project": {
+          "$ref": "#/definitions/ProjectMeta"
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "workers": {
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Agent"
+          }
+        }
+      }
+    },
+    "ProjectInterfaces": {
+      "title": "132 PR-1: project-scoped interface container. One level up from",
+      "description": "`AgentInterfaces`, same open-shape rationale — today's only adapter is `telegram`, future `discord:` / `imessage:` slot in as strictly-additive YAML edits.",
+      "type": "object",
+      "properties": {
+        "telegram": {
+          "description": "Project-scoped Telegram config: the manager bot that spawns per-agent children + default profile-picture rendering. Per- agent telegram config (under `Agent.interfaces.telegram`) is orthogonal — agents still declare their own `bot_token_env` / `chat_ids_env` slots; the managed-bots flow writes child tokens into those slots untouched.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProjectTelegramConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ProjectMeta": {
+      "type": "object",
+      "required": [
+        "cwd",
+        "id",
+        "name"
+      ],
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "ProjectRef": {
+      "type": "object",
+      "required": [
+        "file"
+      ],
+      "properties": {
+        "file": {
+          "type": "string"
+        }
+      }
+    },
+    "ProjectTelegramConfig": {
+      "title": "132 PR-1: project-scoped Telegram config. Hosts the shared-infra",
+      "description": "fields (manager bot, profile-picture defaults) that drive the managed-bots flow in `teamctl bot setup`. Absent / both fields absent → existing manual BotFather walkthrough runs verbatim for each per-agent `Agent.interfaces.telegram` block (zero-touch).",
+      "type": "object",
+      "properties": {
+        "manager_bot": {
+          "description": "Manager bot for the managed-bots flow. When set + its env var resolves, `teamctl bot setup` uses it to spawn per-agent child bots via Telegram's Bot API 10.0 managed-bot endpoints. Absent → operator runs the manual BotFather flow per agent as today.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ManagerBotConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profile_picture": {
+          "description": "Default profile-picture rendering for spawned child bots. Image-model path is opt-in; absent / failure-of-generation falls back to deterministic initials-in-colored-circle (Q3- ratified). When the whole block is absent, no profile-picture is applied — child bots keep Telegram's default avatar.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProfilePictureConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "RateLimitHook": {
+      "description": "One named action that can run on a rate-limit hit.\n\n`action` is one of: - `wait` — sleep until `resets_at` (or `fallback_wait_seconds`). - `send` — write a message into the mailbox; `to` and `template` required. - `webhook` — POST/GET to `url` (or `url_env`); the rate-limit row serializes as JSON in the body. - `run` — exec `command` with placeholders substituted.\n\nPlaceholders in `template` and `command` arguments: `{agent}`, `{runtime}`, `{hit_at}`, `{resets_at}`, `{resets_at_local}`, `{raw_match}`.",
+      "type": "object",
+      "required": [
+        "action",
+        "name"
+      ],
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "command": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "template": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url_env": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "RateLimits": {
+      "description": "Rate-limit handling policy.",
+      "type": "object",
+      "properties": {
+        "default_on_hit": {
+          "description": "Default hook-name chain to run on a hit. Empty means `[wait]`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fallback_wait_seconds": {
+          "description": "Fallback wait when the hit can't be parsed for a reset time. Default 30 minutes.",
+          "default": 1800,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "hooks": {
+          "description": "Named hooks. Agents reference these by name in their `on_rate_limit:`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RateLimitHook"
+          }
+        }
+      }
+    },
+    "RolePrompt": {
+      "description": "Reference to one or more role-instruction markdown files.\n\nSingle-string form (current) keeps every existing compose parsing unchanged. List form lets a role compose from multiple files concatenated in declared order at boot — base + tweaks without duplicating shared role copy.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "SchemaVersion": {
+      "type": "string"
+    },
+    "SttConfig": {
+      "description": "Speech-to-text settings for the per-manager Telegram bot. The provider arm is the only switch v1 needs (`groq`); adding OpenAI Whisper or whisper.cpp later is one match arm in `team-bot`'s transcribe function.",
+      "type": "object",
+      "required": [
+        "api_key_env",
+        "model",
+        "provider"
+      ],
+      "properties": {
+        "api_key_env": {
+          "description": "Env var holding the provider's API key (mirrors `bot_token_env`). The actual secret lives in `.team/.env` and is resolved by `teamctl bot up` at spawn time before being passed to `team-bot`.",
+          "type": "string"
+        },
+        "language": {
+          "description": "Optional ISO-639 language hint forwarded verbatim to the provider (e.g. `en`, `fa`). When unset, the provider auto-detects.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Provider model id (e.g. `whisper-large-v3` for Groq).",
+          "type": "string"
+        },
+        "provider": {
+          "description": "Provider arm. v1: `groq`.",
+          "type": "string"
+        }
+      }
+    },
+    "SupervisorCfg": {
+      "type": "object",
+      "properties": {
+        "drain_timeout_secs": {
+          "description": "Seconds reload waits for an agent to exit gracefully after SIGINT before falling through to a hard `kill-session`. Default 10 — enough for an in-flight Claude Code tool call to finish in the common case, short enough that operators don't sit staring at a frozen reload. Set to 0 to disable graceful drain (matches pre-PR-B hard-kill behaviour).",
+          "default": 10,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "tmux_prefix": {
+          "default": "a-",
+          "type": "string"
+        },
+        "type": {
+          "default": "tmux",
+          "type": "string"
+        }
+      }
+    },
+    "TelegramConfig": {
+      "description": "Per-manager Telegram bot config. Both fields are env-var *names* — the actual token/chat-ids live in `.team/.env` (kept out of git).",
+      "type": "object",
+      "required": [
+        "bot_token_env",
+        "chat_ids_env"
+      ],
+      "properties": {
+        "bot_token_env": {
+          "description": "Env var holding the BotFather token. Default chosen by `teamctl bot setup`: `TEAMCTL_TG_<MANAGER>_TOKEN`.",
+          "type": "string"
+        },
+        "chat_ids_env": {
+          "description": "Env var holding a comma-separated list of authorized chat ids. Default: `TEAMCTL_TG_<MANAGER>_CHATS`.",
+          "type": "string"
+        },
+        "speech_to_text": {
+          "description": "Optional speech-to-text provider for voice messages. When set, inbound Telegram voice notes are transcribed and forwarded to the agent prefixed so the model knows the input came from audio. Absent → voice messages stay unhandled (default).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SttConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
