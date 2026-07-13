@@ -114,13 +114,15 @@ log() {
 #     against claude 2.1.161. The owner opted to auto-accept this one
 #     silently for headless agents (no operator notice) so panes don't
 #     stall; the general fix for the whole prompt class is #421.
-#   - "Yes, I trust this folder"       — codex's first-run trust dialog,
-#     once per directory. The trust option is the default, so a single
-#     Enter accepts it — running `teamctl up` is itself the "I trust
-#     this directory" signal (same rationale as the claude-code trust
-#     pre-acceptance in `teamctl up`). Codex's "Hooks need review"
-#     prompt is deliberately NOT auto-accepted: that's a security
-#     review surface and belongs to an attached operator.
+#   - codex's first-run trust dialog    — once per directory. The exact
+#     wording has drifted across codex releases ("Yes, I trust this
+#     folder", "Yes, allow Codex to work in this folder"), so the
+#     pattern matches both observed variants. The trust option is the
+#     default, so a single Enter accepts it — running `teamctl up` is
+#     itself the "I trust this directory" signal (same rationale as the
+#     claude-code trust pre-acceptance in `teamctl up`). Codex's "Hooks
+#     need review" prompt is deliberately NOT auto-accepted: that's a
+#     security review surface and belongs to an attached operator.
 #
 # The watcher polls our own tmux pane for any of these headers and
 # sends one Enter when matched, then sleeps 1s so the dialog clears
@@ -147,7 +149,7 @@ auto_confirm_known_dialogs() {
     while :; do
         frame=$(tmux capture-pane -t "$pane" -p 2>/dev/null)
         if printf '%s\n' "$frame" \
-            | grep -qE 'Loading development channels|Bypass Permissions mode|Stop and wait for limit to reset|Yes, I trust this folder' \
+            | grep -qE 'Loading development channels|Bypass Permissions mode|Stop and wait for limit to reset|Yes, I trust this folder|Yes, allow Codex to work in this folder' \
             || { printf '%s\n' "$frame" | grep -q 'Quick safety check:' \
                  && printf '%s\n' "$frame" | grep -q 'trust this folder'; } \
             || { printf '%s\n' "$frame" | grep -q 'MCP servers may execute code' \

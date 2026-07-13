@@ -1111,13 +1111,19 @@ mod tests {
     /// Codex's first-run "trust this folder" dialog defaults to the
     /// trust option, so the auto-confirm watcher accepts it with one
     /// Enter — otherwise the first spawn in a new directory strands an
-    /// unattended pane. Pin the pattern (and the codex arm opting into
-    /// the watcher) so a silent edit can't re-strand codex boots.
+    /// unattended pane. The dialog wording has drifted across codex
+    /// releases, so pin BOTH observed variants (and the codex arm
+    /// opting into the watcher) so a silent edit can't re-strand codex
+    /// boots on either wording.
     #[test]
     fn wrapper_codex_trust_dialog_auto_confirmed() {
         assert!(
             DEFAULT_WRAPPER.contains("Yes, I trust this folder"),
-            "auto-confirm watcher must match codex's trust-folder dialog",
+            "auto-confirm watcher must match codex's classic trust-folder wording",
+        );
+        assert!(
+            DEFAULT_WRAPPER.contains("Yes, allow Codex to work in this folder"),
+            "auto-confirm watcher must match codex's newer trust-folder wording",
         );
         assert!(
             wrapper_codex_branch().contains("AUTO_CONFIRM=1"),
