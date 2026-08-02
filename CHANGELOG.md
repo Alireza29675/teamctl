@@ -4,6 +4,31 @@ All notable changes to teamctl will be documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-14
+
+### Added
+
+- **OpenCode is now a first-class runtime** — `runtime: opencode` gets per-agent MCP/config and session isolation, model selection, resume and `--fresh`, crash-loop recovery, runtime-aware Telegram slash commands, and documented capability limits; shared authentication is preserved and automatic self-updates are disabled. (#507)
+- **Codex sessions now survive restarts** — each agent resumes from its isolated `CODEX_HOME` with `codex resume --last`; `--fresh` moves previous sessions to a recoverable backup instead of deleting them. (#508)
+- **Non-Claude agents are notified about new mail** — the MCP watcher types a batched sender-and-preview nudge into Codex, OpenCode, Gemini, and future-runtime panes; previews flatten whitespace and strip control characters before reaching the keyboard surface. (#503, #509)
+- **Codex gains more operator parity** — Codex agents can call `compact_self`, and the workspace-write sandbox permits network access for ordinary `git`, `gh`, and `curl` while retaining filesystem isolation. (#504, #511)
+- **Telegram advertises Codex manager slash commands** — Codex managers get a runtime-aware command menu tailored to their runtime. (#505)
+- **`teamctl validate` warns when runtime settings will be ignored** — non-fatal warnings cover unsupported hooks, sub-agents, skills, effort, permission modes, and MCP environment interpolation, including OpenCode's `bypassPermissions` downgrade. (#506, #507)
+
+### Changed
+
+- **Agent Telegram guidance now matches rich-message rendering** — built-in roles, examples, and the `reply_to_user` tool describe which Markdown works everywhere and which headings, tables, and blockquotes require an unthreaded message. (#490)
+
+### Fixed
+
+- **Codex agents now launch with Codex's real CLI and config surface** — teamctl renders a per-agent `CODEX_HOME/config.toml` for the team MCP server and uses supported settings for role prompts, reasoning effort, permissions, project trust, and shared login instead of the old invalid or ineffective flags. (#501)
+- **Inbox nudges, `compact_self`, and slash commands now submit reliably in Codex** — each types text literally, lets the TUI consume it, then sends Enter separately instead of leaving the command stranded in the composer. (#510, #514)
+
+### Internal
+
+- **Interactive init-picker foundation** — `teamctl-ui --init-picker` adds the branch-first Browse-versus-Co-design TUI, live reporting-tree and capability previews, snapshot coverage, and safe terminal teardown; wiring it into `teamctl init` remains deferred. (#498)
+- **Compose schemas are versioned and drift-gated** — the full global and per-project YAML surface derives to bundled JSON Schema goldens, with a CI byte-comparison gate and an intentional regeneration helper. (#499)
+
 ## [0.10.0] - 2026-06-14
 
 ### Added
