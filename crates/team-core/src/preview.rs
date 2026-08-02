@@ -8,12 +8,14 @@
 //! workers at the top level, workers nested under the manager they
 //! `reports_to`); the only thing dropped here is the color.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Serialize};
 
 use crate::compose;
 
 /// One row of a team's reporting tree — depth-indented, front-end-agnostic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShapeRow {
     /// 0 = "You" root, 1 = manager / top-level orphan worker,
     /// 2 = worker under a manager.
@@ -27,11 +29,115 @@ pub struct ShapeRow {
     pub is_last: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ShapeKind {
     Root,
     Manager,
     Worker,
+}
+
+/// Version of the JSON contract exchanged between `teamctl init` and the
+/// standalone `teamctl-ui` picker.
+pub const PICKER_PROTOCOL_VERSION: u32 = 1;
+
+/// Optional modifier to `teamctl-ui --version` that asks it to print its init
+/// picker protocol version on a second line. Keeping `--version` as the first
+/// argument makes the probe safe with older UI binaries: they ignore this
+/// modifier, print only their package version, and exit without entering the
+/// terminal UI.
+pub const PICKER_PROTOCOL_VERSION_ARG: &str = "--init-picker-protocol-version";
+
+/// Catalog handed from `teamctl` (which owns and parses the templates) to
+/// `teamctl-ui` (which only renders and selects from them).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PickerCatalog {
+    pub version: u32,
+    pub entries: Vec<PickerCatalogEntry>,
+}
+
+/// One template the picker can render and return to its caller.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PickerCatalogEntry {
+    /// Stable selection token understood by `teamctl init`.
+    pub key: String,
+    /// Operator-facing template name.
+    pub name: String,
+    /// Operator-facing summary. May be empty while catalogs are migrated to
+    /// explicit curated descriptions.
+    pub description: String,
+    /// Precomputed reporting shape; the picker does no compose parsing.
+    pub rows: Vec<ShapeRow>,
+    pub counts: PreviewCounts,
+}
+
+/// Capability totals shown above a template's reporting tree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewCounts {
+    pub agents: usize,
+    pub subagents: usize,
+    pub skills: usize,
+    pub hooks: usize,
+    pub mcps: usize,
+}
+
+/// Machine-readable choice emitted by the standalone picker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum PickerResponse {
+    Create { key: String },
+    Customize { key: String },
+    CoDesign,
+}
+
+impl PickerCatalog {
+    /// Reject catalogs that would make selection ambiguous or render counts
+    /// known to be inconsistent. Unknown JSON fields remain accepted by
+    /// serde so newer producers can add fields without breaking this reader.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.version != PICKER_PROTOCOL_VERSION {
+            return Err(format!(
+                "unsupported picker protocol version {} (expected {PICKER_PROTOCOL_VERSION})",
+                self.version
+            ));
+        }
+        if self.entries.is_empty() {
+            return Err("picker catalog must contain at least one entry".to_string());
+        }
+
+        let mut keys = BTreeSet::new();
+        for entry in &self.entries {
+            let key = entry.key.trim();
+            if key.is_empty() {
+                return Err("picker catalog entry key must not be blank".to_string());
+            }
+            if key == "guided" {
+                return Err("picker catalog entry key `guided` is reserved".to_string());
+            }
+            if !keys.insert(key) {
+                return Err(format!("duplicate picker catalog entry key `{key}`"));
+            }
+            if entry.name.trim().is_empty() {
+                return Err(format!(
+                    "picker catalog entry `{key}` name must not be blank"
+                ));
+            }
+
+            let row_agents = entry
+                .rows
+                .iter()
+                .filter(|row| row.kind != ShapeKind::Root)
+                .count();
+            if entry.counts.agents != row_agents {
+                return Err(format!(
+                    "picker catalog entry `{key}` reports {} agents but has {row_agents} non-root rows",
+                    entry.counts.agents
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Walk the given projects into one "You → managers → workers" tree.
@@ -441,5 +547,179 @@ managers:
             .collect();
         // Each project's single manager is the last sibling in its own group.
         assert_eq!(managers, vec![("am", true), ("bm", true)]);
+    }
+
+    fn picker_entry(key: &str) -> PickerCatalogEntry {
+        PickerCatalogEntry {
+            key: key.to_string(),
+            name: "Essentials".to_string(),
+            // Blank is intentionally valid until every source has curated
+            // catalog metadata.
+            description: String::new(),
+            rows: vec![
+                ShapeRow {
+                    depth: 0,
+                    kind: ShapeKind::Root,
+                    label: "You".to_string(),
+                    descriptor: String::new(),
+                    is_last: true,
+                },
+                ShapeRow {
+                    depth: 1,
+                    kind: ShapeKind::Manager,
+                    label: "Lead".to_string(),
+                    descriptor: "Claude Code · Opus 4.8".to_string(),
+                    is_last: true,
+                },
+            ],
+            counts: PreviewCounts {
+                agents: 1,
+                subagents: 2,
+                skills: 3,
+                hooks: 4,
+                mcps: 5,
+            },
+        }
+    }
+
+    #[test]
+    fn picker_catalog_json_round_trips_with_snake_case_shape_kinds() {
+        let catalog = PickerCatalog {
+            version: PICKER_PROTOCOL_VERSION,
+            entries: vec![picker_entry("essentials")],
+        };
+
+        let json = serde_json::to_value(&catalog).unwrap();
+        assert_eq!(json["version"], PICKER_PROTOCOL_VERSION);
+        assert_eq!(json["entries"][0]["rows"][0]["kind"], "root");
+        assert_eq!(json["entries"][0]["rows"][1]["kind"], "manager");
+        assert_eq!(json["entries"][0]["counts"]["agents"], 1);
+        assert_eq!(
+            serde_json::from_value::<PickerCatalog>(json).unwrap(),
+            catalog
+        );
+    }
+
+    #[test]
+    fn picker_responses_use_the_tagged_action_wire_shape() {
+        let cases = [
+            (
+                PickerResponse::Create {
+                    key: "essentials".to_string(),
+                },
+                serde_json::json!({"action": "create", "key": "essentials"}),
+            ),
+            (
+                PickerResponse::Customize {
+                    key: "essentials".to_string(),
+                },
+                serde_json::json!({"action": "customize", "key": "essentials"}),
+            ),
+            (
+                PickerResponse::CoDesign,
+                serde_json::json!({"action": "co_design"}),
+            ),
+        ];
+
+        for (response, wire) in cases {
+            assert_eq!(serde_json::to_value(&response).unwrap(), wire);
+            assert_eq!(
+                serde_json::from_value::<PickerResponse>(wire).unwrap(),
+                response
+            );
+        }
+    }
+
+    #[test]
+    fn picker_wire_ignores_unknown_fields_for_forward_compatibility() {
+        let wire = serde_json::json!({
+            "version": PICKER_PROTOCOL_VERSION,
+            "future_catalog_field": true,
+            "entries": [{
+                "key": "essentials",
+                "name": "Essentials",
+                "description": "",
+                "future_entry_field": [1, 2, 3],
+                "rows": [{
+                    "depth": 0,
+                    "kind": "root",
+                    "label": "You",
+                    "descriptor": "",
+                    "is_last": true,
+                    "future_row_field": "ignored"
+                }],
+                "counts": {
+                    "agents": 0,
+                    "subagents": 0,
+                    "skills": 0,
+                    "hooks": 0,
+                    "mcps": 0,
+                    "future_count_field": 99
+                }
+            }]
+        });
+
+        let catalog: PickerCatalog = serde_json::from_value(wire).unwrap();
+        assert!(catalog.validate().is_ok());
+
+        let response: PickerResponse = serde_json::from_value(serde_json::json!({
+            "action": "create",
+            "key": "essentials",
+            "future_response_field": true
+        }))
+        .unwrap();
+        assert_eq!(
+            response,
+            PickerResponse::Create {
+                key: "essentials".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn picker_catalog_validation_accepts_blank_descriptions() {
+        let catalog = PickerCatalog {
+            version: PICKER_PROTOCOL_VERSION,
+            entries: vec![picker_entry("essentials")],
+        };
+
+        assert_eq!(catalog.entries[0].description, "");
+        assert_eq!(catalog.validate(), Ok(()));
+    }
+
+    #[test]
+    fn picker_catalog_validation_rejects_invalid_wire_data() {
+        let mut catalog = PickerCatalog {
+            version: PICKER_PROTOCOL_VERSION + 1,
+            entries: vec![picker_entry("essentials")],
+        };
+        assert!(catalog.validate().unwrap_err().contains("version"));
+
+        catalog.version = PICKER_PROTOCOL_VERSION;
+        catalog.entries.clear();
+        assert!(catalog.validate().unwrap_err().contains("at least one"));
+
+        catalog.entries = vec![picker_entry("  ")];
+        assert!(catalog
+            .validate()
+            .unwrap_err()
+            .contains("key must not be blank"));
+
+        catalog.entries = vec![picker_entry(" guided ")];
+        assert!(catalog.validate().unwrap_err().contains("reserved"));
+
+        catalog.entries = vec![picker_entry("essentials"), picker_entry(" essentials ")];
+        assert!(catalog.validate().unwrap_err().contains("duplicate"));
+
+        catalog.entries = vec![picker_entry("essentials")];
+        catalog.entries[0].name = "\t".to_string();
+        assert!(catalog
+            .validate()
+            .unwrap_err()
+            .contains("name must not be blank"));
+
+        catalog.entries[0].name = "Essentials".to_string();
+        catalog.entries[0].counts.agents = 2;
+        assert!(catalog.validate().unwrap_err().contains("non-root rows"));
     }
 }

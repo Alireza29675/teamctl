@@ -21,10 +21,7 @@ fn version_flag_prints_version_and_exits_zero() {
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
     let expected = format!("teamctl-ui {}", env!("CARGO_PKG_VERSION"));
-    assert!(
-        stdout.contains(&expected),
-        "expected `{expected}` in --version output; got:\n{stdout}",
-    );
+    assert_eq!(stdout, format!("{expected}\n"));
 }
 
 #[test]
@@ -33,6 +30,29 @@ fn short_version_flag_prints_version_and_exits_zero() {
     assert!(out.status.success());
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn init_picker_protocol_probe_prints_shared_version_and_exits_zero() {
+    let out = Command::new(bin())
+        .arg("--version")
+        .arg(team_core::preview::PICKER_PROTOCOL_VERSION_ARG)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "picker protocol probe exit code {:?} stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        format!(
+            "teamctl-ui {}\n{}\n",
+            env!("CARGO_PKG_VERSION"),
+            team_core::preview::PICKER_PROTOCOL_VERSION
+        )
+    );
 }
 
 #[test]

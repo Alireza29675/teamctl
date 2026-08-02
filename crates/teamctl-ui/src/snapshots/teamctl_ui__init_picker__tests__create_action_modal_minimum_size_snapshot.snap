@@ -1,0 +1,16 @@
+---
+source: crates/teamctl-ui/src/init_picker.rs
+expression: "buf_to_string(&render_to_buffer(&state, 48, 12))"
+---
+┌ Templates ─────────────────────┐┌ Product Tea┐
+┌ Create template ─────────────────────────────┐
+│ How should teamctl create Product Team?      │
+│                                              │
+│   Create as-is  scaffold the ready-made team │
+│ ▸ Customize  scaffold, then open Claude Code │
+│                                              │
+│                                              │
+│                                              │
+│ ↑/↓ move · Enter confirm · Esc back · q quit │
+└──────────────────────────────────────────────┘
+↑/↓ select · Enter options · Esc back · q cancel

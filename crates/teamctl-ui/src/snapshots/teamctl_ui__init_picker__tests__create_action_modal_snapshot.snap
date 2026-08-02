@@ -7,16 +7,16 @@ expression: "buf_to_string(&render_to_buffer(&state, 100, 20))"
 │                                ││                                                                │
 │                                ││ 3 agents · 10 sub-agents · 0 skills · 1 hook · 0 mcps          │
 │                                ││                                                                │
-│                                ││ You                                                            │
-│                                ││ ├── Product Manager  Claude Code · Opus 4.8 · 2×a 0×s 0×h 0×m  │
-│                                ││ │   └── Engineer (Claude)  Claude Code · Sonnet 4.6 · 6×a 0×s  │
-│                                ││ └── Engineering Manager  Claude Code · Opus 4.8 · 2×a 0×s 0×h  │
-│                                ││                                                                │
-│                                ││                                                                │
-│                                ││                                                                │
-│                                ││                                                                │
-│                                ││                                                                │
-│                                ││                                                                │
+│               ┌ Create template ─────────────────────────────────────────────────┐               │
+│               │ How should teamctl create Product Team?                          │a 0×s 0×h 0×m  │
+│               │                                                                  │4.6 · 6×a 0×s  │
+│               │ ▸ Create as-is  scaffold the ready-made team                     │· 2×a 0×s 0×h  │
+│               │   Customize  scaffold, then open Claude Code                     │               │
+│               │                                                                  │               │
+│               │                                                                  │               │
+│               │                                                                  │               │
+│               │           ↑/↓ move · Enter confirm · Esc back · q quit           │               │
+│               └──────────────────────────────────────────────────────────────────┘               │
 │                                ││                                                                │
 │                                ││                                                                │
 │                                ││                                                                │
