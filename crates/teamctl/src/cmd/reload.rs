@@ -17,10 +17,10 @@
 //! 4. Fast-path: if `compose_digest` matches and the plan is empty,
 //!    print "no changes" and return.
 //! 5. Apply: render artefacts, register changed/added in the mailbox,
-//!    drain `remove` and the prior side of `change` using the
-//!    persisted spec (SIGINT → poll → kill-session via
-//!    `Supervisor::drain`), then bring up `add` and `change` with the
-//!    freshly computed spec.
+//!    hard-stop `remove` and the prior side of `change` using the
+//!    persisted spec (`Supervisor::down` = `tmux kill-session`, same as
+//!    `teamctl down` — no drain delay), then bring up `add` and `change`
+//!    with the freshly computed spec. A reload is a clean down+up.
 //! 6. Persist the next snapshot.
 //!
 //! `--dry-run` exits after step 3 with the plan printed but no files
@@ -34,11 +34,10 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::Result;
 use team_core::compose::Compose;
-use team_core::supervisor::{AgentSpec, AgentState, DrainOutcome, Supervisor, TmuxSupervisor};
+use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
 
 use super::agent_filter::AgentSelector;
 use super::snapshot::{self, AgentEntry, ReloadPlan, RemovedAgent};
@@ -84,7 +83,7 @@ pub fn run(
 
     let prev = snapshot::read(&compose.root);
     let bin = super::team_mcp_bin().display().to_string();
-    let next = snapshot::compute(&compose, &bin);
+    let next = snapshot::compute(&compose, &bin, env!("TEAMCTL_BUILD_VERSION"));
 
     // Fast path: compose file unchanged AND no rendered diff. The
     // compose_digest covers the on-disk YAML; the per-agent
@@ -96,7 +95,7 @@ pub fn run(
     // yields an EMPTY remove-set, so a reload can't reap an agent deleted from
     // the YAML. Fall back to the durable registry: any agent it records as up
     // at this root but no longer in the compose is an orphan — inject those as
-    // removals so `apply_plan` drains them. `orphan_removals` gates this to the
+    // removals so `apply_plan` tears them down. `orphan_removals` gates this to the
     // `prev`-absent case; when the snapshot diff is available it already
     // computes removals, so injecting would double-reap.
     plan.remove
@@ -106,7 +105,7 @@ pub fn run(
     }
     // T-384: `--force` restarts every agent in scope regardless of the
     // diff. Drag the kept (unchanged, still-running) agents into the
-    // change set so they are drained and brought back up like a changed
+    // change set so they are stopped and brought back up like a changed
     // agent. Added / removed / genuinely-changed agents are unaffected.
     // Runs after project filtering so a `<project>`-scoped force only
     // bounces that project's agents.
@@ -173,7 +172,7 @@ pub fn run(
 /// `reload <project> <agent>…` / `--except` always bounces the scoped
 /// set. Unscoped and `<project>`-only reload never reach here.
 ///
-/// Mirrors the diff path's restart shape: drain the *actually-running*
+/// Mirrors the diff path's restart shape: stop the *actually-running*
 /// session (preferring the prior snapshot entry so a drifted
 /// `tmux_prefix` still tears down the real session), then bring the
 /// agent back up with its current spec.
@@ -217,15 +216,15 @@ fn force_restart_scoped(
 
     let prev = snapshot::read(&compose.root);
     let sup = TmuxSupervisor;
-    let drain_timeout = Duration::from_secs(compose.global.supervisor.drain_timeout_secs);
 
     for id in &ids {
-        // Drain the actually-running session. Prefer the prior
-        // snapshot entry (same prefix-drift correctness argument as
-        // the diff path's `spec_from_prior`); fall back to the current
-        // spec when the agent was never applied. Draining a
-        // not-running session returns immediately — no real wait.
-        let drain_spec = match prev.as_ref().and_then(|s| s.agents.get(id)) {
+        // Hard-stop the actually-running session, then bring it back up
+        // (a clean down+up). Prefer the prior snapshot entry (same
+        // prefix-drift correctness argument as the diff path's
+        // `spec_from_prior`); fall back to the current spec when the
+        // agent was never applied. `down` on a not-running session is a
+        // no-op.
+        let down_spec = match prev.as_ref().and_then(|s| s.agents.get(id)) {
             Some(e) => spec_from_prior(compose, id, e),
             None => match compose.agents().find(|h| &h.id() == id) {
                 Some(h) => {
@@ -234,7 +233,7 @@ fn force_restart_scoped(
                 None => continue,
             },
         };
-        let outcome = sup.drain(&drain_spec, drain_timeout)?;
+        sup.down(&down_spec)?;
 
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
@@ -242,11 +241,7 @@ fn force_restart_scoped(
             super::up::freshen_for_spec(&compose.root, &spec, &h.spec.runtime, fresh);
             sup.up(&spec)?;
         }
-        println!(
-            "reloaded · {id} (forced){}{}",
-            super::up::fresh_suffix(fresh),
-            drain_suffix(outcome)
-        );
+        println!("reloaded · {id} (forced){}", super::up::fresh_suffix(fresh),);
     }
 
     // Persist the snapshot so the next *unscoped* reload diffs
@@ -255,7 +250,7 @@ fn force_restart_scoped(
     // If a forced agent's config also changed, the restart already
     // applied the new spec and the merged `next` records it.
     let bin = super::team_mcp_bin().display().to_string();
-    let next = snapshot::compute(compose, &bin);
+    let next = snapshot::compute(compose, &bin, env!("TEAMCTL_BUILD_VERSION"));
     let snap = snapshot::merge_project_into(prev.as_ref(), &next, project_id);
     snapshot::write(&compose.root, &snap)?;
     Ok(())
@@ -293,7 +288,7 @@ fn filter_plan_to_project(plan: ReloadPlan, project_id: &str) -> ReloadPlan {
 }
 
 /// T-384: `--force` support. Move every kept agent into the `change`
-/// set so the apply path drains and restarts it even though its
+/// set so the apply path stops and restarts it even though its
 /// fingerprints are unchanged. The prior snapshot entry (always present
 /// for a keep, which by definition exists in both prev and next) is
 /// copied into `change_prior` so teardown targets the actually-running
@@ -349,26 +344,25 @@ fn print_plan(plan: &ReloadPlan, dry: bool, fresh: bool) {
 
 fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
     let sup = TmuxSupervisor;
-    let drain_timeout = Duration::from_secs(compose.global.supervisor.drain_timeout_secs);
 
-    // Removals: drain using the *prior* tmux_session — the one that
+    // Removals: hard-stop using the *prior* tmux_session — the one that
     // was actually started for this agent. Reconstructing from the
     // current compose's tmux_prefix would silently leak the session
-    // when the prefix changed. Drain (rather than down) gives the
-    // agent a chance to flush in-flight work.
+    // when the prefix changed. `down` is `tmux kill-session`, same as
+    // `teamctl down` — no drain delay.
     for r in &plan.remove {
-        let outcome = sup.drain(&spec_from_removed(compose, r), drain_timeout)?;
-        println!("removed · {}{}", r.id, drain_suffix(outcome));
+        sup.down(&spec_from_removed(compose, r))?;
+        println!("removed · {}", r.id);
     }
 
-    // Changes: drain the prior spec, then start fresh with the
-    // current spec.
+    // Changes: hard-stop the prior spec, then start fresh with the
+    // current spec (a clean down+up).
     for (id, inputs) in &plan.change {
         let prior = plan
             .change_prior
             .get(id)
             .expect("change_prior populated alongside every change entry");
-        let outcome = sup.drain(&spec_from_prior(compose, id, prior), drain_timeout)?;
+        sup.down(&spec_from_prior(compose, id, prior))?;
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
@@ -376,10 +370,9 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
             sup.up(&spec)?;
         }
         println!(
-            "{}{}{}",
+            "{}{}",
             change_line_head(id, inputs),
             super::up::fresh_suffix(fresh),
-            drain_suffix(outcome)
         );
     }
 
@@ -411,16 +404,6 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// One-word annotation surfaced in the per-line restart log when
-/// drain fell through to a hard kill. Operator signal that
-/// `drain_timeout_secs` may need tuning.
-fn drain_suffix(outcome: DrainOutcome) -> &'static str {
-    match outcome {
-        DrainOutcome::Graceful => "",
-        DrainOutcome::TimedOutKilled => " [drain timed out — killed]",
-    }
 }
 
 fn spec_from_removed(compose: &Compose, r: &RemovedAgent) -> AgentSpec {
@@ -461,12 +444,12 @@ fn orphan_removals(prev_present: bool, orphans: Vec<RemovedAgent>) -> Vec<Remove
     }
 }
 
-/// Orphans from the durable registry as drainable `RemovedAgent`s: agents it
+/// Orphans from the durable registry as removable `RemovedAgent`s: agents it
 /// records as up at this root but absent from the compose. Used only on the
 /// applied.json-absent reload path, where `snapshot::plan` can't see removals
 /// (T-468). The whole-tree set is returned; `filter_plan_to_project` trims it
 /// to scope, mirroring how the snapshot-diff removals are handled. The tmux
-/// session is the one the registry recorded (`spec_from_removed` drains by
+/// session is the one the registry recorded (`spec_from_removed` stops by
 /// session name). Best-effort: a missing or unreadable registry yields none.
 fn registry_orphans(compose: &Compose) -> Vec<RemovedAgent> {
     let Some(dir) = team_core::registry::config_dir() else {
@@ -498,20 +481,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn drain_suffix_empty_on_graceful() {
-        assert_eq!(drain_suffix(DrainOutcome::Graceful), "");
-    }
-
-    #[test]
-    fn drain_suffix_annotates_timeout() {
-        assert!(drain_suffix(DrainOutcome::TimedOutKilled).contains("drain timed out"));
-    }
-
-    #[test]
     fn fresh_suffix_annotates_only_when_fresh() {
-        // The `(fresh)` annotation must compose after `(forced)` and
-        // before the drain suffix in the reload log lines, and vanish
-        // entirely on a non-fresh reload.
+        // The `(fresh)` annotation must compose after `(forced)` in the
+        // reload log lines, and vanish entirely on a non-fresh reload.
         assert_eq!(super::super::up::fresh_suffix(true), " (fresh)");
         assert_eq!(super::super::up::fresh_suffix(false), "");
     }
@@ -524,6 +496,7 @@ mod tests {
                 env: String::new(),
                 mcp: String::new(),
                 role_prompt: PromptFingerprint::None,
+                ..Default::default()
             },
         }
     }
@@ -541,6 +514,7 @@ mod tests {
             env: true,
             mcp: false,
             role_prompt: false,
+            ..Default::default()
         }
     }
 
@@ -621,7 +595,7 @@ mod tests {
             ..ReloadPlan::default()
         };
         force_promote_keeps(&mut plan, Some(&prev));
-        assert!(plan.keep.is_empty(), "keeps drained into change");
+        assert!(plan.keep.is_empty(), "keeps moved into change");
         assert_eq!(plan.change.len(), 2);
         for (id, inputs) in &plan.change {
             assert!(!inputs.any(), "{id} promoted as forced (all-false)");
@@ -660,6 +634,7 @@ mod tests {
             env: true,
             mcp: true,
             role_prompt: false,
+            ..Default::default()
         };
         assert_eq!(change_line_head("a:m", &genuine), "changed · a:m (env+mcp)");
         assert_eq!(
@@ -674,7 +649,7 @@ mod tests {
         // removals, so the registry fallback must stay empty (no double-reap).
         assert!(orphan_removals(true, vec![removed("a:gone")]).is_empty());
         // applied.json absent → the registry fallback supplies the orphans
-        // verbatim so `apply_plan` drains them.
+        // verbatim so `apply_plan` tears them down.
         let passed = orphan_removals(false, vec![removed("a:gone"), removed("a:zap")]);
         assert_eq!(
             passed.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
