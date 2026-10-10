@@ -56,3 +56,13 @@ fn help_flag_prints_usage_and_exits_zero() {
         "help missing Usage section: {stdout}",
     );
 }
+
+#[test]
+fn help_before_root_discovery_is_safe_without_a_tty() {
+    let out = Command::new(bin())
+        .args(["--root", "/missing/team", "--help"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("--root PATH"));
+}

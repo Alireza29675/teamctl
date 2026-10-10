@@ -6,20 +6,21 @@ default:
 
 # Build all crates in debug mode.
 build:
-    cargo build --all-targets
+    cargo build --workspace --all-targets --locked
 
-# Build release artifacts.
+# Build shipped release artifacts (the UI remains opt-in).
 release:
-    cargo build --release
+    cargo build --release --locked
 
 # Run the full test suite.
 test:
-    cargo test --all
+    cargo test --workspace --all-targets --locked
+    cargo test --workspace --doc --locked
 
 # Lint (clippy + fmt check). CI mirrors this.
 lint:
     cargo fmt --all -- --check
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # Verify the shipped CLI crates build on the declared MSRV floor.
 msrv-check:
@@ -40,8 +41,8 @@ fmt:
 
 # Quick dev loop: watch and re-run tests.
 dev:
-    cargo watch -x 'test --all'
+    cargo watch -x 'test --workspace --all-targets --locked'
 
-# Build docs locally (Phase 8 will fill this in).
+# Build the docs site locally (install its locked dependencies first).
 docs:
-    @echo "Docs site is introduced in Phase 8."
+    cd docs && npm run build

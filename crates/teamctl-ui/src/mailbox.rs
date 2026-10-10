@@ -308,8 +308,7 @@ impl MailboxSource for BrokerMailboxSource {
                     sent_at: r.get(4)?,
                 })
             })?
-            .flatten()
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 
@@ -336,8 +335,7 @@ impl MailboxSource for BrokerMailboxSource {
                     sent_at: r.get(4)?,
                 })
             })?
-            .flatten()
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 
@@ -368,8 +366,7 @@ impl MailboxSource for BrokerMailboxSource {
                     sent_at: r.get(4)?,
                 })
             })?
-            .flatten()
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 
@@ -396,8 +393,7 @@ impl MailboxSource for BrokerMailboxSource {
                     sent_at: r.get(4)?,
                 })
             })?
-            .flatten()
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 }

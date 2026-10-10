@@ -25,7 +25,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +81,7 @@ pub enum VimMode {
 pub struct Editor {
     pub lines: Vec<String>,
     pub cursor_row: usize,
+    /// UTF-8 byte offset, always positioned at a character boundary.
     pub cursor_col: usize,
     pub mode: VimMode,
     pub ex_buffer: String,
@@ -128,6 +129,32 @@ pub enum EditorAction {
 }
 
 impl Editor {
+    /// Clamp externally supplied cursor offsets before slicing text.
+    pub fn cursor_byte_col(&self) -> usize {
+        self.lines
+            .get(self.cursor_row)
+            .map(|line| boundary_at_or_before(line, self.cursor_col))
+            .unwrap_or(0)
+    }
+
+    /// Keep the active row and caret visible without wrapping the draft.
+    pub fn viewport(&self, width: u16, height: u16) -> (u16, u16) {
+        let top = self
+            .cursor_row
+            .saturating_sub(height.saturating_sub(1) as usize);
+        let col = self.cursor_byte_col();
+        let display_col = self
+            .lines
+            .get(self.cursor_row)
+            .map(|line| ratatui::text::Span::raw(&line[..col]).width())
+            .unwrap_or(0);
+        let left = display_col.saturating_sub(width.saturating_sub(1) as usize);
+        (
+            top.min(u16::MAX as usize) as u16,
+            left.min(u16::MAX as usize) as u16,
+        )
+    }
+
     /// Final body for sending. Joins lines with `\n`; trailing
     /// blank lines are stripped so a single newline at the bottom
     /// doesn't sneak past the operator's intent.
@@ -199,15 +226,15 @@ impl Editor {
 
     fn apply_insert(&mut self, k: KeyEvent) -> EditorAction {
         match k.code {
-            KeyCode::Char(c) => {
+            KeyCode::Char(c) if k.modifiers.is_empty() || k.modifiers == KeyModifiers::SHIFT => {
                 let line = &mut self.lines[self.cursor_row];
-                let col = self.cursor_col.min(line.len());
+                let col = boundary_at_or_before(line, self.cursor_col);
                 line.insert(col, c);
-                self.cursor_col = col + 1;
+                self.cursor_col = col + c.len_utf8();
             }
             KeyCode::Enter => {
                 let line = &mut self.lines[self.cursor_row];
-                let col = self.cursor_col.min(line.len());
+                let col = boundary_at_or_before(line, self.cursor_col);
                 let tail = line.split_off(col);
                 self.cursor_row += 1;
                 self.lines.insert(self.cursor_row, tail);
@@ -216,9 +243,12 @@ impl Editor {
             KeyCode::Backspace => {
                 if self.cursor_col > 0 {
                     let line = &mut self.lines[self.cursor_row];
-                    let col = self.cursor_col.min(line.len());
-                    line.remove(col - 1);
-                    self.cursor_col = col - 1;
+                    let col = boundary_at_or_before(line, self.cursor_col);
+                    let previous = previous_boundary(line, col);
+                    if previous < col {
+                        line.remove(previous);
+                    }
+                    self.cursor_col = previous;
                 } else if self.cursor_row > 0 {
                     let removed = self.lines.remove(self.cursor_row);
                     self.cursor_row -= 1;
@@ -329,86 +359,75 @@ impl Editor {
     }
 
     fn move_left(&mut self) {
-        if self.cursor_col > 0 {
-            self.cursor_col -= 1;
-        }
+        self.cursor_col = previous_boundary(&self.lines[self.cursor_row], self.cursor_byte_col());
     }
     fn move_right(&mut self) {
-        let len = self.lines[self.cursor_row].len();
-        if self.cursor_col < len {
-            self.cursor_col += 1;
-        }
+        self.cursor_col = next_boundary(&self.lines[self.cursor_row], self.cursor_byte_col());
     }
     fn move_right_or_eol(&mut self) {
         // `a` in vim moves one past the cursor, clamped at EOL.
-        let len = self.lines[self.cursor_row].len();
-        self.cursor_col = (self.cursor_col + 1).min(len);
+        self.move_right();
     }
     fn move_word_forward(&mut self) {
-        let line = self.lines[self.cursor_row].as_bytes();
-        let mut i = self.cursor_col;
-        // Skip current word.
-        while i < line.len() && is_word_byte(line[i]) {
-            i += 1;
+        let line = &self.lines[self.cursor_row];
+        let col = self.cursor_byte_col();
+        let mut chars = line[col..].char_indices().peekable();
+        while chars.peek().is_some_and(|(_, c)| is_word_char(*c)) {
+            chars.next();
         }
-        // Skip whitespace / non-word.
-        while i < line.len() && !is_word_byte(line[i]) {
-            i += 1;
+        while chars.peek().is_some_and(|(_, c)| !is_word_char(*c)) {
+            chars.next();
         }
-        if i == self.cursor_col && self.cursor_row + 1 < self.lines.len() {
-            // At EOL with no further word — advance to next line's start.
+        let next = chars.peek().map(|(i, _)| col + i).unwrap_or(line.len());
+        if next == col && self.cursor_row + 1 < self.lines.len() {
             self.cursor_row += 1;
             self.cursor_col = 0;
         } else {
-            self.cursor_col = i;
+            self.cursor_col = next;
         }
     }
+
     fn move_word_back(&mut self) {
-        if self.cursor_col == 0 {
+        let col = self.cursor_byte_col();
+        if col == 0 {
             if self.cursor_row > 0 {
                 self.cursor_row -= 1;
                 self.cursor_col = self.lines[self.cursor_row].len();
             }
             return;
         }
-        let line = self.lines[self.cursor_row].as_bytes();
-        let mut i = self.cursor_col;
-        // Step back over whitespace.
-        while i > 0 && !is_word_byte(line[i - 1]) {
-            i -= 1;
+        let line = &self.lines[self.cursor_row];
+        let mut chars = line[..col].char_indices().rev().peekable();
+        while chars.peek().is_some_and(|(_, c)| !is_word_char(*c)) {
+            chars.next();
         }
-        // Step back to start of word.
-        while i > 0 && is_word_byte(line[i - 1]) {
-            i -= 1;
+        let mut next = 0;
+        while chars.peek().is_some_and(|(_, c)| is_word_char(*c)) {
+            next = chars.next().expect("peeked character").0;
         }
-        self.cursor_col = i;
+        self.cursor_col = next;
     }
+
     fn move_word_end(&mut self) {
-        let line = self.lines[self.cursor_row].as_bytes();
-        let mut i = self.cursor_col;
-        // If currently in a word, move to its end; if not, find
-        // the next word and move to its end.
-        if i < line.len() && !is_word_byte(line[i]) {
-            while i < line.len() && !is_word_byte(line[i]) {
-                i += 1;
-            }
-        } else if i < line.len()
-            && is_word_byte(line[i])
-            && (i + 1 >= line.len() || !is_word_byte(line[i + 1]))
-        {
-            // Already at EOW — skip past this word's terminator
-            // and find the next word's end.
-            i += 1;
-            while i < line.len() && !is_word_byte(line[i]) {
-                i += 1;
+        let line = &self.lines[self.cursor_row];
+        let col = self.cursor_byte_col();
+        let mut chars = line[col..].char_indices().peekable();
+        // At the end of a word, find the next word before its end.
+        if chars.peek().is_some_and(|(_, c)| is_word_char(*c)) {
+            let mut probe = chars.clone();
+            probe.next();
+            if probe.peek().is_none_or(|(_, c)| !is_word_char(*c)) {
+                chars.next();
             }
         }
-        while i + 1 < line.len() && is_word_byte(line[i + 1]) {
-            i += 1;
+        while chars.peek().is_some_and(|(_, c)| !is_word_char(*c)) {
+            chars.next();
         }
-        if i < line.len() {
-            self.cursor_col = i;
+        let mut next = col;
+        while chars.peek().is_some_and(|(_, c)| is_word_char(*c)) {
+            next = col + chars.next().expect("peeked character").0;
         }
+        self.cursor_col = next;
     }
 
     fn delete_line(&mut self) {
@@ -423,7 +442,7 @@ impl Editor {
         if self.cursor_row >= self.lines.len() {
             self.cursor_row = self.lines.len() - 1;
         }
-        self.cursor_col = self.cursor_col.min(self.lines[self.cursor_row].len());
+        self.cursor_col = self.cursor_byte_col();
     }
     fn yank_line(&mut self) {
         if let Some(line) = self.lines.get(self.cursor_row) {
@@ -445,22 +464,39 @@ impl Editor {
     fn move_up(&mut self) {
         if self.cursor_row > 0 {
             self.cursor_row -= 1;
-            self.cursor_col = self.cursor_col.min(self.lines[self.cursor_row].len());
+            self.cursor_col = self.cursor_byte_col();
         }
     }
     fn move_down(&mut self) {
         if self.cursor_row + 1 < self.lines.len() {
             self.cursor_row += 1;
-            self.cursor_col = self.cursor_col.min(self.lines[self.cursor_row].len());
+            self.cursor_col = self.cursor_byte_col();
         }
     }
 }
 
-/// ASCII word-boundary classifier — alphanumeric + `_` is a word
-/// byte, everything else is whitespace / punctuation. Used by the
-/// vim word-motion `w` / `b` / `e` keys.
-fn is_word_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
+fn boundary_at_or_before(line: &str, col: usize) -> usize {
+    let mut col = col.min(line.len());
+    while !line.is_char_boundary(col) {
+        col -= 1;
+    }
+    col
+}
+
+fn previous_boundary(line: &str, col: usize) -> usize {
+    line[..col]
+        .char_indices()
+        .next_back()
+        .map(|(i, _)| i)
+        .unwrap_or(0)
+}
+
+fn next_boundary(line: &str, col: usize) -> usize {
+    col + line[col..].chars().next().map(char::len_utf8).unwrap_or(0)
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 pub trait MessageSender: Send + Sync {
@@ -471,39 +507,30 @@ pub trait MessageSender: Send + Sync {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CliMessageSender;
 
+fn message_command(root: &Path, verb: &str, target: &str, body: &str) -> Command {
+    let mut command = Command::new("teamctl");
+    command
+        .arg("--root")
+        .arg(root)
+        .args([verb, "--", target, body]);
+    command
+}
+
 impl MessageSender for CliMessageSender {
     fn send_dm(&self, root: &Path, agent_id: &str, body: &str) -> Result<()> {
-        let status = Command::new("teamctl")
-            .arg("--root")
-            .arg(root)
-            .args(["send", agent_id, body])
-            .status()
-            .with_context(|| format!("invoke teamctl send {agent_id}"))?;
-        if !status.success() {
-            anyhow::bail!("teamctl send {agent_id} exited {status}");
-        }
-        Ok(())
+        crate::command::run(
+            &mut message_command(root, "send", agent_id, body),
+            &format!("invoke teamctl send {agent_id}"),
+        )
     }
 
     fn broadcast(&self, root: &Path, channel_id: &str, body: &str) -> Result<()> {
-        // `teamctl broadcast` takes a `#<name>` argument scoped to
-        // the project's compose root. We pass the short name (after
-        // the last `:`); the CLI resolves to the project's channel.
-        let short = channel_id
-            .rsplit_once(':')
-            .map(|(_, n)| n)
-            .unwrap_or(channel_id);
-        let target = format!("#{short}");
-        let status = Command::new("teamctl")
-            .arg("--root")
-            .arg(root)
-            .args(["broadcast", &target, body])
-            .status()
-            .with_context(|| format!("invoke teamctl broadcast {target}"))?;
-        if !status.success() {
-            anyhow::bail!("teamctl broadcast {target} exited {status}");
-        }
-        Ok(())
+        // Retain the project qualifier: different projects may declare
+        // identically named channels.
+        crate::command::run(
+            &mut message_command(root, "broadcast", channel_id, body),
+            &format!("invoke teamctl broadcast {channel_id}"),
+        )
     }
 }
 
@@ -548,6 +575,8 @@ pub mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod regressions;
 
     fn k(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)

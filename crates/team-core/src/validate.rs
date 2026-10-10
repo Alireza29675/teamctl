@@ -3,7 +3,7 @@
 //! Errors are collected rather than returned on first failure so the CLI can
 //! pretty-print the full list.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 
@@ -11,6 +11,17 @@ use crate::compose::{ChannelMembers, Compose};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ValidationError {
+    #[error("runtime descriptors could not be loaded: {0}")]
+    RuntimeDescriptors(String),
+
+    #[error(
+        "derived session name `{name}` collision between `{first}` and `{second}`; choose distinct project/agent names"
+    )]
+    DerivedNameCollision {
+        name: String,
+        first: String,
+        second: String,
+    },
     #[error("project `{0}`: duplicate agent id `{1}` in managers and workers")]
     DuplicateAgent(String, String),
 
@@ -72,7 +83,9 @@ pub enum ValidationError {
     )]
     InvalidAgentId { project: String, agent: String },
 
-    #[error("project `{project}`: agent `{agent}` uses runtime `{runtime}`, which is not built in and not declared in `<root>/runtimes/{runtime}.yaml`")]
+    #[error(
+        "project `{project}`: agent `{agent}` uses runtime `{runtime}`, which is not built in and not declared in `<root>/runtimes/{runtime}.yaml`"
+    )]
     UnknownRuntime {
         project: String,
         agent: String,
@@ -115,7 +128,9 @@ pub enum ValidationError {
 /// isn't getting what they wrote.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ValidationWarning {
-    #[error("agent `{project}:{agent}` declares {count} hook(s) but runtime `{runtime}` does not support hooks — they will be ignored at render time")]
+    #[error(
+        "agent `{project}:{agent}` declares {count} hook(s) but runtime `{runtime}` does not support hooks — they will be ignored at render time"
+    )]
     HooksUnsupported {
         project: String,
         agent: String,
@@ -123,7 +138,9 @@ pub enum ValidationWarning {
         count: usize,
     },
 
-    #[error("agent `{project}:{agent}` declares {count} sub-agent(s) but runtime `{runtime}` does not support sub-agents — they will be ignored at render time")]
+    #[error(
+        "agent `{project}:{agent}` declares {count} sub-agent(s) but runtime `{runtime}` does not support sub-agents — they will be ignored at render time"
+    )]
     SubagentsUnsupported {
         project: String,
         agent: String,
@@ -131,7 +148,9 @@ pub enum ValidationWarning {
         count: usize,
     },
 
-    #[error("agent `{project}:{agent}` declares {count} skill(s) but runtime `{runtime}` does not support skills — they will be ignored at render time")]
+    #[error(
+        "agent `{project}:{agent}` declares {count} skill(s) but runtime `{runtime}` does not support skills — they will be ignored at render time"
+    )]
     SkillsUnsupported {
         project: String,
         agent: String,
@@ -139,14 +158,18 @@ pub enum ValidationWarning {
         count: usize,
     },
 
-    #[error("agent `{project}:{agent}` declares `effort:` but runtime `{runtime}` does not consume it — it will be ignored")]
+    #[error(
+        "agent `{project}:{agent}` declares `effort:` but runtime `{runtime}` does not consume it — it will be ignored"
+    )]
     EffortUnsupported {
         project: String,
         agent: String,
         runtime: String,
     },
 
-    #[error("agent `{project}:{agent}` declares MCP server `{server}` with a `${{VAR}}` placeholder in env — runtime `{runtime}` does not interpolate env values, so the literal placeholder reaches the server; use a literal value or export the secret in the environment the server inherits")]
+    #[error(
+        "agent `{project}:{agent}` declares MCP server `{server}` with a `${{VAR}}` placeholder in env — runtime `{runtime}` does not interpolate env values, so the literal placeholder reaches the server; use a literal value or export the secret in the environment the server inherits"
+    )]
     McpEnvInterpolationUnsupported {
         project: String,
         agent: String,
@@ -154,7 +177,9 @@ pub enum ValidationWarning {
         server: String,
     },
 
-    #[error("agent `{project}:{agent}` sets `permission_mode: {mode}` but runtime `{runtime}` has no permission mapping — the setting is ignored at launch (the wrapper's gemini arm hardcodes --yolo)")]
+    #[error(
+        "agent `{project}:{agent}` sets `permission_mode: {mode}` but runtime `{runtime}` has no permission mapping — the setting is ignored at launch (the wrapper's gemini arm hardcodes --yolo)"
+    )]
     PermissionModeUnsupported {
         project: String,
         agent: String,
@@ -162,7 +187,9 @@ pub enum ValidationWarning {
         mode: String,
     },
 
-    #[error("agent `{project}:{agent}` sets `permission_mode: bypassPermissions` but opencode has no full-bypass upstream — the wrapper downgrades it to `--auto`; deny rules stay enforced")]
+    #[error(
+        "agent `{project}:{agent}` sets `permission_mode: bypassPermissions` but opencode has no full-bypass upstream — the wrapper downgrades it to `--auto`; deny rules stay enforced"
+    )]
     PermissionModeBypassDowngraded { project: String, agent: String },
 }
 
@@ -195,14 +222,106 @@ pub fn is_valid_id(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
+#[cfg(test)]
+mod boundary_regressions {
+    use super::*;
+
+    fn compose(projects: &[(&str, &str)]) -> (tempfile::TempDir, Compose) {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("projects")).unwrap();
+        let mut manifest = String::from("version: \"2.0.0\"\nprojects:\n");
+        for (i, (project, agent)) in projects.iter().enumerate() {
+            manifest.push_str(&format!("  - file: projects/{i}.yaml\n"));
+            std::fs::write(root.path().join(format!("projects/{i}.yaml")), format!("version: 2\nproject:\n  id: {project}\n  name: Team\n  cwd: .\nmanagers:\n  {agent}:\n    runtime: claude-code\n")).unwrap();
+        }
+        std::fs::write(root.path().join("team-compose.yaml"), manifest).unwrap();
+        let compose = Compose::load(root.path()).unwrap();
+        (root, compose)
+    }
+
+    #[test]
+    fn distinct_valid_ids_cannot_share_artifact_names() {
+        let (_root, compose) = compose(&[("a-b", "c"), ("a", "b-c")]);
+        assert!(validate(&compose)
+            .iter()
+            .any(|e| e.to_string().contains("collision")));
+    }
+
+    #[test]
+    fn malformed_runtime_descriptor_fails_validation() {
+        let (root, compose) = compose(&[("p", "a")]);
+        std::fs::create_dir(root.path().join("runtimes")).unwrap();
+        std::fs::write(root.path().join("runtimes/custom.yaml"), "binary: [invalid").unwrap();
+        assert!(validate(&compose)
+            .iter()
+            .any(|e| e.to_string().contains("runtime descriptors")));
+    }
+
+    #[test]
+    fn bot_names_share_the_normalized_agent_namespace() {
+        for ids in [
+            [("p", "m"), ("bot-p", "m")],
+            [("p.one", "m"), ("bot-p_one", "m")],
+        ] {
+            let (_root, mut compose) = compose(&ids);
+            compose.projects[0]
+                .managers
+                .get_mut("m")
+                .unwrap()
+                .interfaces = Some(
+                serde_yaml::from_str("telegram:\n  bot_token_env: TOKEN\n  chat_ids_env: CHATS\n")
+                    .unwrap(),
+            );
+            let errors = validate(&compose);
+            assert!(errors.iter().any(|error| matches!(error, ValidationError::DerivedNameCollision { first, second, .. }
+                if first.starts_with("bot-p") && second.starts_with("bot:"))), "{errors:?}");
+        }
+    }
+}
+
 pub fn validate(compose: &Compose) -> Vec<ValidationError> {
     let mut errs = Vec::new();
 
     // Known runtimes. Embedded defaults are always present, so the
     // validator can always enforce that every referenced runtime resolves
     // to a descriptor (built in or user-supplied override).
-    let runtimes = crate::runtimes::load_all(&compose.root).unwrap_or_default();
+    let runtimes = match crate::runtimes::load_all(&compose.root) {
+        Ok(runtimes) => runtimes,
+        Err(e) => {
+            errs.push(ValidationError::RuntimeDescriptors(format!("{e:#}")));
+            BTreeMap::new()
+        }
+    };
     let check_runtime = !runtimes.is_empty();
+    let mut derived_names = BTreeMap::new();
+    for h in compose.agents() {
+        // Tmux replaces dots in session names with underscores. Check the
+        // same normalized namespace as tmux as well as the artifact stem.
+        let name = format!("{}-{}", h.project, h.agent).replace('.', "_");
+        if let Some(first) = derived_names.insert(name.clone(), h.id()) {
+            if first != h.id() {
+                errs.push(ValidationError::DerivedNameCollision {
+                    name,
+                    first,
+                    second: h.id(),
+                });
+            }
+        }
+    }
+    for h in compose
+        .agents()
+        .filter(|h| h.is_manager && h.spec.telegram().is_some())
+    {
+        let name = format!("bot-{}-{}", h.project, h.agent).replace('.', "_");
+        let identity = format!("bot:{}", h.id());
+        if let Some(first) = derived_names.insert(name.clone(), identity.clone()) {
+            errs.push(ValidationError::DerivedNameCollision {
+                name,
+                first,
+                second: identity,
+            });
+        }
+    }
 
     match compose.global.broker.r#type.as_str() {
         "sqlite" => {}

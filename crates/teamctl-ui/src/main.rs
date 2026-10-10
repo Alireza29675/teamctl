@@ -27,12 +27,15 @@ fn main() -> Result<()> {
         return Ok(());
     }
     install_panic_hook();
+    let _cleanup = TerminalCleanup::new(leave_terminal);
     enter_terminal()?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     let result = teamctl_ui::app::run(&mut terminal);
-    leave_terminal()?;
-    terminal.show_cursor()?;
+    let cursor_result = terminal.show_cursor();
+    if result.is_ok() {
+        cursor_result?;
+    }
     result
 }
 
@@ -59,7 +62,11 @@ fn run_init_picker() -> Result<()> {
 }
 
 fn handle_info_flags() -> bool {
-    match std::env::args().nth(1).as_deref() {
+    match std::env::args()
+        .skip(1)
+        .find(|arg| matches!(arg.as_str(), "--version" | "-V" | "--help" | "-h"))
+        .as_deref()
+    {
         Some("--version" | "-V") => {
             println!("teamctl-ui {}", env!("CARGO_PKG_VERSION"));
             true
@@ -76,6 +83,7 @@ fn handle_info_flags() -> bool {
             println!("Options:");
             println!("  -h, --help     Print help");
             println!("  -V, --version  Print version");
+            println!("  -C, --root PATH  Compose root (also TEAMCTL_ROOT)");
             println!();
             println!("Run with no arguments to launch the TUI.");
             true
@@ -94,11 +102,32 @@ fn enter_terminal() -> Result<()> {
     Ok(())
 }
 
-fn leave_terminal() -> Result<()> {
+fn leave_terminal() {
     let mut out = io::stdout();
-    execute!(out, DisableMouseCapture, LeaveAlternateScreen)?;
-    disable_raw_mode()?;
-    Ok(())
+    let _ = execute!(
+        out,
+        DisableMouseCapture,
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    );
+    let _ = disable_raw_mode();
+}
+
+/// Teardown also runs when setup or the event loop returns an ordinary error.
+struct TerminalCleanup<F: FnMut()> {
+    restore: F,
+}
+
+impl<F: FnMut()> TerminalCleanup<F> {
+    fn new(restore: F) -> Self {
+        Self { restore }
+    }
+}
+
+impl<F: FnMut()> Drop for TerminalCleanup<F> {
+    fn drop(&mut self) {
+        (self.restore)();
+    }
 }
 
 /// Restore the terminal before the default panic handler dumps the
@@ -107,7 +136,29 @@ fn leave_terminal() -> Result<()> {
 fn install_panic_hook() {
     let original = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
-        let _ = leave_terminal();
+        leave_terminal();
         original(info);
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn terminal_cleanup_runs_after_setup_and_loop_errors() {
+        for fail_during_setup in [true, false] {
+            let restored = Cell::new(false);
+            let result: Result<()> = (|| {
+                let _cleanup = TerminalCleanup::new(|| restored.set(true));
+                if fail_during_setup {
+                    anyhow::bail!("terminal setup failed");
+                }
+                anyhow::bail!("event loop failed");
+            })();
+            assert!(result.is_err());
+            assert!(restored.get());
+        }
+    }
 }

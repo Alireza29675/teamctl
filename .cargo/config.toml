@@ -3,5 +3,9 @@
 # correctly but the linker invocation pulls the x86_64 `rust-lld`
 # from the host's sysroot, which then errors with
 # "is incompatible with elf64-x86-64" on every aarch64 object file.
+[resolver]
+# Preserve each crate's declared Rust floor when refreshing Cargo.lock.
+incompatible-rust-versions = "fallback"
+
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"

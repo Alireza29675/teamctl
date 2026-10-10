@@ -4,6 +4,7 @@ pub mod approval;
 pub mod attach;
 pub mod bot;
 pub mod bridge;
+pub mod broadcast;
 pub mod budget;
 pub mod budget_record;
 pub mod caffeinate;

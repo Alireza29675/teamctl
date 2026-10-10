@@ -67,6 +67,10 @@ pub struct Fingerprints {
     pub env: String,
     pub mcp: String,
     pub role_prompt: PromptFingerprint,
+    /// Complete launch/configuration inputs. Old v2 snapshots deliberately
+    /// default to empty so the first reload refreshes their incomplete state.
+    #[serde(default)]
+    pub config: String,
 }
 
 /// `role_prompt` is a sum type so a missing file produces a stable
@@ -116,6 +120,7 @@ pub fn read(root: &Path) -> Option<Snapshot> {
 /// `next` because it reflects the YAML state the operator just looked
 /// at — the next unscoped reload still re-diffs other projects'
 /// agents against their stale fingerprints, so correctness holds.
+#[cfg(test)]
 pub fn merge_project_into(prior: Option<&Snapshot>, next: &Snapshot, project_id: &str) -> Snapshot {
     let prefix = format!("{project_id}:");
     let mut agents: BTreeMap<String, AgentEntry> =
@@ -142,7 +147,8 @@ pub fn write(root: &Path, snapshot: &Snapshot) -> Result<()> {
         fs::create_dir_all(parent).context("create state/ dir")?;
     }
     let serialized = serde_json::to_string_pretty(snapshot).context("serialize snapshot")?;
-    fs::write(&path, serialized).context("write applied.json")?;
+    team_core::persistence::atomic_write(&path, serialized.as_bytes())
+        .context("write applied.json")?;
     Ok(())
 }
 
@@ -159,6 +165,7 @@ pub fn compute(compose: &Compose, team_mcp_bin: &str) -> Snapshot {
             env: hash_str(&env),
             mcp: hash_str(&mcp),
             role_prompt,
+            config: fingerprint_config(compose, h, team_mcp_bin),
         };
         let tmux_session = format!(
             "{}{}-{}",
@@ -190,16 +197,134 @@ pub fn compute(compose: &Compose, team_mcp_bin: &str) -> Snapshot {
     }
 }
 
-/// Hash on-disk `team-compose.yaml` bytes. Used for the fast-path "no
-/// changes anywhere" check. Falls back to an empty string when the file
-/// can't be read (which would mean the validate step before us failed
-/// already, so this is defensive only).
-fn compose_digest(compose: &Compose) -> String {
-    let manifest = compose.root.join("team-compose.yaml");
-    match fs::read(&manifest) {
-        Ok(bytes) => hash_bytes(&bytes),
-        Err(_) => String::new(),
+/// Replace only entries whose processes actually adopted the new inputs.
+/// Running/skipped agents retain their last-applied fingerprints; removals
+/// are explicit so an `up` cannot hide an agent that still needs teardown.
+pub fn merge_applied(
+    prior: Option<&Snapshot>,
+    next: &Snapshot,
+    applied: impl IntoIterator<Item = String>,
+    removed: impl IntoIterator<Item = String>,
+) -> Snapshot {
+    let mut snapshot = next.clone();
+    snapshot.agents = prior.map(|s| s.agents.clone()).unwrap_or_default();
+    for id in removed {
+        snapshot.agents.remove(&id);
     }
+    for id in applied {
+        if let Some(entry) = next.agents.get(&id) {
+            snapshot.agents.insert(id, entry.clone());
+        }
+    }
+    snapshot
+}
+
+fn fingerprint_config(
+    compose: &Compose,
+    h: team_core::compose::AgentHandle<'_>,
+    bin: &str,
+) -> String {
+    use team_core::render::{render_claude_settings, render_codex_config, render_opencode_config};
+    let mut hasher = blake3::Hasher::new();
+    let mut feed = |bytes: &[u8]| {
+        hasher.update(&(bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    };
+    feed(&serde_json::to_vec(h.spec).expect("serialize agent"));
+    for rendered in [
+        render_claude_settings(compose, h),
+        render_codex_config(compose, h, bin),
+        render_opencode_config(compose, h, bin),
+    ] {
+        feed(rendered.unwrap_or_default().as_bytes());
+    }
+    if let Ok(runtimes) = team_core::runtimes::load_all(&compose.root) {
+        if let Some(runtime) = runtimes.get(&h.spec.runtime) {
+            feed(&serde_json::to_vec(runtime).expect("serialize runtime"));
+        }
+    }
+    let mut visited = std::collections::BTreeSet::new();
+    for path in h
+        .spec
+        .hooks
+        .iter()
+        .map(|hook| &hook.command)
+        .chain(h.spec.subagents.iter())
+        .chain(h.spec.skills.iter())
+    {
+        fingerprint_path(&compose.root.join(path), &mut hasher, &mut visited, 0);
+    }
+    format!("blake3:{}", hasher.finalize().to_hex())
+}
+
+fn fingerprint_path(
+    path: &Path,
+    hasher: &mut blake3::Hasher,
+    visited: &mut std::collections::BTreeSet<PathBuf>,
+    depth: usize,
+) {
+    let name = path.to_string_lossy();
+    hasher.update(&(name.len() as u64).to_le_bytes());
+    hasher.update(name.as_bytes());
+    // Follow declared skill links, but guard against symlink cycles and
+    // pathological nesting. Missing/unreadable inputs have stable sentinels.
+    if depth > 32 || !visited.insert(path.canonicalize().unwrap_or_else(|_| path.to_path_buf())) {
+        hasher.update(b"cycle-or-depth");
+        return;
+    }
+    if path.is_dir() {
+        hasher.update(b"directory");
+        match fs::read_dir(path) {
+            Ok(entries) => {
+                let mut children: Vec<_> =
+                    entries.filter_map(Result::ok).map(|e| e.path()).collect();
+                children.sort();
+                for child in children {
+                    fingerprint_path(&child, hasher, visited, depth + 1);
+                }
+            }
+            Err(e) => {
+                hasher.update(format!("unreadable:{:?}", e.kind()).as_bytes());
+            }
+        }
+    } else {
+        match fs::read(path) {
+            Ok(bytes) => {
+                hasher.update(&(bytes.len() as u64).to_le_bytes());
+                hasher.update(&bytes);
+            }
+            Err(e) => {
+                hasher.update(format!("missing:{:?}", e.kind()).as_bytes());
+            }
+        }
+    }
+}
+
+/// Include every compose file, including project-only mailbox metadata
+/// that does not change an agent's launch fingerprint.
+fn compose_digest(compose: &Compose) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for path in std::iter::once(PathBuf::from("team-compose.yaml")).chain(
+        compose
+            .global
+            .projects
+            .iter()
+            .map(|project| project.file.clone()),
+    ) {
+        let name = path.to_string_lossy();
+        hasher.update(&(name.len() as u64).to_le_bytes());
+        hasher.update(name.as_bytes());
+        match fs::read(compose.root.join(path)) {
+            Ok(bytes) => {
+                hasher.update(&(bytes.len() as u64).to_le_bytes());
+                hasher.update(&bytes);
+            }
+            Err(error) => {
+                hasher.update(format!("unreadable:{:?}", error.kind()).as_bytes());
+            }
+        }
+    }
+    format!("blake3:{}", hasher.finalize().to_hex())
 }
 
 fn fingerprint_role_prompt(
@@ -269,6 +394,7 @@ pub struct ChangedInputs {
     pub env: bool,
     pub mcp: bool,
     pub role_prompt: bool,
+    pub config: bool,
 }
 
 impl ChangedInputs {
@@ -283,11 +409,12 @@ impl ChangedInputs {
             env: false,
             mcp: false,
             role_prompt: false,
+            config: false,
         }
     }
 
     pub fn any(&self) -> bool {
-        self.env || self.mcp || self.role_prompt
+        self.env || self.mcp || self.role_prompt || self.config
     }
 
     pub fn label(&self) -> String {
@@ -300,6 +427,9 @@ impl ChangedInputs {
         }
         if self.role_prompt {
             parts.push("role_prompt");
+        }
+        if self.config {
+            parts.push("config");
         }
         parts.join("+")
     }
@@ -360,6 +490,7 @@ pub fn plan(prev: Option<&Snapshot>, next: &Snapshot) -> ReloadPlan {
                     mcp: prev_entry.fingerprints.mcp != next_entry.fingerprints.mcp,
                     role_prompt: prev_entry.fingerprints.role_prompt
                         != next_entry.fingerprints.role_prompt,
+                    config: prev_entry.fingerprints.config != next_entry.fingerprints.config,
                 };
                 if inputs.any() {
                     plan.change.push((id.clone(), inputs));
@@ -393,6 +524,7 @@ mod tests {
             env: env.into(),
             mcp: mcp.into(),
             role_prompt: prompt,
+            config: String::new(),
         }
     }
 
@@ -510,6 +642,7 @@ mod tests {
             env: true,
             mcp: false,
             role_prompt: true,
+            config: false,
         };
         assert_eq!(c.label(), "env+role_prompt");
     }
@@ -806,6 +939,95 @@ mod tests {
         match fp {
             PromptFingerprint::Missing { path } => assert_eq!(path, "roles/missing.md"),
             other => panic!("expected Missing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selected_merge_keeps_unapplied_sibling_and_pending_removal() {
+        let prior = snap(vec![
+            (
+                "p:a",
+                entry("old-a", fp("old", "m", PromptFingerprint::None)),
+            ),
+            (
+                "p:b",
+                entry("old-b", fp("old", "m", PromptFingerprint::None)),
+            ),
+            (
+                "p:removed",
+                entry("old-removed", fp("old", "m", PromptFingerprint::None)),
+            ),
+        ]);
+        let next = snap(vec![
+            (
+                "p:a",
+                entry("new-a", fp("new", "m", PromptFingerprint::None)),
+            ),
+            (
+                "p:b",
+                entry("new-b", fp("new", "m", PromptFingerprint::None)),
+            ),
+        ]);
+        let merged = merge_applied(Some(&prior), &next, ["p:a".into()], []);
+        assert_eq!(merged.agents["p:a"].tmux_session, "new-a");
+        assert_eq!(merged.agents["p:b"].tmux_session, "old-b");
+        assert!(merged.agents.contains_key("p:removed"));
+        let remaining = plan(Some(&merged), &next);
+        assert_eq!(
+            remaining
+                .change
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            ["p:b"]
+        );
+        assert_eq!(remaining.remove[0].id, "p:removed");
+    }
+
+    #[test]
+    fn fingerprint_covers_hook_subagent_skill_and_runtime_sources() {
+        use team_core::compose::HookSpec;
+        let dir = tempfile::tempdir().unwrap();
+        let mut compose = compose_with_root(dir.path());
+        let agent = compose.projects[0].managers.get_mut("mgr").unwrap();
+        agent.hooks.push(HookSpec {
+            event: "Stop".into(),
+            matcher: None,
+            command: "guard.sh".into(),
+        });
+        agent.subagents.push("helper.md".into());
+        agent.skills.push("skill".into());
+        fs::create_dir_all(dir.path().join("skill")).unwrap();
+        fs::create_dir_all(dir.path().join("runtimes")).unwrap();
+        fs::write(dir.path().join("guard.sh"), "echo initial").unwrap();
+        fs::write(
+            dir.path().join("helper.md"),
+            "---\ndescription: helper\n---\ninitial",
+        )
+        .unwrap();
+        fs::write(dir.path().join("skill/SKILL.md"), "initial").unwrap();
+        fs::write(
+            dir.path().join("runtimes/claude-code.yaml"),
+            "binary: claude\n",
+        )
+        .unwrap();
+        let fingerprint = || {
+            compute(&compose, "team-mcp").agents["p:mgr"]
+                .fingerprints
+                .config
+                .clone()
+        };
+        let mut last = fingerprint();
+        for (path, body) in [
+            ("guard.sh", "echo edited"),
+            ("helper.md", "---\ndescription: helper\n---\nedited"),
+            ("skill/SKILL.md", "edited"),
+            ("runtimes/claude-code.yaml", "binary: other-claude\n"),
+        ] {
+            fs::write(dir.path().join(path), body).unwrap();
+            let next = fingerprint();
+            assert_ne!(last, next, "source edit must trigger reload: {path}");
+            last = next;
         }
     }
 }

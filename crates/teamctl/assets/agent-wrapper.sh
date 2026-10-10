@@ -24,6 +24,8 @@ if [ -z "$AGENT" ]; then
 fi
 
 : "${RUNTIME:=claude-code}"
+: "${RUNTIME_BINARY:=}"
+: "${RUNTIME_LAUNCHER:=}"
 : "${MODEL:=}"
 : "${PERMISSION_MODE:=}"
 : "${CLAUDE_SETTINGS:=}"
@@ -96,7 +98,10 @@ if [ -z "${BOOTSTRAP_PROMPT:-}" ]; then
     esac
 fi
 
-cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || true
+if ! cd "$CLAUDE_PROJECT_DIR"; then
+    printf '[agent-wrapper %s] cannot enter project directory: %s\n' "$AGENT" "$CLAUDE_PROJECT_DIR" >&2
+    exit 2
+fi
 
 log() {
     printf '[agent-wrapper %s] %s\n' "$AGENT" "$*" >&2
@@ -517,11 +522,22 @@ while :; do
             set -- "$@" --yolo "$BOOTSTRAP_PROMPT"
             ;;
         *)
-            log "unknown runtime: $RUNTIME"
-            sleep 30
-            continue
+            if [ -z "$RUNTIME_BINARY" ]; then
+                log "runtime descriptor missing for: $RUNTIME; run teamctl up"
+                exit 2
+            fi
+            BIN="$RUNTIME_BINARY"
+            set --
             ;;
     esac
+
+    # Generated launcher honors descriptor binary/argv overrides and quotes
+    # every argument without eval. Built-in adapter flags remain above.
+    if [ -n "$RUNTIME_LAUNCHER" ]; then
+        BIN="$RUNTIME_LAUNCHER"
+    elif [ -n "$RUNTIME_BINARY" ]; then
+        BIN="$RUNTIME_BINARY"
+    fi
 
     AUTO_CONFIRM_PID=
     if [ "${AUTO_CONFIRM:-0}" = 1 ]; then

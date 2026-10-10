@@ -14,6 +14,7 @@ pub fn run(root: &Path) -> Result<()> {
     }
     let conn = Connection::open(&db)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
     team_core::mailbox::ensure(&conn)?;
 
     let ttl_hours = compose.global.budget.message_ttl_hours.unwrap_or(24) as f64;
@@ -21,6 +22,12 @@ pub fn run(root: &Path) -> Result<()> {
     let msgs = conn.execute(
         "DELETE FROM messages WHERE sent_at < ?1 AND acked_at IS NOT NULL",
         params![horizon],
+    )?;
+    // Clean orphan receipts left by older/external writers with foreign keys
+    // disabled. Normal message deletion cascades on this connection.
+    conn.execute(
+        "DELETE FROM message_receipts WHERE message_id NOT IN (SELECT id FROM messages)",
+        [],
     )?;
     let now_ts = now();
     let undeliverable = conn.execute(

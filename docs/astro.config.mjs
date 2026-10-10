@@ -9,9 +9,7 @@ export default defineConfig({
     starlight({
       title: 'teamctl',
       description: 'docker-compose for persistent AI agent teams.',
-      social: {
-        github: 'https://github.com/Alireza29675/teamctl',
-      },
+      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/Alireza29675/teamctl' }],
       editLink: {
         baseUrl: 'https://github.com/Alireza29675/teamctl/edit/main/docs/',
       },
@@ -77,7 +75,7 @@ export default defineConfig({
         },
         {
           label: 'ADRs',
-          autogenerate: { directory: 'adrs' },
+          items: [{ autogenerate: { directory: 'adrs' } }],
         },
       ],
       customCss: [],

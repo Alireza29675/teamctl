@@ -7,8 +7,8 @@
 //!    becomes `add` and the next reload re-establishes the spine.
 //! 2. Compute the next snapshot from the live compose
 //!    (`snapshot::compute`). Per-agent fingerprints split into env,
-//!    mcp, and `role_prompt` (with `None`/`Missing`/`Present`
-//!    sentinels).
+//!    mcp, `role_prompt` (with `None`/`Missing`/`Present` sentinels),
+//!    and complete runtime/configuration source inputs.
 //! 3. Build a `ReloadPlan` (`snapshot::plan`) with `add`, `change`,
 //!    `remove`, `keep`. The plan carries the *prior* `AgentEntry` for
 //!    `change` and `remove` so teardown targets the actually-running
@@ -29,14 +29,14 @@
 //! so preview and apply cannot drift.
 //!
 //! Hashing is `blake3` throughout (see `snapshot::hash_*`).
-//! File locking on `applied.json` and an audit log land in PR C/D —
-//! the schema is forward-compatible with each.
+//! Process locks serialize identity claims and root lifecycle changes;
+//! atomic checkpoints record each successful application.
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use team_core::compose::Compose;
 use team_core::supervisor::{AgentSpec, AgentState, DrainOutcome, Supervisor, TmuxSupervisor};
 
@@ -51,7 +51,12 @@ pub fn run(
     fresh: bool,
     force: bool,
 ) -> Result<()> {
-    let compose = super::load(root)?;
+    let compose = if dry_run {
+        Compose::load_read_only(root)
+            .with_context(|| format!("load compose at {}", root.display()))?
+    } else {
+        super::load(root)?
+    };
     let errs = team_core::validate::validate(&compose);
     if !errs.is_empty() {
         for e in &errs {
@@ -66,7 +71,22 @@ pub fn run(
     // T-469: `reload` spawns agents too (both the force and diff paths
     // below), so it's a second front door to the same-name-different-folder
     // collision `up` guards against — gate it before any agent is brought up.
+    let _identity_lock = if dry_run {
+        None
+    } else {
+        team_core::registry::lifecycle_lock()?
+    };
     super::up::guard_no_name_collision(&compose, scoped.as_deref())?;
+    let _lock = if dry_run {
+        None
+    } else {
+        Some(team_core::persistence::ProcessLock::acquire(
+            &compose.root.join("state/lifecycle.lock.sqlite"),
+        )?)
+    };
+    if !dry_run {
+        super::up::source_dotenv_into_process(&compose.root);
+    }
 
     // T-305: a per-agent scope force-restarts exactly the selected
     // agents regardless of whether their config changed. This is a
@@ -84,7 +104,7 @@ pub fn run(
 
     let prev = snapshot::read(&compose.root);
     let bin = super::team_mcp_bin().display().to_string();
-    let next = snapshot::compute(&compose, &bin);
+    let mut next = snapshot::compute(&compose, &bin);
 
     // Fast path: compose file unchanged AND no rendered diff. The
     // compose_digest covers the on-disk YAML; the per-agent
@@ -113,7 +133,12 @@ pub fn run(
     if force {
         force_promote_keeps(&mut plan, prev.as_ref());
     }
+    let sup = TmuxSupervisor;
+    let stopped = stopped_keeps(&compose, &plan, &sup)?;
+    let bot_plan = super::bot::plan_bots(&compose, scoped.as_deref(), None, force)?;
     let no_changes = plan.is_empty()
+        && stopped.is_empty()
+        && bot_plan.is_empty()
         && prev
             .as_ref()
             .map(|s| s.compose_digest == next.compose_digest && s.global == next.global)
@@ -129,33 +154,51 @@ pub fn run(
 
     if dry_run {
         print_plan(&plan, true, fresh);
+        bot_plan.print(true);
+        for id in stopped {
+            println!("started · {id}{} (dry run)", super::up::fresh_suffix(fresh));
+        }
         return Ok(());
     }
 
-    // Per T-133: scoped runs skip the global wrapper rewrite and the
-    // whole-tree DB rewrite (they would clobber other projects'
-    // state). Per-project artefact rendering still happens so
-    // freshly-edited env or mcp files land before the supervisor
-    // restarts. The snapshot is still written below — but merged
-    // into the prior snapshot rather than replacing it.
+    // Infrastructure exists even for a first scoped reload. Rendering
+    // and transactional registration stay within the selected project.
     if let Some(id) = scoped.as_deref() {
+        super::up::ensure_wrapper_and_dirs(&compose)?;
         super::up::render_project_public(&compose, id)?;
+        super::up::register_project_public(&compose, id)?;
     } else {
         super::up::ensure_wrapper_and_dirs(&compose)?;
         super::up::render_all_public(&compose)?;
         super::up::register_all_public(&compose)?;
     }
 
-    apply_plan(&compose, &plan, fresh)?;
-    // Persist the snapshot. Scoped runs merge the named project's
-    // per-agent entries into the existing applied.json (T-133) —
-    // preserves diff correctness for the next unscoped reload without
-    // clobbering other projects' last-applied fingerprints.
-    let snap = match scoped.as_deref() {
-        Some(id) => snapshot::merge_project_into(prev.as_ref(), &next, id),
-        None => next,
-    };
-    snapshot::write(&compose.root, &snap)?;
+    // Scoped registration leaves sibling project metadata unapplied. Keep
+    // the old whole-tree digest so the next full reload still checks it.
+    if scoped.is_some() {
+        next.compose_digest = prev
+            .as_ref()
+            .map(|s| s.compose_digest.clone())
+            .unwrap_or_default();
+    }
+    super::up::reserve_in_registry(&compose, scoped.as_deref())?;
+    super::bot::stop_bots(&bot_plan, &compose.root)?;
+    let mut applied = prev.clone();
+    apply_plan_with(&compose, &plan, fresh, &sup, |id, removed| {
+        let snap = if removed {
+            snapshot::merge_applied(applied.as_ref(), &next, [], [id.to_string()])
+        } else {
+            snapshot::merge_applied(applied.as_ref(), &next, [id.to_string()], [])
+        };
+        snapshot::write(&compose.root, &snap)?;
+        applied = Some(snap);
+        Ok(())
+    })?;
+    // Registration can apply project/channel metadata without restarting
+    // any agents. Advance that digest while retaining their applied inputs.
+    let final_snapshot = snapshot::merge_applied(applied.as_ref(), &next, [], []);
+    snapshot::write(&compose.root, &final_snapshot)?;
+    super::bot::start_bots(&bot_plan, &compose.root)?;
     // T-468: refresh the durable registry to the post-reload roster so
     // `teamctl ps` and orphan reaping reflect what's now up. This is the
     // #466 registry-write deferred from up-only into the reload path; the
@@ -199,7 +242,10 @@ fn force_restart_scoped(
         return Ok(());
     }
 
+    let bot_plan = super::bot::plan_bots(compose, Some(project_id), Some(targets), true)?;
+
     if dry_run {
+        bot_plan.print(true);
         for id in &ids {
             println!(
                 "reloaded · {id} (forced){} (dry run)",
@@ -213,9 +259,20 @@ fn force_restart_scoped(
     // env/mcp/role_prompt lands before the restart — same as the
     // diff-driven scoped reload. Idempotent for unchanged agents; the
     // cross-project DB rewrite stays skipped (T-133).
+    super::up::ensure_wrapper_and_dirs(compose)?;
     super::up::render_project_public(compose, project_id)?;
+    super::up::register_project_public(compose, project_id)?;
 
     let prev = snapshot::read(&compose.root);
+    let mut applied = prev.clone();
+    let bin = super::team_mcp_bin().display().to_string();
+    let mut next = snapshot::compute(compose, &bin);
+    next.compose_digest = prev
+        .as_ref()
+        .map(|s| s.compose_digest.clone())
+        .unwrap_or_default();
+    super::up::reserve_in_registry(compose, Some(project_id))?;
+    super::bot::stop_bots(&bot_plan, &compose.root)?;
     let sup = TmuxSupervisor;
     let drain_timeout = Duration::from_secs(compose.global.supervisor.drain_timeout_secs);
 
@@ -241,6 +298,9 @@ fn force_restart_scoped(
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
             super::up::freshen_for_spec(&compose.root, &spec, &h.spec.runtime, fresh);
             sup.up(&spec)?;
+            let snap = snapshot::merge_applied(applied.as_ref(), &next, [id.clone()], []);
+            snapshot::write(&compose.root, &snap)?;
+            applied = Some(snap);
         }
         println!(
             "reloaded · {id} (forced){}{}",
@@ -254,10 +314,8 @@ fn force_restart_scoped(
     // prior snapshot (T-133) — other projects' fingerprints untouched.
     // If a forced agent's config also changed, the restart already
     // applied the new spec and the merged `next` records it.
-    let bin = super::team_mcp_bin().display().to_string();
-    let next = snapshot::compute(compose, &bin);
-    let snap = snapshot::merge_project_into(prev.as_ref(), &next, project_id);
-    snapshot::write(&compose.root, &snap)?;
+    super::bot::start_bots(&bot_plan, &compose.root)?;
+    super::up::record_in_registry(compose, Some(project_id));
     Ok(())
 }
 
@@ -347,8 +405,31 @@ fn print_plan(plan: &ReloadPlan, dry: bool, fresh: bool) {
     }
 }
 
-fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
-    let sup = TmuxSupervisor;
+fn stopped_keeps(
+    compose: &Compose,
+    plan: &ReloadPlan,
+    sup: &impl Supervisor,
+) -> Result<Vec<String>> {
+    let mut stopped = Vec::new();
+    for id in &plan.keep {
+        if let Some(h) = compose.agents().find(|h| &h.id() == id) {
+            let spec =
+                AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+            if sup.state(&spec)? == AgentState::Stopped {
+                stopped.push(id.clone());
+            }
+        }
+    }
+    Ok(stopped)
+}
+
+fn apply_plan_with(
+    compose: &Compose,
+    plan: &ReloadPlan,
+    fresh: bool,
+    sup: &impl Supervisor,
+    mut checkpoint: impl FnMut(&str, bool) -> Result<()>,
+) -> Result<()> {
     let drain_timeout = Duration::from_secs(compose.global.supervisor.drain_timeout_secs);
 
     // Removals: drain using the *prior* tmux_session — the one that
@@ -358,6 +439,7 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
     // agent a chance to flush in-flight work.
     for r in &plan.remove {
         let outcome = sup.drain(&spec_from_removed(compose, r), drain_timeout)?;
+        checkpoint(&r.id, true)?;
         println!("removed · {}{}", r.id, drain_suffix(outcome));
     }
 
@@ -374,6 +456,7 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
             super::up::freshen_for_spec(&compose.root, &spec, &h.spec.runtime, fresh);
             sup.up(&spec)?;
+            checkpoint(id, false)?;
         }
         println!(
             "{}{}{}",
@@ -388,8 +471,14 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
         if let Some(h) = compose.agents().find(|h| &h.id() == id) {
             let spec =
                 AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+            // An untracked live session has unknown applied inputs. Drain it
+            // before adding so a no-op `up` cannot claim the desired config.
+            if sup.state(&spec)? == AgentState::Running {
+                sup.drain(&spec, drain_timeout)?;
+            }
             super::up::freshen_for_spec(&compose.root, &spec, &h.spec.runtime, fresh);
             sup.up(&spec)?;
+            checkpoint(id, false)?;
             println!("added   · {id}{}", super::up::fresh_suffix(fresh));
         }
     }
@@ -406,6 +495,7 @@ fn apply_plan(compose: &Compose, plan: &ReloadPlan, fresh: bool) -> Result<()> {
             if sup.state(&spec)? == AgentState::Stopped {
                 super::up::freshen_for_spec(&compose.root, &spec, &h.spec.runtime, fresh);
                 sup.up(&spec)?;
+                checkpoint(id, false)?;
                 println!("started · {id}{}", super::up::fresh_suffix(fresh));
             }
         }
@@ -492,6 +582,64 @@ fn registry_orphans(compose: &Compose) -> Vec<RemovedAgent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_reload_recovers_stopped_agents() {
+        use super::super::up::regression_tests::{fixture, FakeSupervisor};
+        let (_dir, compose) = fixture();
+        let next = snapshot::compute(&compose, "team-mcp");
+        let plan = snapshot::plan(Some(&next), &next);
+        assert!(plan.is_empty());
+        let supervisor = FakeSupervisor::default();
+        assert_eq!(
+            stopped_keeps(&compose, &plan, &supervisor).unwrap().len(),
+            4
+        );
+        let mut checkpoints = Vec::new();
+        apply_plan_with(&compose, &plan, false, &supervisor, |id, removed| {
+            assert!(!removed);
+            checkpoints.push(id.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(checkpoints, ["p:a", "p:b", "q:a", "q:b"]);
+    }
+
+    #[test]
+    fn reload_partial_failure_records_only_completed_restarts() {
+        use super::super::up::regression_tests::{fixture, FakeSupervisor};
+        let (_dir, mut compose) = fixture();
+        let previous = snapshot::compute(&compose, "team-mcp");
+        let project = &mut compose.projects[0];
+        for agent in project
+            .managers
+            .values_mut()
+            .chain(project.workers.values_mut())
+        {
+            agent.model = Some("edited-model".into());
+        }
+        let next = snapshot::compute(&compose, "team-mcp");
+        let plan = filter_plan_to_project(snapshot::plan(Some(&previous), &next), "p");
+        let supervisor = FakeSupervisor {
+            fail_agent: Some("b".into()),
+            ..Default::default()
+        };
+        let mut applied = previous.clone();
+        let result = apply_plan_with(&compose, &plan, false, &supervisor, |id, removed| {
+            assert!(!removed);
+            applied = snapshot::merge_applied(Some(&applied), &next, [id.to_string()], []);
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            applied.agents["p:a"].fingerprints,
+            next.agents["p:a"].fingerprints
+        );
+        assert_eq!(
+            applied.agents["p:b"].fingerprints,
+            previous.agents["p:b"].fingerprints
+        );
+    }
     use crate::cmd::snapshot::{
         AgentEntry, ChangedInputs, Fingerprints, PromptFingerprint, RemovedAgent,
     };
@@ -524,6 +672,7 @@ mod tests {
                 env: String::new(),
                 mcp: String::new(),
                 role_prompt: PromptFingerprint::None,
+                config: String::new(),
             },
         }
     }
@@ -541,6 +690,7 @@ mod tests {
             env: true,
             mcp: false,
             role_prompt: false,
+            config: false,
         }
     }
 
@@ -660,6 +810,7 @@ mod tests {
             env: true,
             mcp: true,
             role_prompt: false,
+            config: false,
         };
         assert_eq!(change_line_head("a:m", &genuine), "changed · a:m (env+mcp)");
         assert_eq!(

@@ -50,8 +50,8 @@ schemars = "0.8"
 team-core = { path = "crates/team-core", version = "0.11.0" }
 blake3 = "1"
 uuid = { version = "1", features = ["v5"] }
-ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
-crossterm = "0.28"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
 # rustls only — same posture as teloxide (see crates/team-bot/Cargo.toml).
 # native-tls would drag in openssl-sys and break the cargo-dist static
 # musl Linux build (#294 — zero C TLS deps is what keeps it clean).

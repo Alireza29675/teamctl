@@ -8,7 +8,7 @@ title: "Reference: `teamctl` CLI"
 |---|---|---|---|
 | `-C <path>` / `--root <path>` | `TEAMCTL_ROOT` | (auto) | Compose root (the directory holding `team-compose.yaml`). When unset, teamctl walks up from CWD looking for `.team/team-compose.yaml`. |
 
-Resolution order for the root: `--root` > `TEAMCTL_ROOT` > current context (`teamctl context current`) > walk up from CWD.
+Resolution order for the root: `--root` > `TEAMCTL_ROOT` > walk up from CWD. Registered contexts are listed for inspection; they do not silently redirect root selection.
 
 Set `TEAMCTL_LOG=debug` for verbose tracing.
 

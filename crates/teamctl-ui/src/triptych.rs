@@ -191,7 +191,13 @@ fn render_agents(buf: &mut Buffer, area: Rect, app: &App) {
         .enumerate()
         .map(|(i, (info, meta))| agent_line(info, *meta, Some(i) == app.selected_agent, ascii, app))
         .collect();
-    let para = Paragraph::new(lines).alignment(Alignment::Left);
+    let top = app
+        .selected_agent
+        .unwrap_or(0)
+        .saturating_sub(inner.height.saturating_sub(1) as usize);
+    let para = Paragraph::new(lines)
+        .alignment(Alignment::Left)
+        .scroll((top.min(u16::MAX as usize) as u16, 0));
     para.render(inner, buf);
 }
 
@@ -252,8 +258,7 @@ fn render_detail(buf: &mut Buffer, area: Rect, app: &App) {
     // into is unambiguous even at a glance away from the statusline.
     let stream = matches!(app.stage, crate::app::Stage::StreamKeys);
     let title = match app
-        .selected_agent
-        .and_then(|i| app.team.agents.get(i))
+        .detail_cell_agent(app.selected_split)
         .map(|a| crate::data::agent_label(&app.team, &a.id))
     {
         Some(label) if stream => format!("DETAIL · {label}  [STREAM-KEYS]"),
@@ -339,71 +344,15 @@ fn render_detail(buf: &mut Buffer, area: Rect, app: &App) {
 /// - The focused split (per `app.selected_split`) gets the accent
 ///   focus-ring border; others get the muted border.
 fn render_detail_splits(buf: &mut Buffer, area: Rect, app: &App) {
-    use ratatui::layout::Direction as Dir;
-
-    // Build the cell list: [focused, split_0, split_1, ...].
-    // Each cell carries (agent_id, orientation_hint, is_focused_split).
-    // `orientation_hint` for the focused agent defaults to Vertical
-    // so the first split's chord choice drives the layout.
-    let focused_id = app
-        .selected_agent_id()
-        .unwrap_or_else(|| "<no agent>".into());
-    let mut cells: Vec<(String, crate::app::SplitOrientation, bool)> = Vec::new();
-    cells.push((
-        focused_id,
-        // Match whatever the first split orientation is (or Vertical
-        // if no splits — the no-splits path is short-circuited
-        // above this fn's caller).
-        app.detail_splits
-            .first()
-            .map(|(_, o)| *o)
-            .unwrap_or(crate::app::SplitOrientation::Vertical),
-        app.selected_split == 0 && app.focused_pane == Pane::Detail,
-    ));
-    for (i, (id, orientation)) in app.detail_splits.iter().enumerate() {
-        cells.push((
-            id.clone(),
-            *orientation,
-            app.selected_split == i + 1 && app.focused_pane == Pane::Detail,
-        ));
-    }
-
-    // Group cells into columns: a Vertical split starts a new
-    // column; Horizontal splits stack within the current column.
-    let mut columns: Vec<Vec<usize>> = vec![vec![0]];
-    for (idx, (_, orientation, _)) in cells.iter().enumerate().skip(1) {
-        match orientation {
-            crate::app::SplitOrientation::Vertical => columns.push(vec![idx]),
-            crate::app::SplitOrientation::Horizontal => {
-                columns.last_mut().expect("seed column").push(idx);
-            }
-        }
-    }
-
-    let col_count = columns.len();
-    let col_constraints: Vec<Constraint> = (0..col_count)
-        .map(|_| Constraint::Ratio(1, col_count as u32))
-        .collect();
-    let col_areas = ratatui::layout::Layout::default()
-        .direction(Dir::Horizontal)
-        .constraints(col_constraints)
-        .split(area);
-
-    for (col_idx, col_cells) in columns.iter().enumerate() {
-        let col_area = col_areas[col_idx];
-        let row_count = col_cells.len();
-        let row_constraints: Vec<Constraint> = (0..row_count)
-            .map(|_| Constraint::Ratio(1, row_count as u32))
-            .collect();
-        let row_areas = ratatui::layout::Layout::default()
-            .direction(Dir::Vertical)
-            .constraints(row_constraints)
-            .split(col_area);
-        for (row_idx, &cell_idx) in col_cells.iter().enumerate() {
-            let cell_area = row_areas[row_idx];
-            let (agent_id, _, is_focused_split) = &cells[cell_idx];
-            render_split_cell(buf, cell_area, app, agent_id, *is_focused_split);
-        }
+    for (index, cell) in crate::pane_resize::detail_cell_areas(area, &app.detail_splits)
+        .into_iter()
+        .enumerate()
+    {
+        let id = app
+            .detail_cell_agent(index)
+            .map(|agent| agent.id.as_str())
+            .unwrap_or("<no agent>");
+        render_split_cell(buf, cell, app, id, app.selected_split == index);
     }
 }
 
@@ -424,7 +373,7 @@ fn render_split_cell(
         .unwrap_or("?");
     let label = crate::data::agent_label(&app.team, agent_id);
     let title = format!(" {glyph} {label} ");
-    let border = if is_focused_split {
+    let border = if is_focused_split && app.focused_pane == Pane::Detail {
         Style::default()
             .fg(app.capabilities.accent())
             .add_modifier(Modifier::BOLD)
@@ -460,7 +409,13 @@ fn render_split_cell(
     let start = app.detail_buffer.len().saturating_sub(cap);
     let lines: Vec<Line<'_>> = app.detail_buffer[start..]
         .iter()
-        .map(|s| Line::raw(s.clone()))
+        .flat_map(|s| {
+            use ansi_to_tui::IntoText;
+            s.as_bytes()
+                .into_text()
+                .map(|text| text.lines)
+                .unwrap_or_else(|_| vec![Line::raw(s.clone())])
+        })
         .collect();
     Paragraph::new(lines).render(inner, buf);
 }

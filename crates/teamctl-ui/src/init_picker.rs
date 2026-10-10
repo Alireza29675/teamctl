@@ -493,7 +493,9 @@ fn run<B: Backend>(terminal: &mut Terminal<B>, mut state: PickerState) -> Result
             }
         }
 
-        terminal.draw(|f| draw(f, &state))?;
+        terminal
+            .draw(|f| draw(f, &state))
+            .map_err(|error| anyhow::anyhow!("draw picker: {error}"))?;
 
         if event::poll(Duration::from_millis(120))? {
             if let Event::Key(key) = event::read()? {

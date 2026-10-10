@@ -32,6 +32,57 @@ use std::process::Command;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
+/// Content, key hints, and status bar use one geometry in rendering and sync.
+pub fn main_areas(total: Rect) -> [Rect; 3] {
+    let areas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(total);
+    [areas[0], areas[1], areas[2]]
+}
+
+/// Split cell rectangles in the same N+1 order used by focus and capture.
+pub fn detail_cell_areas(
+    area: Rect,
+    splits: &[(String, crate::app::SplitOrientation)],
+) -> Vec<Rect> {
+    use crate::app::SplitOrientation;
+    let mut columns = vec![vec![0]];
+    for (index, (_, orientation)) in splits.iter().enumerate() {
+        match orientation {
+            SplitOrientation::Vertical => columns.push(vec![index + 1]),
+            SplitOrientation::Horizontal => {
+                columns.last_mut().expect("base column").push(index + 1)
+            }
+        }
+    }
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(vec![
+            Constraint::Ratio(1, columns.len() as u32);
+            columns.len()
+        ])
+        .split(area);
+    let mut cells = vec![Rect::default(); splits.len() + 1];
+    for (column, indexes) in columns.iter().enumerate() {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![
+                Constraint::Ratio(1, indexes.len() as u32);
+                indexes.len()
+            ])
+            .split(cols[column]);
+        for (row, &index) in indexes.iter().enumerate() {
+            cells[index] = rows[row];
+        }
+    }
+    cells
+}
+
 /// The vertical constraints for the right-stack split — Detail above,
 /// Mailbox below. The single source of truth for the split, shared by
 /// the render path (`triptych::Triptych::render`) and the tmux-sync
@@ -40,12 +91,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 /// only the render branch shrank the Mailbox, tmux would keep sizing
 /// the agent pane to the old split and the shrink would be cosmetic).
 ///
-/// Note this single-sources the *split*, not the absolute heights: the
-/// sync path is handed the full terminal area while the render path
-/// gets the body rect after the 2-row footer (statusline + status bar)
-/// is carved off, so the synced pane runs ~1–2 rows taller than the
-/// rendered Detail inner area. That footer offset predates #459 and is
-/// orthogonal to the split.
+/// Both paths receive the content area after [`main_areas`] reserves
+/// the footer, so their absolute heights also match.
 ///
 /// In stream-keys mode the operator wants maximum room for the live
 /// terminal, so Detail takes all remaining height and the Mailbox
@@ -67,8 +114,8 @@ pub fn right_stack_constraints(is_stream_keys: bool) -> [Constraint; 2] {
 /// stripe is visible, and whether stream-keys mode is active. Mirrors
 /// `triptych::Triptych::render`: the right-stack split comes from the
 /// shared [`right_stack_constraints`], so the split proportions here
-/// match what gets rendered (the absolute height carries the
-/// pre-existing 2-row footer offset noted on `right_stack_constraints`).
+/// match what gets rendered. `total` is the content area returned by
+/// [`main_areas`], before the approvals stripe is reserved.
 ///
 /// Returns `None` when the area is too small for the layout to produce
 /// a non-empty Detail rect (e.g. an 80×24 terminal in the middle of a
@@ -129,9 +176,16 @@ pub fn should_sync(
 pub trait PaneResizer: Send + Sync {
     /// Best-effort resize. Implementations should not panic or
     /// propagate errors — a missing/killed session is a normal
-    /// transient state, not a fatal condition. The cache should
-    /// advance regardless so we don't retry-spam a dead session.
+    /// transient state, not a fatal condition. Callers that need to
+    /// distinguish failures use [`PaneResizer::try_resize`].
     fn resize(&self, session: &str, cols: u16, rows: u16);
+
+    /// Return whether the requested size reached the session. Legacy
+    /// implementations remain compatible; production reports failures.
+    fn try_resize(&self, session: &str, cols: u16, rows: u16) -> bool {
+        self.resize(session, cols, rows);
+        true
+    }
 }
 
 /// `tmux` argv that resizes `session`'s window to `cols`×`rows`.
@@ -151,6 +205,13 @@ fn resize_window_argv(session: &str, cols: u16, rows: u16) -> [String; 7] {
     ]
 }
 
+fn try_resize_window(mut command: Command, session: &str, cols: u16, rows: u16) -> bool {
+    command
+        .args(resize_window_argv(session, cols, rows))
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
 /// Production implementation — shells out to **`tmux resize-window`**.
 ///
 /// It MUST be `resize-window`, **not** `resize-pane`. The agent
@@ -167,17 +228,18 @@ fn resize_window_argv(session: &str, cols: u16, rows: u16) -> [String; 7] {
 /// any tmux the supervisor can drive.)
 ///
 /// `-t <session>` targets the agent's session; `-x W -y H` set the
-/// window size. Stdout/stderr are dropped: a failure (session gone,
-/// tmux not on PATH) is silently ignored and the cache still advances
-/// so a fresh spawn next tick can re-sync.
+/// window size. Stdout/stderr are captured. Failed calls are reported
+/// through `try_resize` so the UI can retry after its backoff.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TmuxPaneResizer;
 
 impl PaneResizer for TmuxPaneResizer {
     fn resize(&self, session: &str, cols: u16, rows: u16) {
-        let _ = Command::new("tmux")
-            .args(resize_window_argv(session, cols, rows))
-            .status();
+        self.try_resize(session, cols, rows);
+    }
+
+    fn try_resize(&self, session: &str, cols: u16, rows: u16) -> bool {
+        try_resize_window(Command::new("tmux"), session, cols, rows)
     }
 }
 
@@ -368,15 +430,23 @@ mod tests {
     #[test]
     #[ignore = "spawns a real tmux server; run with --ignored on a tmux host"]
     fn resize_window_actually_shrinks_a_clientless_session() {
-        let session = "t312-regression-probe";
-        let kill = || {
-            let _ = Command::new("tmux")
-                .args(["kill-session", "-t", session])
-                .status();
-        };
-        kill();
-        // Mirror team-core::supervisor: detached, clientless, 200×50.
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("tmux.sock");
+        struct ServerGuard(std::path::PathBuf);
+        impl Drop for ServerGuard {
+            fn drop(&mut self) {
+                let _ = Command::new("tmux")
+                    .arg("-S")
+                    .arg(&self.0)
+                    .arg("kill-server")
+                    .output();
+            }
+        }
+        let _guard = ServerGuard(socket.clone());
+        let session = "resize-regression";
         let created = Command::new("tmux")
+            .arg("-S")
+            .arg(&socket)
             .args([
                 "new-session",
                 "-d",
@@ -390,15 +460,21 @@ mod tests {
                 "-c",
                 "while :; do sleep 5; done",
             ])
-            .status();
-        if !matches!(created, Ok(s) if s.success()) {
-            // No usable tmux in this environment — nothing to assert.
-            return;
-        }
+            .output()
+            .expect("tmux must be installed for this opt-in test");
+        assert!(
+            created.status.success(),
+            "isolated tmux server failed: {}",
+            String::from_utf8_lossy(&created.stderr)
+        );
 
-        TmuxPaneResizer.resize(session, 80, 24);
+        let mut command = Command::new("tmux");
+        command.arg("-S").arg(&socket);
+        assert!(try_resize_window(command, session, 80, 24));
 
         let out = Command::new("tmux")
+            .arg("-S")
+            .arg(&socket)
             .args([
                 "display-message",
                 "-p",
@@ -408,13 +484,11 @@ mod tests {
             ])
             .output()
             .expect("tmux display-message");
+        assert!(out.status.success());
         let geom = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        kill();
-
         assert_eq!(
             geom, "80x24",
-            "resizer did not shrink the clientless window (got `{geom}`) \
-             — the resize-pane regression (#312)"
+            "resizer must shrink a detached clientless window"
         );
     }
 }

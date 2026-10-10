@@ -20,6 +20,7 @@ pub fn open_db(root: &Path) -> Result<Connection> {
 
 pub fn pending(root: &Path) -> Result<()> {
     let conn = open_db(root)?;
+    expire_pending(&conn, now())?;
     let mut stmt = conn.prepare(
         "SELECT id, project_id, agent_id, action, summary
          FROM approvals WHERE status='pending' ORDER BY id ASC",
@@ -49,28 +50,35 @@ pub fn decide(root: &Path, id: i64, approved: bool, note: Option<&str>) -> Resul
     let conn = open_db(root)?;
     let status = if approved { "approved" } else { "denied" };
     let now_ts = now();
+    expire_pending(&conn, now_ts)?;
     // Order matters: status pin first, delivered_at flip second and
     // *only* when the status pin succeeded. The reverse order — flip
     // delivered_at unconditionally, then try the status pin — would
     // break the invariant `undeliverable ↔ delivered_at IS NULL` on
     // late CLI taps against rows that gc already moved to terminal.
     let n = conn.execute(
-        "UPDATE approvals SET status=?1, decided_at=?2, decided_by='cli', decision_note=?3
-         WHERE id=?4 AND status='pending'",
+        "UPDATE approvals SET status=?1, decided_at=?2, decided_by='cli', decision_note=?3,
+                delivered_at=COALESCE(delivered_at, ?2)
+         WHERE id=?4 AND status='pending' AND expires_at > ?2",
         params![status, now_ts, note, id],
     )?;
     if n == 0 {
         bail!("no pending approval with id {id}");
     }
-    // A CLI decision is itself a delivery acknowledgement: the operator
-    // saw the prompt on some surface (otherwise they couldn't decide).
-    // Flip delivered_at when null so the row's lifecycle stays truthful.
-    conn.execute(
-        "UPDATE approvals SET delivered_at=?1
-         WHERE id=?2 AND delivered_at IS NULL",
-        params![now_ts, id],
-    )?;
+    // The successful atomic decision also acknowledges delivery. Failed or
+    // expired decisions cannot change the recorded delivery state.
     println!("approval {id} {status}");
+    Ok(())
+}
+
+fn expire_pending(conn: &Connection, now: f64) -> Result<()> {
+    conn.execute(
+        "UPDATE approvals SET
+             status=CASE WHEN delivered_at IS NULL THEN 'undeliverable' ELSE 'expired' END,
+             decided_at=?1
+         WHERE status='pending' AND expires_at <= ?1",
+        params![now],
+    )?;
     Ok(())
 }
 

@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod approvals;
+mod command;
 pub mod compose;
 pub mod data;
 pub mod help;

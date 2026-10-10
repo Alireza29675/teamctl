@@ -24,6 +24,11 @@ const EMBEDDED: &[(&str, &str)] = &[
 pub struct Runtime {
     /// Path / name of the CLI binary (resolved on $PATH by the wrapper).
     pub binary: String,
+    /// Extra argv tokens passed before the runtime-specific launch arguments.
+    /// Custom runtimes receive these tokens verbatim and the standard agent
+    /// context through the environment; no vendor flags are guessed.
+    #[serde(default)]
+    pub args: Vec<String>,
     #[serde(default)]
     pub supports_mcp: bool,
     /// Session-resume hint kept as parsed metadata for back-compat —
@@ -106,9 +111,37 @@ pub fn load_all(root: &Path) -> Result<BTreeMap<String, Runtime>> {
             std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let r: Runtime =
             serde_yaml::from_str(&content).with_context(|| format!("parse {}", path.display()))?;
+        validate_descriptor(&r).with_context(|| format!("validate {}", path.display()))?;
         map.insert(stem, r);
     }
     Ok(map)
+}
+
+fn validate_descriptor(runtime: &Runtime) -> Result<()> {
+    anyhow::ensure!(
+        !runtime.binary.trim().is_empty(),
+        "binary must not be blank"
+    );
+    for value in std::iter::once(&runtime.binary)
+        .chain(runtime.default_model.iter())
+        .chain(runtime.env.values())
+    {
+        anyhow::ensure!(
+            !value.contains(['\n', '\r', '\0']),
+            "runtime env values must fit one line"
+        );
+    }
+    for key in runtime.env.keys() {
+        let mut chars = key.chars();
+        anyhow::ensure!(
+            chars
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "invalid env key `{key}`"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

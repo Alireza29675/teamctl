@@ -14,11 +14,8 @@
 //!
 //! `up` upserts this team's entries (see `crates/teamctl/src/cmd/up.rs`),
 //! `down` clears them (`down.rs`). Writes are atomic (temp + rename) so a
-//! reader never observes a torn file. Atomicity is per-write, not a
-//! cross-process lock: two `up`s of *different* teams racing the
-//! load-modify-save could still drop one update — acceptable for a
-//! self-healing side store (the next `up` re-records it), and called out
-//! here rather than over-claimed.
+//! reader never observes a torn file. A SQLite transaction lock serializes
+//! every load-modify-save so concurrent teams cannot lose each other's rows.
 //!
 //! The store *records* the path alongside the name; it deliberately does
 //! NOT make the session UUID or tmux name itself path-aware (a larger
@@ -51,6 +48,10 @@ pub struct TeamEntry {
     /// Sorted agent names belonging to this project.
     #[serde(default)]
     pub agents: Vec<String>,
+    /// Reserved normalized agent and bot session identities. Older stores
+    /// derive agent names from the roster until their next registration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<String>,
     /// RFC3339 timestamp of when this entry was first recorded by `up`.
     /// Preserved across an idempotent re-`up` so uptime doesn't reset.
     #[serde(default)]
@@ -75,6 +76,14 @@ pub fn config_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(|home| PathBuf::from(home).join(".config/teamctl"))
+}
+
+/// Serialize identity checks and lifecycle effects across all team roots.
+/// This lock is separate from the short registry read/modify/write lock.
+pub fn lifecycle_lock() -> Result<Option<crate::persistence::ProcessLock>> {
+    config_dir()
+        .map(|dir| crate::persistence::ProcessLock::acquire(&dir.join("lifecycle.lock.sqlite")))
+        .transpose()
 }
 
 /// RFC3339 (seconds, `Z`) — the serialized-timestamp idiom shared with
@@ -113,6 +122,7 @@ pub fn upsert_many(dir: &Path, entries: Vec<TeamEntry>) -> Result<()> {
     if entries.is_empty() {
         return Ok(());
     }
+    let _lock = crate::persistence::ProcessLock::acquire(&dir.join("teams.lock.sqlite"))?;
     let mut reg = load(dir)?;
     for mut entry in entries {
         if let Some(existing) = reg
@@ -141,6 +151,7 @@ pub fn upsert_many(dir: &Path, entries: Vec<TeamEntry>) -> Result<()> {
 /// project's entry (a project-scoped `down` on a multi-project root, so
 /// sibling projects stay registered). A no-op write is skipped.
 pub fn clear(dir: &Path, root: &Path, project: Option<&str>) -> Result<()> {
+    let _lock = crate::persistence::ProcessLock::acquire(&dir.join("teams.lock.sqlite"))?;
     let mut reg = load(dir)?;
     let before = reg.teams.len();
     reg.teams
@@ -270,24 +281,51 @@ pub fn same_name_other_root(
         .map(|t| t.root.clone())
 }
 
-/// Atomic write: serialize to a pid-scoped sibling temp file, then rename
-/// over the target so a concurrent reader sees either the old or the new
-/// file, never a partial one. The pid in the temp name keeps two processes
-/// from clobbering each other's temp. Mirrors the `attachments` /
-/// `~/.claude.json` temp+rename idiom (no shared helper exists to reuse).
+/// Atomic replacement keeps concurrent readers on a complete old or new
+/// version; the shared persistence helper owns private temporary files.
 fn save(dir: &Path, reg: &Registry) -> Result<()> {
     fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let path = dir.join(FILE);
-    let tmp = dir.join(format!("{FILE}.{}.tmp", std::process::id()));
     let body = serde_json::to_string_pretty(reg)?;
-    fs::write(&tmp, body).with_context(|| format!("write {}", tmp.display()))?;
-    fs::rename(&tmp, &path).with_context(|| format!("rename into {}", path.display()))?;
+    crate::persistence::atomic_write(&path, body.as_bytes())
+        .with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_team_updates_do_not_lose_registry_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let path = dir.path().to_path_buf();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    upsert(
+                        &path,
+                        TeamEntry {
+                            project_id: format!("team-{i}"),
+                            root: PathBuf::from(format!("/root/{i}")),
+                            tmux_prefix: "a-".into(),
+                            agents: vec!["agent".into()],
+                            sessions: vec![],
+                            started_at: "time".into(),
+                        },
+                    )
+                    .unwrap();
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(load(dir.path()).unwrap().teams.len(), 8);
+    }
     use std::collections::HashSet;
 
     fn entry(project: &str, root: &str, agents: &[&str], started: &str) -> TeamEntry {
@@ -296,6 +334,7 @@ mod tests {
             root: PathBuf::from(root),
             tmux_prefix: "t-".into(),
             agents: agents.iter().map(|s| (*s).to_string()).collect(),
+            sessions: vec![],
             started_at: started.into(),
         }
     }

@@ -1,10 +1,11 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
+assertion_line: 487
 expression: s
 ---
 ┌AGENTS────────────────────┐┌DETAIL · writing:manager──────────────────────────────────────────────────────────────────┐
 │ o  manager               ││┌ o writing:manager ─────────┐┌ o writing:dev1 ────────────┐┌ o writing:critic ──────────┐│
-│ o  dev1                  │││(focus this split to stream)││(focus this split to stream)││(focus this split to stream)││
+│ o  dev1                  │││[12:00] focused             ││(focus this split to stream)││(focus this split to stream)││
 │ o  dev2                  │││                            ││                            ││                            ││
 │ o  critic                │││                            ││                            ││                            ││
 │                          │││                            ││                            ││                            ││

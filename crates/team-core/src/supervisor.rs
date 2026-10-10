@@ -100,13 +100,18 @@ where
     F: FnOnce(),
 {
     signal_fn();
-    let outcome = poll_for_stopped(timeout, supervisor.drain_poll_interval(), || {
-        supervisor.state(spec).unwrap_or(AgentState::Unknown)
-    });
-    if outcome == DrainOutcome::TimedOutKilled {
-        supervisor.down(spec)?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if supervisor.state(spec)? == AgentState::Stopped {
+            return Ok(DrainOutcome::Graceful);
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(supervisor.drain_poll_interval());
     }
-    Ok(outcome)
+    supervisor.down(spec)?;
+    Ok(DrainOutcome::TimedOutKilled)
 }
 
 /// Read the per-agent env file into a list of `KEY=VALUE` assignment
@@ -147,12 +152,69 @@ fn build_up_command(spec: &AgentSpec) -> Result<String> {
         parts.push(shlex::try_quote(&kv)?);
     }
     parts.push(shlex::try_quote(&spec.wrapper.display().to_string())?);
-    parts.push(format!("{}:{}", spec.project, spec.agent));
+    parts.push(shlex::try_quote(&format!(
+        "{}:{}",
+        spec.project, spec.agent
+    ))?);
     Ok(parts.join(" "))
 }
 
 /// Portable supervisor: one detached `tmux` session per agent.
 pub struct TmuxSupervisor;
+
+/// Tmux's `=` target prefix disables prefix and glob matching. Its session
+/// namespace also normalizes dots to underscores when sessions are created.
+fn exact_target(session: &str) -> String {
+    format!("={}", session.replace('.', "_"))
+}
+
+fn tmux_state(binary: &Path, spec: &AgentSpec) -> Result<AgentState> {
+    let target = exact_target(&spec.tmux_session);
+    let out = Command::new(binary)
+        .args(["has-session", "-t", &target])
+        .output()
+        .context("spawn tmux has-session")?;
+    if out.status.success() {
+        return Ok(AgentState::Running);
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let absent_socket = (stderr.contains("error connecting")
+        || stderr.contains("failed to connect"))
+        && (stderr.contains("No such file or directory") || stderr.contains("Connection refused"));
+    if stderr.contains("can't find session")
+        || stderr.contains("no server running")
+        || absent_socket
+    {
+        return Ok(AgentState::Stopped);
+    }
+    anyhow::bail!(
+        "tmux has-session for {} exited {}: {}",
+        spec.tmux_session,
+        out.status,
+        stderr.trim()
+    );
+}
+
+fn tmux_down(binary: &Path, spec: &AgentSpec) -> Result<()> {
+    if tmux_state(binary, spec)? == AgentState::Stopped {
+        return Ok(());
+    }
+    let target = exact_target(&spec.tmux_session);
+    let out = Command::new(binary)
+        .args(["kill-session", "-t", &target])
+        .output()
+        .context("spawn tmux kill-session")?;
+    // A concurrently exited session makes teardown idempotently successful.
+    if !out.status.success() && tmux_state(binary, spec)? != AgentState::Stopped {
+        anyhow::bail!(
+            "tmux kill-session for {} exited {}: {}",
+            spec.tmux_session,
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
 
 impl Supervisor for TmuxSupervisor {
     fn up(&self, spec: &AgentSpec) -> Result<()> {
@@ -197,28 +259,25 @@ impl Supervisor for TmuxSupervisor {
             ("@teamctl-root", cwd_str.as_ref()),
         ] {
             let _ = Command::new("tmux")
-                .args(["set-option", "-q", "-t", &spec.tmux_session, key, value])
+                .args([
+                    "set-option",
+                    "-q",
+                    "-t",
+                    &exact_target(&spec.tmux_session),
+                    key,
+                    value,
+                ])
                 .status();
         }
         Ok(())
     }
 
     fn down(&self, spec: &AgentSpec) -> Result<()> {
-        let _ = Command::new("tmux")
-            .args(["kill-session", "-t", &spec.tmux_session])
-            .status();
-        Ok(())
+        tmux_down(Path::new("tmux"), spec)
     }
 
     fn state(&self, spec: &AgentSpec) -> Result<AgentState> {
-        let out = Command::new("tmux")
-            .args(["has-session", "-t", &spec.tmux_session])
-            .output();
-        Ok(match out {
-            Ok(o) if o.status.success() => AgentState::Running,
-            Ok(_) => AgentState::Stopped,
-            Err(_) => AgentState::Unknown,
-        })
+        tmux_state(Path::new("tmux"), spec)
     }
 
     /// Send Ctrl-C to the pane (kernel delivers SIGINT to the
@@ -228,11 +287,25 @@ impl Supervisor for TmuxSupervisor {
     /// assistant responses get a chance to flush instead of being
     /// SIGKILL'd by the prior `down()`.
     fn drain(&self, spec: &AgentSpec, timeout: Duration) -> Result<DrainOutcome> {
-        orchestrate_drain(self, spec, timeout, || {
-            let _ = Command::new("tmux")
-                .args(["send-keys", "-t", &spec.tmux_session, "C-c"])
-                .status();
-        })
+        if self.state(spec)? == AgentState::Stopped {
+            return Ok(DrainOutcome::Graceful);
+        }
+        let target = format!("{}:0.0", exact_target(&spec.tmux_session));
+        let signal = Command::new("tmux")
+            .args(["send-keys", "-t", &target, "C-c"])
+            .output()
+            .context("spawn tmux send-keys")?;
+        if !signal.status.success() {
+            if self.state(spec)? == AgentState::Stopped {
+                return Ok(DrainOutcome::Graceful);
+            }
+            anyhow::bail!(
+                "tmux send-keys for {} failed: {}",
+                spec.tmux_session,
+                String::from_utf8_lossy(&signal.stderr).trim()
+            );
+        }
+        orchestrate_drain(self, spec, timeout, || {})
     }
 }
 
@@ -240,6 +313,7 @@ impl Supervisor for TmuxSupervisor {
 /// `Graceful` if `Stopped` is observed in time and `TimedOutKilled`
 /// otherwise. Pulled out as a free function so it can be tested with
 /// fake observers — neither tmux nor real time is involved.
+#[cfg(test)]
 fn poll_for_stopped<F: FnMut() -> AgentState>(
     timeout: Duration,
     interval: Duration,
@@ -261,6 +335,60 @@ fn poll_for_stopped<F: FnMut() -> AgentState>(
 mod drain_tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[cfg(unix)]
+    #[test]
+    fn tmux_stop_failure_is_visible_and_targets_exact_session() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("tmux");
+        std::fs::write(&program, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$0.args\"\ncase \"$1\" in\n  has-session) exit 0;;\n  kill-session) echo denied >&2; exit 42;;\nesac\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut spec = fake_spec();
+        spec.tmux_session = "a-p-a".into();
+        let error = tmux_down(&program, &spec).unwrap_err().to_string();
+        assert!(error.contains("denied"));
+        let calls = std::fs::read_to_string(program.with_extension("args")).unwrap();
+        assert!(calls.contains("kill-session\n-t\n=a-p-a\n"));
+    }
+
+    #[test]
+    fn missing_tmux_binary_fails_observably() {
+        assert!(tmux_down(Path::new("/not/a/tmux/binary"), &fake_spec()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tmux_socket_permission_error_does_not_claim_successful_teardown() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("tmux");
+        std::fs::write(&binary, "#!/bin/sh\necho 'error connecting to /private/socket (Permission denied)' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(tmux_state(&binary, &fake_spec())
+            .unwrap_err()
+            .to_string()
+            .contains("Permission denied"));
+        assert!(tmux_down(&binary, &fake_spec()).is_err());
+    }
+
+    #[test]
+    fn drain_state_error_is_not_treated_as_timeout_or_success() {
+        struct FailedState;
+        impl Supervisor for FailedState {
+            fn up(&self, _: &AgentSpec) -> Result<()> {
+                unreachable!()
+            }
+            fn down(&self, _: &AgentSpec) -> Result<()> {
+                panic!("must not kill after failed state query")
+            }
+            fn state(&self, _: &AgentSpec) -> Result<AgentState> {
+                anyhow::bail!("state failure")
+            }
+        }
+        let result = orchestrate_drain(&FailedState, &fake_spec(), Duration::ZERO, || {});
+        assert!(result.unwrap_err().to_string().contains("state failure"));
+    }
 
     #[test]
     fn poll_returns_graceful_when_stopped_observed_in_time() {
@@ -598,7 +726,7 @@ mod env_harden_tests {
         );
         assert!(cmd.contains("'GL=*?'"), "glob kv single-quoted: {cmd}");
         assert!(cmd.contains("'/w/wrap.sh'"), "wrapper still quoted: {cmd}");
-        assert!(cmd.ends_with(" proj:agt"), "agent arg unchanged: {cmd}");
+        assert!(cmd.ends_with(" 'proj:agt'"), "agent identity quoted: {cmd}");
     }
 
     #[test]
@@ -610,7 +738,7 @@ mod env_harden_tests {
 
         assert_eq!(
             build_up_command(&spec).unwrap(),
-            "env '/w/wrap.sh' proj:agt"
+            "env '/w/wrap.sh' 'proj:agt'"
         );
     }
 }

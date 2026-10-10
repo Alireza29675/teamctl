@@ -188,7 +188,13 @@ fn render_channels_list(buf: &mut Buffer, area: Rect, app: &App) {
             Line::styled(label, style)
         })
         .collect();
-    Paragraph::new(lines).render(inner, buf);
+    let top = app
+        .selected_channel
+        .unwrap_or(0)
+        .saturating_sub(inner.height.saturating_sub(1) as usize);
+    Paragraph::new(lines)
+        .scroll((top.min(u16::MAX as usize) as u16, 0))
+        .render(inner, buf);
 }
 
 fn render_channel_feed(buf: &mut Buffer, area: Rect, app: &App) {

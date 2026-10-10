@@ -175,7 +175,29 @@ impl TeamSnapshot {
     /// that case rather than panicking.
     pub fn discover_and_load() -> Result<Option<Self>> {
         let cwd = std::env::current_dir().context("get cwd")?;
-        match Compose::discover(&cwd) {
+        let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+        let explicit = explicit_root(&args)?;
+        Self::load_selected(
+            explicit.as_deref(),
+            std::env::var_os("TEAMCTL_ROOT").as_deref(),
+            &cwd,
+        )
+    }
+
+    pub fn load_selected(
+        explicit: Option<&Path>,
+        environment: Option<&std::ffi::OsStr>,
+        cwd: &Path,
+    ) -> Result<Option<Self>> {
+        if let Some(root) =
+            explicit.or_else(|| environment.filter(|s| !s.is_empty()).map(Path::new))
+        {
+            let root = root
+                .canonicalize()
+                .with_context(|| format!("resolve UI root {}", root.display()))?;
+            return Self::load(&root).map(Some);
+        }
+        match Compose::discover(cwd) {
             Ok(root) => Self::load(&root).map(Some),
             Err(_) => Ok(None),
         }
@@ -279,6 +301,29 @@ impl TeamSnapshot {
             channels,
         })
     }
+}
+
+fn explicit_root(args: &[std::ffi::OsString]) -> Result<Option<PathBuf>> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--root" || arg == "-C" {
+            return args
+                .next()
+                .map(PathBuf::from)
+                .map(Some)
+                .context("--root requires a path");
+        }
+        if let Some(root) = arg.to_str().and_then(|s| s.strip_prefix("--root=")) {
+            return Ok(Some(PathBuf::from(root)));
+        }
+    }
+    Ok(None)
+}
+
+/// Resolve the same configured broker path used by the CLI and runtimes.
+pub fn broker_path(root: &Path) -> Result<PathBuf> {
+    let compose = Compose::load(root)?;
+    Ok(compose.root.join(&compose.global.broker.path))
 }
 
 /// Per-row metadata the Agents pane renderer needs to draw the

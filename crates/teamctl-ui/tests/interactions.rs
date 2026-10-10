@@ -1250,7 +1250,7 @@ fn ctrl_h_lowercase_cycles_split_prev() {
 
     h.dispatch_key_mods(KeyCode::Char('h'), KeyModifiers::CONTROL);
 
-    assert_eq!(h.app.selected_split, 1);
+    assert_eq!(h.app.selected_split, 2);
 }
 
 #[test]
@@ -1264,7 +1264,7 @@ fn ctrl_shift_h_cycles_split_prev() {
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
     );
 
-    assert_eq!(h.app.selected_split, 1);
+    assert_eq!(h.app.selected_split, 2);
 }
 
 #[test]
@@ -1274,7 +1274,7 @@ fn ctrl_k_lowercase_cycles_split_prev() {
 
     h.dispatch_key_mods(KeyCode::Char('k'), KeyModifiers::CONTROL);
 
-    assert_eq!(h.app.selected_split, 1);
+    assert_eq!(h.app.selected_split, 2);
 }
 
 #[test]
@@ -1287,7 +1287,7 @@ fn ctrl_shift_k_cycles_split_prev() {
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
     );
 
-    assert_eq!(h.app.selected_split, 1);
+    assert_eq!(h.app.selected_split, 2);
 }
 
 #[test]

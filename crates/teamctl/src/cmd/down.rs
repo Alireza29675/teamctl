@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
@@ -35,6 +35,16 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
         None => None,
     };
     let mut touched = 0usize;
+    let _identity_lock = team_core::registry::lifecycle_lock()?;
+    super::up::guard_no_name_collision(&compose, scoped.as_deref())?;
+    let _lock = team_core::persistence::ProcessLock::acquire(
+        &compose.root.join("state/lifecycle.lock.sqlite"),
+    )?;
+    let prior = super::snapshot::read(&compose.root);
+    let roster = team_core::registry::config_dir()
+        .and_then(|dir| team_core::registry::load(&dir).ok())
+        .map(|reg| reg.roster_for_root(&compose.root))
+        .unwrap_or_default();
     let sup = TmuxSupervisor;
     for h in compose.agents() {
         if scoped.as_deref().is_some_and(|id| id != h.project) {
@@ -43,12 +53,16 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
         if targets.as_ref().is_some_and(|t| !t.contains(h.agent)) {
             continue;
         }
-        let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+        let mut spec =
+            AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
+        spec.tmux_session = teardown_session(&h.id(), &spec.tmux_session, prior.as_ref(), &roster);
         sup.down(&spec)?;
         println!("down · {}", h.id());
         touched += 1;
     }
-    for spec in super::bot::bot_specs(&compose) {
+    let bot_specs = super::bot::bot_specs(&compose);
+    let desired_bots = bot_specs.iter().map(|spec| spec.manager.clone()).collect();
+    for spec in bot_specs {
         // Project guard preserved verbatim from the pre-T-305 path.
         let split = spec.manager.split_once(':');
         if scoped
@@ -67,17 +81,23 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
                 continue;
             }
         }
-        super::bot::down_one(&spec);
+        super::bot::down_one(&spec, &compose.root)?;
         println!("down · bot {}", spec.session);
         touched += 1;
     }
+    super::bot::down_orphans(
+        &compose.root,
+        &desired_bots,
+        scoped.as_deref(),
+        targets.is_some(),
+    )?;
     // T-468: reap orphaned sessions — agents recorded as up at this root by
     // a prior `up` but no longer in the compose. The loops above only tear
     // down current-YAML agents, so a removed agent's session would otherwise
     // linger forever. Read the registry BEFORE the clear below; honors the
     // same scope as the teardown (whole-team / one project / skip on a
     // per-agent `--agent` down).
-    touched += reap_orphans(&compose, &sup, scoped.as_deref(), targets.is_some());
+    touched += reap_orphans(&compose, &sup, scoped.as_deref(), targets.is_some())?;
 
     if let (Some(id), 0) = (scoped.as_deref(), touched) {
         println!("no agents in scope for project {id}.");
@@ -103,6 +123,24 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
     Ok(())
 }
 
+fn teardown_session(
+    id: &str,
+    current: &str,
+    prior: Option<&super::snapshot::Snapshot>,
+    roster: &[team_core::registry::RosterEntry],
+) -> String {
+    prior
+        .and_then(|snapshot| snapshot.agents.get(id))
+        .map(|entry| entry.tmux_session.clone())
+        .or_else(|| {
+            roster
+                .iter()
+                .find(|entry| entry.id() == id)
+                .map(|entry| entry.tmux_session.clone())
+        })
+        .unwrap_or_else(|| current.to_string())
+}
+
 /// What `down` should clear from the registry.
 ///
 /// - `per_agent` (a `--agent` selector is active) ⇒ `None`: only some of
@@ -125,50 +163,64 @@ fn registry_clear_scope(per_agent: bool, scoped: Option<&str>) -> Option<Option<
 /// `down` misses. Only sessions that are still *running* are killed and
 /// announced: a roster row whose session already died (crashed, or reaped by
 /// an earlier `down`) is skipped, so `down` never prints a phantom `reaped`.
-/// Returns the count actually reaped. Best-effort — a missing/unreadable
-/// registry or a supervisor error never fails an otherwise-successful
-/// `down`. Shares `reap_targets`' scope contract (skips on a per-agent down).
+/// Returns the count actually reaped. A supervisor failure prevents the
+/// registry from being cleared, preserving the identities needed to retry.
+/// Shares `reap_targets`' scope contract (skips on a per-agent down).
 fn reap_orphans(
     compose: &Compose,
     sup: &TmuxSupervisor,
     scoped: Option<&str>,
     per_agent: bool,
-) -> usize {
-    let Some(dir) = team_core::registry::config_dir() else {
-        return 0;
-    };
+) -> Result<usize> {
+    if per_agent {
+        return Ok(0);
+    }
     let desired: HashSet<String> = compose.agents().map(|h| h.id()).collect();
-    let orphans = match team_core::registry::orphans_for_root(
-        &dir,
-        &compose.root,
-        &desired,
-        scoped,
-        per_agent,
-    ) {
-        Ok(o) => o,
+    let mut orphans = BTreeMap::new();
+    let registry_orphans = team_core::registry::config_dir()
+        .map(|dir| {
+            team_core::registry::orphans_for_root(&dir, &compose.root, &desired, scoped, per_agent)
+        })
+        .transpose();
+    match registry_orphans {
+        Ok(Some(entries)) => {
+            for entry in entries {
+                orphans.insert(entry.id(), entry);
+            }
+        }
+        Ok(None) => {}
         Err(e) => {
             eprintln!("warn · teams registry: {e:#}");
-            return 0;
-        }
-    };
-    let mut reaped = 0;
-    for orphan in orphans {
-        let spec = orphan_spec(compose, &orphan);
-        match sup.state(&spec) {
-            // Only a session that's actually up is something to reap.
-            Ok(AgentState::Running) => match sup.down(&spec) {
-                Ok(()) => {
-                    println!("reaped · {}", orphan.id());
-                    reaped += 1;
-                }
-                Err(e) => eprintln!("warn · reap {}: {e:#}", orphan.id()),
-            },
-            // Already gone — the registry row is stale, nothing to kill.
-            Ok(_) => {}
-            Err(e) => eprintln!("warn · reap {} (state): {e:#}", orphan.id()),
         }
     }
-    reaped
+    if let Some(snapshot) = super::snapshot::read(&compose.root) {
+        for (id, entry) in snapshot.agents {
+            let Some((project, agent)) = id.split_once(':') else {
+                continue;
+            };
+            if desired.contains(&id) || scoped.is_some_and(|p| p != project) {
+                continue;
+            }
+            let orphan = team_core::registry::RosterEntry {
+                project_id: project.to_string(),
+                agent: agent.to_string(),
+                tmux_session: entry.tmux_session,
+            };
+            orphans.insert(id, orphan);
+        }
+    }
+    let mut reaped = 0;
+    for orphan in orphans.into_values() {
+        let spec = orphan_spec(compose, &orphan);
+        // Already stopped sessions are stale roster rows; failures remain
+        // errors so ownership is retained for a later teardown retry.
+        if sup.state(&spec)? == AgentState::Running {
+            sup.down(&spec)?;
+            println!("reaped · {}", orphan.id());
+            reaped += 1;
+        }
+    }
+    Ok(reaped)
 }
 
 /// Build a teardown spec for an orphan from its registry roster entry. The
@@ -189,6 +241,26 @@ fn orphan_spec(compose: &Compose, e: &team_core::registry::RosterEntry) -> Agent
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn teardown_prefers_persisted_session_after_prefix_change() {
+        let (_dir, compose) = super::super::up::regression_tests::fixture();
+        let snapshot = super::super::snapshot::compute(&compose, "team-mcp");
+        let expected = &snapshot.agents["p:a"].tmux_session;
+        assert_eq!(
+            teardown_session("p:a", "new-p-a", Some(&snapshot), &[]),
+            *expected
+        );
+        let roster = vec![team_core::registry::RosterEntry {
+            project_id: "p".into(),
+            agent: "a".into(),
+            tmux_session: "registry-p-a".into(),
+        }];
+        assert_eq!(
+            teardown_session("p:a", "new-p-a", None, &roster),
+            "registry-p-a"
+        );
+    }
 
     #[test]
     fn per_agent_down_leaves_registry_untouched() {

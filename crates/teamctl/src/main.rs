@@ -212,6 +212,9 @@ enum Command {
     // ── Mailbox ──────────────────────────────────────────────────────
     /// Inject a message as `sender=cli`.
     Send { target: String, text: String },
+    /// Broadcast as `sender=cli` to a channel (`<project>:<channel>`).
+    /// A bare `#<channel>` is accepted when it identifies one project.
+    Broadcast { target: String, text: String },
 
     // ── Approvals ────────────────────────────────────────────────────
     /// Show pending HITL approval requests.
@@ -446,7 +449,17 @@ fn main() -> Result<()> {
     if let Command::Adjust { yes } = cli.command {
         return cmd::adjust::run(yes);
     }
-    if let Command::Ui { no_prompt, argv } = cli.command {
+    if let Command::Ui {
+        no_prompt,
+        mut argv,
+    } = cli.command
+    {
+        if let Some(root) = cli.root {
+            let root = root
+                .to_str()
+                .context("UI --root path must be valid UTF-8")?;
+            argv.splice(0..0, ["--root".to_owned(), root.to_owned()]);
+        }
         return cmd::ui::run(no_prompt, argv);
     }
     if let Command::Update { method, check, yes } = cli.command {
@@ -519,6 +532,7 @@ fn main() -> Result<()> {
         Command::Mail { target, all } => cmd::mail::run(&root, target.as_deref(), all),
         Command::Inspect { target } => cmd::inspect::run(&root, &target),
         Command::Send { target, text } => cmd::send::run(&root, &target, &text),
+        Command::Broadcast { target, text } => cmd::broadcast::run(&root, &target, &text),
         Command::Budget { project } => cmd::budget::run(&root, project.as_deref()),
         Command::Gc => cmd::gc::run(&root),
         Command::RlWatch {

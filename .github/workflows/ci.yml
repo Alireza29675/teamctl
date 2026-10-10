@@ -73,6 +73,15 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install tmux for isolated lifecycle contracts
+        if: matrix.rust == 'stable'
+        run: |
+          if [ "${{ runner.os }}" = 'Linux' ]; then
+            sudo apt-get update
+            sudo apt-get install -y tmux
+          else
+            command -v tmux >/dev/null || brew install tmux
+          fi
       # T-397: prove the matrix toolchain is the one actually in use. The MSRV
       # leg used to run `stable` (rust-toolchain.toml shadow, fixed by
       # RUSTUP_TOOLCHAIN above); this step fails loudly if that ever regresses,
@@ -135,21 +144,12 @@ jobs:
       # tests; the full --all-targets build + tests run on the stable leg.
       - run: cargo build --locked
         if: matrix.rust != 'stable'
-      - run: cargo build --all-targets --locked
+      - run: cargo build --workspace --all-targets --locked
         if: matrix.rust == 'stable'
-      - run: cargo test --all --locked
+      - run: cargo test --workspace --all-targets --locked
         if: matrix.rust == 'stable'
-      # `teamctl-ui` is excluded from `default-members` (it pulls
-      # the ratatui dep tree that the release flow doesn't need)
-      # but its tests must still gate on green. Build + test +
-      # clippy it explicitly so the workspace exclusion never
-      # hides regressions from CI (T-T058a, qa observation
-      # across PR #34/#35/#36).
-      - run: cargo build -p teamctl-ui --all-targets --locked
+      # Explicit workspace scope includes the opt-in UI and future crates.
+      - run: cargo test --workspace --doc --locked
         if: matrix.rust == 'stable'
-      - run: cargo test -p teamctl-ui --locked
-        if: matrix.rust == 'stable'
-      - run: cargo clippy --all-targets --locked -- -D warnings
-        if: matrix.rust == 'stable'
-      - run: cargo clippy -p teamctl-ui --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
         if: matrix.rust == 'stable'

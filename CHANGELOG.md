@@ -2,6 +2,14 @@
 
 All notable changes to teamctl will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Split lifecycle, rendering, attachment, MCP, Telegram and UI internals into focused modules with explicit testing seams.
+- Reconcile applied runtime state correctly across skipped starts, scoped reloads, stopped sessions and prefix changes; honor runtime binary/argv/env/model overrides and reject derived resource collisions.
+- Scope inbox acknowledgements to callers, track independent channel consumption, retain failed Telegram deliveries, enforce approval expiry and harden media/attachment publication.
+- Fix Unicode compose editing, literal flag-shaped messages, explicit UI roots, configured broker paths, split targeting, selection refresh, resize retries and terminal cleanup.
+- Update Rust and documentation dependencies, retain CLI MSRV 1.86, and include UI plus isolated tmux lifecycle coverage in developer checks.
+
 ## [Unreleased]
 
 ## [0.11.0] - 2026-07-14

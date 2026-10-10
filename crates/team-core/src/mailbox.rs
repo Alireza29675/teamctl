@@ -58,6 +58,15 @@ CREATE INDEX IF NOT EXISTS messages_recipient_idx
 CREATE INDEX IF NOT EXISTS messages_project_idx
     ON messages(project_id, sent_at);
 
+-- A broadcast is consumed independently by each subscriber. Direct messages
+-- retain messages.acked_at; legacy globally-acked broadcasts stay consumed.
+CREATE TABLE IF NOT EXISTS message_receipts (
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    agent_id   TEXT NOT NULL,
+    acked_at   REAL NOT NULL,
+    PRIMARY KEY (message_id, agent_id)
+);
+
 -- Channels + subscriptions + per-agent ACLs.
 CREATE TABLE IF NOT EXISTS channels (
     id         TEXT PRIMARY KEY,               -- "<project>:<name>"

@@ -242,8 +242,8 @@ fn spawn_channel_watcher(
     // `Store::open` and this peek — small enough that no real writer
     // can plausibly slip in. Any row inserted from this point forward
     // gets a notification, which is the contract callers expect.
-    let initial_last_seen: i64 = match store.inbox_peek(&agent_id, 1000) {
-        Ok(msgs) => msgs.iter().map(|m| m.id).max().unwrap_or(0),
+    let initial_last_seen: i64 = match store.inbox_high_water(&agent_id) {
+        Ok(id) => id,
         Err(e) => {
             tracing::warn!(error = %e, "channel watcher initial peek failed");
             0
@@ -268,7 +268,7 @@ fn spawn_channel_watcher(
 
         loop {
             tokio::time::sleep(Duration::from_millis(CHANNEL_POLL_MS)).await;
-            let msgs = match store.inbox_peek(&agent_id, 100) {
+            let msgs = match store.inbox_since(&agent_id, last_seen, 100) {
                 Ok(m) => m,
                 Err(e) => {
                     tracing::warn!(error = %e, "channel watcher peek failed");

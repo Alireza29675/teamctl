@@ -20,7 +20,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rusqlite::Connection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,8 +38,7 @@ pub struct Approval {
 
 pub trait ApprovalSource: Send + Sync {
     /// Snapshot of every approval still in `status='pending'`.
-    /// Empty vec when none. Errors fall back to empty in callers
-    /// (the stripe just stays hidden).
+    /// Empty vec when none. Errors retain the last successful snapshot.
     fn pending(&self) -> Result<Vec<Approval>>;
 }
 
@@ -76,8 +75,7 @@ impl ApprovalSource for BrokerApprovalSource {
                     payload_json: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
                 })
             })?
-            .flatten()
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 }
@@ -110,13 +108,7 @@ impl ApprovalDecider for CliApprovalDecider {
         if !note.is_empty() {
             cmd.arg("--note").arg(note);
         }
-        let status = cmd
-            .status()
-            .with_context(|| format!("invoke teamctl {verb} {id}"))?;
-        if !status.success() {
-            anyhow::bail!("teamctl {verb} {id} exited {status}");
-        }
-        Ok(())
+        crate::command::run(&mut cmd, &format!("invoke teamctl {verb} {id}"))
     }
 }
 
