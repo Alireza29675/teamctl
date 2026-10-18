@@ -2,9 +2,7 @@
   <img src="https://teamctl.run/brand/teamwork.png" alt="Two TeamCTL agents building a shared structure together" width="420" />
 </p>
 
-# TeamCTL
-
-**Create autonomous teams of agents.**
+# TeamCTL — Create autonomous teams of agents.
 
 TeamCTL is an open-source orchestrator for agents that work together. Define their roles, structure and communication, then run the team in the background on your own machine.
 
