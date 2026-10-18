@@ -186,8 +186,6 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 Bug reports, small improvements, runtime adapters and useful example teams are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions, or [open an issue](https://github.com/Alireza29675/teamctl/issues) to discuss a change.
 
-The [brand guide](https://teamctl.run/brand/) includes the TeamCTL character, illustration, colours and typography.
-
 ## License
 
 [MIT](LICENSE).
