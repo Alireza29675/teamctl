@@ -2,7 +2,7 @@
   <img src="https://teamctl.run/brand/teamwork.png" alt="Two TeamCTL agents building a shared structure together" width="420" />
 </p>
 
-# TeamCTL — Create autonomous teams of agents.
+# TeamCTL: Create autonomous teams of agents.
 
 TeamCTL is an open-source orchestrator for agents that work together. Define their roles, structure and communication, then run the team in the background on your own machine.
 
@@ -72,7 +72,7 @@ Your team's blueprint lives in `.team/`: YAML describes the structure; Markdown 
 For example, a lead using Claude Code can coordinate a builder using Codex through a shared channel:
 
 ```yaml
-# .team/projects/my-team.yaml — illustrative roster excerpt
+# .team/projects/my-team.yaml (illustrative roster excerpt)
 version: 2
 project:
   id: my-team
