@@ -1309,7 +1309,6 @@ mod tests {
                 supervisor: SupervisorCfg {
                     r#type: "tmux".into(),
                     tmux_prefix: "a-".into(),
-                    drain_timeout_secs: 10,
                 },
                 budget: Default::default(),
                 hitl: Default::default(),
