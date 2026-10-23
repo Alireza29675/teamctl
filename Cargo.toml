@@ -46,7 +46,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 notify = "6"
-schemars = "0.8"
+schemars = "1.2"
 team-core = { path = "crates/team-core", version = "0.11.0" }
 blake3 = "1"
 uuid = { version = "1", features = ["v5"] }
