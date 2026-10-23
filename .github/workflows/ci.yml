@@ -46,7 +46,7 @@ jobs:
           - os: macos-14
             rust: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # T-284: current GitHub macOS ARM runner images pre-seed
       # `rustup-init` stub shims for cargo/rustc/rustup/rustfmt into
       # ~/.cargo/bin (and /opt/homebrew/bin). dtolnay/rust-toolchain
@@ -68,11 +68,11 @@ jobs:
           ls -la "$HOME/.cargo/bin" 2>/dev/null || true
           rm -f "$HOME"/.cargo/bin/{cargo,cargo-clippy,cargo-fmt,clippy-driver,rls,rust-analyzer,rust-gdb,rust-lldb,rustc,rustdoc,rustfmt,rustup} \
                 /opt/homebrew/bin/{cargo,cargo-clippy,cargo-fmt,clippy-driver,rustc,rustdoc,rustfmt,rustup} 2>/dev/null || true
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # T-397: prove the matrix toolchain is the one actually in use. The MSRV
       # leg used to run `stable` (rust-toolchain.toml shadow, fixed by
       # RUSTUP_TOOLCHAIN above); this step fails loudly if that ever regresses,
