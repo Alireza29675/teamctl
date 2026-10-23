@@ -29,7 +29,7 @@ authors = ["Alireza Sheikholmolouki <alireza.sheikholmolouki@gmail.com>"]
 
 [workspace.dependencies]
 anyhow = "1"
-thiserror = "1"
+thiserror = "2"
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
