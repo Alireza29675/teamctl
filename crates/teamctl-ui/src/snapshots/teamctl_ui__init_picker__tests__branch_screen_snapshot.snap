@@ -21,4 +21,4 @@ expression: "buf_to_string(&render_to_buffer(&state, 100, 24))"
                       ▸ Browse a template   pick from ready-made teams                              
                         Co-design with AI   let Claude Code shape it with you                       
                                                                                                     
-                               ↑/↓ select · Enter choose · Esc cancel
+                              ↑/↓ select · Enter choose · Esc/q cancel

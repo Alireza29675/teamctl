@@ -2732,7 +2732,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "serde_yaml",
  "sysinfo",
  "team-core",
  "tempfile",

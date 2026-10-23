@@ -31,10 +31,16 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, bail, Context, Result};
 use include_dir::{include_dir, Dir};
+use team_core::compose::{Global, Project};
+use team_core::preview::{
+    team_shape, PickerCatalog, PickerCatalogEntry, PickerResponse, PreviewCounts,
+    PICKER_PROTOCOL_VERSION, PICKER_PROTOCOL_VERSION_ARG,
+};
 
 #[derive(Clone, Copy)]
 pub struct Template {
@@ -149,12 +155,129 @@ pub const TEMPLATES: &[Template] = &[
     },
 ];
 
+/// Catalog population is a separate product decision from the picker
+/// transport. Hugo is waiting on the owner to choose bundled templates vs.
+/// cookbook examples; keep this adapter empty until that answer lands so the
+/// integration branch cannot silently make the decision itself.
+const RICH_PICKER_TEMPLATE_KEYS: &[&str] = &[];
+
 /// The result of picker dispatch. `Guided` is the exec-claude path;
 /// `Template` is the scaffold-files path.
 #[derive(Clone, Copy)]
 enum Choice {
     Guided,
     Template(&'static Template),
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PostCreate {
+    Finish,
+    Adjust,
+}
+
+/// A picker choice plus the decisions only the rich picker can make.
+/// The legacy numbered picker and explicit flags keep the existing
+/// preview + `Proceed?` confirmation and never auto-launch Adjust.
+#[derive(Clone, Copy)]
+struct SelectedChoice {
+    choice: Choice,
+    post_create: PostCreate,
+    already_confirmed: bool,
+}
+
+impl SelectedChoice {
+    fn legacy(choice: Choice) -> Self {
+        Self {
+            choice,
+            post_create: PostCreate::Finish,
+            already_confirmed: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PickerChild {
+    exit_code: Option<i32>,
+    stdout: Vec<u8>,
+}
+
+/// Process/terminal boundary for the optional rich init picker. Mirrors
+/// `cmd::ui::UiHost`, but init must resume after the child and parse its
+/// stdout instead of replacing the process.
+trait InitPickerHost {
+    fn stdin_is_tty(&self) -> bool;
+    fn stderr_is_tty(&self) -> bool;
+    fn find_picker(&self) -> Option<PathBuf>;
+    fn picker_is_compatible(&self, bin: &Path) -> bool;
+    fn run_picker(&self, bin: &Path, catalog_json: &[u8]) -> Result<PickerChild>;
+}
+
+struct RealInitPickerHost;
+
+impl InitPickerHost for RealInitPickerHost {
+    fn stdin_is_tty(&self) -> bool {
+        io::stdin().is_terminal()
+    }
+
+    fn stderr_is_tty(&self) -> bool {
+        io::stderr().is_terminal()
+    }
+
+    fn find_picker(&self) -> Option<PathBuf> {
+        super::ui::which_on_path("teamctl-ui")
+    }
+
+    fn picker_is_compatible(&self, bin: &Path) -> bool {
+        let expected_package = format!("teamctl-ui {}", env!("CARGO_PKG_VERSION"));
+        let expected_protocol = PICKER_PROTOCOL_VERSION.to_string();
+        Command::new(bin)
+            // `--version` must stay first: pre-handshake UI binaries already
+            // handle it non-interactively and safely ignore the modifier.
+            .arg("--version")
+            .arg(PICKER_PROTOCOL_VERSION_ARG)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .is_some_and(|output| {
+                let mut lines = output.lines();
+                lines.next() == Some(expected_package.as_str())
+                    && lines.next() == Some(expected_protocol.as_str())
+                    && lines.next().is_none()
+            })
+    }
+
+    fn run_picker(&self, bin: &Path, catalog_json: &[u8]) -> Result<PickerChild> {
+        let mut catalog = tempfile::NamedTempFile::new().context("create picker catalog")?;
+        catalog
+            .write_all(catalog_json)
+            .context("write picker catalog")?;
+        catalog.flush().context("flush picker catalog")?;
+
+        let output = Command::new(bin)
+            .arg("--init-picker")
+            .arg("--catalog")
+            .arg(catalog.path())
+            .stdin(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .output()
+            .with_context(|| format!("launch {} --init-picker", bin.display()))?;
+        Ok(PickerChild {
+            exit_code: output.status.code(),
+            stdout: output.stdout,
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PickerAttempt {
+    Selected(PickerResponse),
+    Cancelled,
+    Fallback(Option<String>),
 }
 
 /// The picker menu in display order: Ideate & Build, Guided, Blank.
@@ -213,27 +336,32 @@ pub fn run(
             // shape so the caller sees a graceful completion.
             return Ok(());
         }
-        Some(k) => Choice::Template(
+        Some(k) => SelectedChoice::legacy(Choice::Template(
             TEMPLATES
                 .iter()
                 .find(|t| t.key == k)
                 .ok_or_else(|| anyhow!("unknown template `{k}` — known: {}", template_keys()))?,
-        ),
+        )),
         None if yes => {
             // Default in non-interactive mode is Essentials. Guided is
             // interactive-only (rejected above); Essentials gives the
             // operator a useful starting team without forcing a Claude
             // Code session.
-            Choice::Template(TEMPLATES.iter().find(|t| t.key == "essentials").unwrap())
+            SelectedChoice::legacy(Choice::Template(
+                TEMPLATES.iter().find(|t| t.key == "essentials").unwrap(),
+            ))
         }
         None => choose_template_interactive()?,
     };
 
-    let tpl = match choice {
+    let tpl = match choice.choice {
+        Choice::Cancelled => return Ok(()),
         Choice::Guided => {
-            // Picker-selected guided: confirm + exec, same as the
-            // explicit-flag branch above.
-            if !confirm("This will open Claude Code and run `/teamctl:init`. Continue?")? {
+            // The rich picker selection is already an explicit confirmation;
+            // the numbered fallback still gets the legacy Y/n guard.
+            if !choice.already_confirmed
+                && !confirm("This will open Claude Code and run `/teamctl:init`. Continue?")?
+            {
                 bail!("aborted");
             }
             exec_guided()?;
@@ -285,7 +413,7 @@ pub fn run(
 
     let files = tpl.entries();
 
-    if !yes {
+    if !yes && !choice.already_confirmed {
         // Show the team itself before the file list — same ordering as
         // the teamctl-ui Agents pane (managers first, then workers).
         // Best-effort: parses the in-memory template before anything is
@@ -329,6 +457,10 @@ pub fn run(
     println!();
     println!("✓ {} scaffolded.", target.display());
     println!();
+
+    finish_post_create(choice.post_create, &parent, &target, |root| {
+        super::adjust::run_confirmed_at(root)
+    })?;
 
     // The agent the operator most likely wants to attach to first — see
     // `lead_attach_target`. `None` for an agentless template (e.g.
@@ -613,7 +745,25 @@ fn choice_line(c: &Choice) -> (&'static str, &'static str) {
     match c {
         Choice::Guided => ("Guided", "LLM walks you through setup (opens Claude Code)"),
         Choice::Template(t) => (t.label, t.blurb),
+        Choice::Cancelled => ("Cancelled", ""),
     }
+}
+
+fn finish_post_create(
+    post_create: PostCreate,
+    team_root: &Path,
+    target: &Path,
+    run_adjust: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    if post_create == PostCreate::Adjust {
+        run_adjust(team_root).with_context(|| {
+            format!(
+                "{} was created, but customization could not start",
+                target.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// Picker UX. Shows Ideate & Build / Essentials / Guided / Blank in that
@@ -624,7 +774,198 @@ fn choice_line(c: &Choice) -> (&'static str, &'static str) {
 /// On Guided selection, the confirm-intent prompt is handled by the
 /// caller (so the picker is pure-input → pure-output). That keeps
 /// this function testable without piping a `claude` mock.
-fn choose_template_interactive() -> Result<Choice> {
+fn choose_template_interactive() -> Result<SelectedChoice> {
+    choose_template_with(
+        &RealInitPickerHost,
+        RICH_PICKER_TEMPLATE_KEYS,
+        choose_template_interactive_text,
+    )
+}
+
+fn choose_template_with(
+    host: &dyn InitPickerHost,
+    catalog_keys: &[&str],
+    fallback: impl FnOnce() -> Result<Choice>,
+) -> Result<SelectedChoice> {
+    if !catalog_keys.is_empty() {
+        let catalog = match picker_catalog_for_keys(catalog_keys) {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                eprintln!("Rich picker unavailable ({error}); using the basic picker.");
+                return Ok(SelectedChoice::legacy(fallback()?));
+            }
+        };
+        match try_rich_picker(host, &catalog) {
+            PickerAttempt::Selected(response) => {
+                return response_to_choice(response, &catalog);
+            }
+            PickerAttempt::Cancelled => {
+                return Ok(SelectedChoice::legacy(Choice::Cancelled));
+            }
+            PickerAttempt::Fallback(Some(reason)) => {
+                eprintln!("Rich picker unavailable ({reason}); using the basic picker.");
+            }
+            PickerAttempt::Fallback(None) => {}
+        }
+    }
+    Ok(SelectedChoice::legacy(fallback()?))
+}
+
+fn try_rich_picker(host: &dyn InitPickerHost, catalog: &PickerCatalog) -> PickerAttempt {
+    if !host.stdin_is_tty() || !host.stderr_is_tty() {
+        return PickerAttempt::Fallback(None);
+    }
+    if let Err(error) = catalog.validate() {
+        return PickerAttempt::Fallback(Some(error));
+    }
+    let Some(bin) = host.find_picker() else {
+        return PickerAttempt::Fallback(None);
+    };
+    if !host.picker_is_compatible(&bin) {
+        return PickerAttempt::Fallback(Some(
+            "installed teamctl-ui version or picker protocol does not match teamctl".to_string(),
+        ));
+    }
+    let catalog_json = match serde_json::to_vec(catalog) {
+        Ok(json) => json,
+        Err(error) => return PickerAttempt::Fallback(Some(error.to_string())),
+    };
+    let child = match host.run_picker(&bin, &catalog_json) {
+        Ok(child) => child,
+        Err(error) => return PickerAttempt::Fallback(Some(error.to_string())),
+    };
+    match child.exit_code {
+        Some(130) => PickerAttempt::Cancelled,
+        Some(0) => match serde_json::from_slice::<PickerResponse>(&child.stdout) {
+            Ok(response) if response_key_is_known(&response, catalog) => {
+                PickerAttempt::Selected(response)
+            }
+            Ok(_) => PickerAttempt::Fallback(Some(
+                "picker returned a template outside the catalog".to_string(),
+            )),
+            Err(error) => PickerAttempt::Fallback(Some(format!(
+                "picker returned an invalid response: {error}"
+            ))),
+        },
+        code => PickerAttempt::Fallback(Some(match code {
+            Some(code) => format!("picker exited with status {code}"),
+            None => "picker was terminated by a signal".to_string(),
+        })),
+    }
+}
+
+fn response_key_is_known(response: &PickerResponse, catalog: &PickerCatalog) -> bool {
+    let key = match response {
+        PickerResponse::Create { key } | PickerResponse::Customize { key } => key,
+        PickerResponse::CoDesign => return true,
+    };
+    catalog.entries.iter().any(|entry| entry.key == *key)
+}
+
+fn response_to_choice(response: PickerResponse, catalog: &PickerCatalog) -> Result<SelectedChoice> {
+    let (key, post_create) = match response {
+        PickerResponse::Create { key } => (key, PostCreate::Finish),
+        PickerResponse::Customize { key } => (key, PostCreate::Adjust),
+        PickerResponse::CoDesign => {
+            return Ok(SelectedChoice {
+                choice: Choice::Guided,
+                post_create: PostCreate::Finish,
+                already_confirmed: true,
+            });
+        }
+    };
+    if !catalog.entries.iter().any(|entry| entry.key == key) {
+        bail!("picker returned unknown catalog key `{key}`");
+    }
+    let template = TEMPLATES
+        .iter()
+        .find(|template| template.key == key)
+        .ok_or_else(|| anyhow!("catalog key `{key}` has no scaffold plan"))?;
+    Ok(SelectedChoice {
+        choice: Choice::Template(template),
+        post_create,
+        already_confirmed: true,
+    })
+}
+
+fn picker_catalog_for_keys(keys: &[&str]) -> Result<PickerCatalog> {
+    let mut entries = Vec::with_capacity(keys.len());
+    for key in keys {
+        let template = TEMPLATES
+            .iter()
+            .find(|template| template.key == *key)
+            .ok_or_else(|| anyhow!("picker catalog references unknown template `{key}`"))?;
+        entries.push(picker_entry_from_template(template)?);
+    }
+    let catalog = PickerCatalog {
+        version: PICKER_PROTOCOL_VERSION,
+        entries,
+    };
+    catalog.validate().map_err(anyhow::Error::msg)?;
+    Ok(catalog)
+}
+
+fn picker_entry_from_template(template: &Template) -> Result<PickerCatalogEntry> {
+    let mut substitutions: BTreeMap<&str, String> = BTreeMap::new();
+    substitutions.insert("project_id", "preview".to_string());
+    substitutions.insert("project_name", "Preview".to_string());
+    let rendered: BTreeMap<PathBuf, String> = template
+        .entries()
+        .into_iter()
+        .map(|(path, contents)| (PathBuf::from(path), substitute(contents, &substitutions)))
+        .collect();
+
+    let compose = rendered
+        .get(Path::new("team-compose.yaml"))
+        .ok_or_else(|| anyhow!("template `{}` has no team-compose.yaml", template.key))?;
+    let global: Global = serde_yaml::from_str(compose)
+        .with_context(|| format!("parse template `{}` compose for picker", template.key))?;
+    let mut projects = Vec::new();
+    for project_ref in global.projects {
+        let contents = rendered.get(&project_ref.file).ok_or_else(|| {
+            anyhow!(
+                "template `{}` is missing referenced project `{}`",
+                template.key,
+                project_ref.file.display()
+            )
+        })?;
+        projects.push(serde_yaml::from_str::<Project>(contents).with_context(|| {
+            format!(
+                "parse template `{}` project `{}` for picker",
+                template.key,
+                project_ref.file.display()
+            )
+        })?);
+    }
+    let refs: Vec<&Project> = projects.iter().collect();
+    let rows = team_shape(&refs);
+    let counts = preview_counts(&projects);
+    Ok(PickerCatalogEntry {
+        key: template.key.to_string(),
+        name: template.label.to_string(),
+        description: template.blurb.to_string(),
+        rows,
+        counts,
+    })
+}
+
+fn preview_counts(projects: &[Project]) -> PreviewCounts {
+    let mut counts = PreviewCounts::default();
+    for project in projects {
+        for agent in project.managers.values().chain(project.workers.values()) {
+            counts.agents += 1;
+            counts.subagents += agent.subagents.len();
+            counts.skills += agent.skills.len();
+            counts.hooks += agent.hooks.len();
+            counts.mcps += agent.mcps.len();
+        }
+    }
+    counts
+}
+
+/// Basic numbered fallback, retained for non-TTY use and when the optional
+/// `teamctl-ui` binary is unavailable or incompatible.
+fn choose_template_interactive_text() -> Result<Choice> {
     eprintln!("Pick a template:");
     for (i, c) in picker_menu().iter().enumerate() {
         let (label, blurb) = choice_line(c);
@@ -763,6 +1104,308 @@ pub fn template_list_for_cli() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
+
+    struct MockPickerHost {
+        stdin_tty: bool,
+        stderr_tty: bool,
+        bin: Option<PathBuf>,
+        compatible: bool,
+        child: Result<PickerChild, String>,
+        catalogs: RefCell<Vec<Vec<u8>>>,
+    }
+
+    impl MockPickerHost {
+        fn success(response: PickerResponse) -> Self {
+            Self {
+                stdin_tty: true,
+                stderr_tty: true,
+                bin: Some(PathBuf::from("/mock/teamctl-ui")),
+                compatible: true,
+                child: Ok(PickerChild {
+                    exit_code: Some(0),
+                    stdout: serde_json::to_vec(&response).unwrap(),
+                }),
+                catalogs: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl InitPickerHost for MockPickerHost {
+        fn stdin_is_tty(&self) -> bool {
+            self.stdin_tty
+        }
+
+        fn stderr_is_tty(&self) -> bool {
+            self.stderr_tty
+        }
+
+        fn find_picker(&self) -> Option<PathBuf> {
+            self.bin.clone()
+        }
+
+        fn picker_is_compatible(&self, _bin: &Path) -> bool {
+            self.compatible
+        }
+
+        fn run_picker(&self, _bin: &Path, catalog_json: &[u8]) -> Result<PickerChild> {
+            self.catalogs.borrow_mut().push(catalog_json.to_vec());
+            self.child
+                .as_ref()
+                .cloned()
+                .map_err(|error| anyhow!(error.clone()))
+        }
+    }
+
+    #[test]
+    fn builtin_catalog_substitutes_placeholders_before_previewing() {
+        let catalog = picker_catalog_for_keys(&["ideate-and-build", "blank"]).unwrap();
+        let ideate = &catalog.entries[0];
+        assert_eq!(ideate.key, "ideate-and-build");
+        assert_eq!(ideate.counts.agents, 4);
+        assert_eq!(
+            ideate
+                .rows
+                .iter()
+                .filter(|row| row.kind != team_core::preview::ShapeKind::Root)
+                .count(),
+            4,
+            "raw {{project_id}} placeholders must be substituted before YAML parse"
+        );
+        assert_eq!(catalog.entries[1].key, "blank");
+        assert_eq!(catalog.entries[1].counts.agents, 0);
+        assert!(catalog.validate().is_ok());
+    }
+
+    #[test]
+    fn rich_picker_launches_only_on_a_real_terminal_and_validates_response_key() {
+        let catalog = picker_catalog_for_keys(&["ideate-and-build"]).unwrap();
+        let host = MockPickerHost::success(PickerResponse::Create {
+            key: "ideate-and-build".to_string(),
+        });
+        assert_eq!(
+            try_rich_picker(&host, &catalog),
+            PickerAttempt::Selected(PickerResponse::Create {
+                key: "ideate-and-build".to_string()
+            })
+        );
+        let sent: PickerCatalog =
+            serde_json::from_slice(&host.catalogs.borrow()[0]).expect("valid catalog JSON");
+        assert_eq!(sent, catalog);
+
+        let non_tty = MockPickerHost {
+            stdin_tty: false,
+            ..MockPickerHost::success(PickerResponse::CoDesign)
+        };
+        assert_eq!(
+            try_rich_picker(&non_tty, &catalog),
+            PickerAttempt::Fallback(None)
+        );
+        assert!(non_tty.catalogs.borrow().is_empty());
+
+        let unknown = MockPickerHost::success(PickerResponse::Customize {
+            key: "not-handed-out".to_string(),
+        });
+        assert!(matches!(
+            try_rich_picker(&unknown, &catalog),
+            PickerAttempt::Fallback(Some(reason)) if reason.contains("outside the catalog")
+        ));
+
+        let mismatched = MockPickerHost {
+            compatible: false,
+            ..MockPickerHost::success(PickerResponse::CoDesign)
+        };
+        assert!(matches!(
+            try_rich_picker(&mismatched, &catalog),
+            PickerAttempt::Fallback(Some(reason)) if reason.contains("does not match")
+        ));
+        assert!(mismatched.catalogs.borrow().is_empty());
+    }
+
+    #[test]
+    fn rich_picker_exit_130_is_a_real_cancel_not_a_text_fallback() {
+        let catalog = picker_catalog_for_keys(&["ideate-and-build"]).unwrap();
+        let host = MockPickerHost {
+            child: Ok(PickerChild {
+                exit_code: Some(130),
+                stdout: Vec::new(),
+            }),
+            ..MockPickerHost::success(PickerResponse::CoDesign)
+        };
+        assert_eq!(try_rich_picker(&host, &catalog), PickerAttempt::Cancelled);
+    }
+
+    #[test]
+    fn catalog_build_failure_degrades_to_the_basic_picker() {
+        let host = MockPickerHost::success(PickerResponse::CoDesign);
+        let fallback_called = Cell::new(false);
+        let selected = choose_template_with(&host, &["missing-template"], || {
+            fallback_called.set(true);
+            Ok(Choice::Template(
+                TEMPLATES.iter().find(|t| t.key == "blank").unwrap(),
+            ))
+        })
+        .unwrap();
+
+        assert!(fallback_called.get());
+        assert!(matches!(selected.choice, Choice::Template(t) if t.key == "blank"));
+        assert!(host.catalogs.borrow().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_picker_host_keeps_catalog_alive_and_pins_process_contract() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("teamctl-ui");
+        let captured = dir.path().join("captured.json");
+        let script = format!(
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--version\" ]; then\n\
+               echo 'teamctl-ui {}'\n\
+               if [ \"$2\" = \"{}\" ]; then\n\
+                 echo '{}'\n\
+               fi\n\
+               exit 0\n\
+             fi\n\
+             [ \"$1\" = \"--init-picker\" ] || exit 41\n\
+             [ \"$2\" = \"--catalog\" ] || exit 42\n\
+             cat \"$3\" > \"{}\" || exit 43\n\
+             echo '{{\"action\":\"co_design\"}}'\n",
+            env!("CARGO_PKG_VERSION"),
+            PICKER_PROTOCOL_VERSION_ARG,
+            PICKER_PROTOCOL_VERSION,
+            captured.display()
+        );
+        fs::write(&bin, script).unwrap();
+        let mut permissions = fs::metadata(&bin).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&bin, permissions).unwrap();
+
+        let host = RealInitPickerHost;
+        assert!(host.picker_is_compatible(&bin));
+        let json = br#"{"version":1,"entries":[]}"#;
+        let child = host.run_picker(&bin, json).unwrap();
+        assert_eq!(child.exit_code, Some(0));
+        assert_eq!(
+            serde_json::from_slice::<PickerResponse>(&child.stdout).unwrap(),
+            PickerResponse::CoDesign
+        );
+        assert_eq!(fs::read(captured).unwrap(), json);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_picker_host_rejects_missing_or_wrong_protocol_at_matching_package_version() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("teamctl-ui");
+        let write_script = |protocol: Option<u32>| {
+            let protocol_arm = protocol.map_or_else(String::new, |version| {
+                format!(
+                    "if [ \"$2\" = \"{PICKER_PROTOCOL_VERSION_ARG}\" ]; then\n\
+                       echo '{version}'\n\
+                     fi\n"
+                )
+            });
+            let script = format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"--version\" ]; then\n\
+                   echo 'teamctl-ui {}'\n\
+                   {protocol_arm}\
+                   exit 0\n\
+                 fi\n\
+                 exit 41\n",
+                env!("CARGO_PKG_VERSION"),
+            );
+            fs::write(&bin, script).unwrap();
+            let mut permissions = fs::metadata(&bin).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&bin, permissions).unwrap();
+        };
+
+        let host = RealInitPickerHost;
+        write_script(None);
+        assert!(
+            !host.picker_is_compatible(&bin),
+            "same package version without the capability must fall back"
+        );
+
+        write_script(Some(PICKER_PROTOCOL_VERSION + 1));
+        assert!(
+            !host.picker_is_compatible(&bin),
+            "same package version with a different protocol must fall back"
+        );
+    }
+
+    #[test]
+    fn picker_response_maps_modal_choice_without_a_second_confirmation() {
+        let catalog = picker_catalog_for_keys(&["ideate-and-build"]).unwrap();
+        let create = response_to_choice(
+            PickerResponse::Create {
+                key: "ideate-and-build".to_string(),
+            },
+            &catalog,
+        )
+        .unwrap();
+        assert!(matches!(create.choice, Choice::Template(t) if t.key == "ideate-and-build"));
+        assert_eq!(create.post_create, PostCreate::Finish);
+        assert!(create.already_confirmed);
+
+        let customize = response_to_choice(
+            PickerResponse::Customize {
+                key: "ideate-and-build".to_string(),
+            },
+            &catalog,
+        )
+        .unwrap();
+        assert_eq!(customize.post_create, PostCreate::Adjust);
+        assert!(customize.already_confirmed);
+
+        let co_design = response_to_choice(PickerResponse::CoDesign, &catalog).unwrap();
+        assert!(matches!(co_design.choice, Choice::Guided));
+        assert!(co_design.already_confirmed);
+    }
+
+    #[test]
+    fn customize_runs_after_creation_in_the_team_root_and_keeps_partial_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let team_root = dir.path().join("named-team");
+        let target = team_root.join(".team");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(
+            target.join("team-compose.yaml"),
+            "version: 2.0.0\nprojects: []\n",
+        )
+        .unwrap();
+        let seen_root = RefCell::new(None::<PathBuf>);
+
+        let error = finish_post_create(PostCreate::Adjust, &team_root, &target, |root| {
+            *seen_root.borrow_mut() = Some(root.to_path_buf());
+            bail!("claude missing")
+        })
+        .unwrap_err();
+
+        assert_eq!(seen_root.borrow().as_deref(), Some(team_root.as_path()));
+        assert!(target.join("team-compose.yaml").is_file());
+        let message = format!("{error:#}");
+        assert!(message.contains("was created"), "{message}");
+        assert!(
+            message.contains("customization could not start"),
+            "{message}"
+        );
+        assert!(message.contains("claude missing"), "{message}");
+
+        let called = Cell::new(false);
+        finish_post_create(PostCreate::Finish, &team_root, &target, |_| {
+            called.set(true);
+            Ok(())
+        })
+        .unwrap();
+        assert!(!called.get(), "Create as-is must not launch Adjust");
+    }
 
     #[test]
     fn paint_with_emits_ansi_only_when_color_on() {

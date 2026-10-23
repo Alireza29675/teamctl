@@ -131,7 +131,7 @@ impl UiHost for RealHost {
     }
 }
 
-fn which_on_path(bin: &str) -> Option<PathBuf> {
+pub(super) fn which_on_path(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     let exe_name = if cfg!(windows) {
         format!("{bin}.exe")

@@ -5,7 +5,7 @@ expression: "buf_to_string(&render_to_buffer(&state, 100, 20))"
 ┌ Templates ─────────────────────┐┌ Product Team ──────────────────────────────────────────────────┐
 │ ▸ Product Team                 ││ product discovery while an engineering team builds             │
 │                                ││                                                                │
-│                                ││ 4 agents · 10 sub-agents · 0 skills · 1 hook · 0 mcps          │
+│                                ││ 3 agents · 10 sub-agents · 0 skills · 1 hook · 0 mcps          │
 │                                ││                                                                │
 │                                ││ You                                                            │
 │                                ││ ├── Product Manager  Claude Code · Opus 4.8 · 2×a 0×s 0×h 0×m  │
@@ -21,4 +21,4 @@ expression: "buf_to_string(&render_to_buffer(&state, 100, 20))"
 │                                ││                                                                │
 │                                ││                                                                │
 └────────────────────────────────┘└────────────────────────────────────────────────────────────────┘
-                                ↑/↓ select · Enter choose · Esc back
+                          ↑/↓ select · Enter options · Esc back · q cancel
