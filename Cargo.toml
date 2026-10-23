@@ -45,7 +45,7 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
-notify = "6"
+notify = "8"
 schemars = "0.8"
 team-core = { path = "crates/team-core", version = "0.11.0" }
 blake3 = "1"
