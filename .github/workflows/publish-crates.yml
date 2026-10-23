@@ -15,10 +15,13 @@ jobs:
   publish:
     name: publish to crates.io
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # crates.io trusted publishing (OIDC)
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Check workspace version matches tag
         if: github.event_name == 'push'
@@ -44,10 +47,19 @@ jobs:
           rustup toolchain install "$msrv" --profile minimal --no-self-update
           cargo "+$msrv" build --locked
 
+      # Trusted publishing: swap the GitHub OIDC token for a short-lived crates.io
+      # token. Until each crate lists this workflow as a trusted publisher on
+      # crates.io, the step fails softly and the publish steps fall back to the
+      # CARGO_REGISTRY_TOKEN secret. Delete the secret once trusted publishing works.
+      - name: Authenticate with crates.io (trusted publishing)
+        id: auth
+        continue-on-error: true
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1
+
       # Order matters: team-core has no internal deps and must publish first.
       - name: Publish team-core
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p team-core --locked
 
       - name: Wait for crates.io index to refresh
@@ -55,17 +67,17 @@ jobs:
 
       - name: Publish team-mcp
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p team-mcp --locked
 
       - name: Publish teamctl
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p teamctl --locked
 
       - name: Publish team-bot
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p team-bot --locked
 
       # teamctl-ui depends only on team-core (already published above);
@@ -73,5 +85,5 @@ jobs:
       # must reach crates.io for the install path to work.
       - name: Publish teamctl-ui
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p teamctl-ui --locked
