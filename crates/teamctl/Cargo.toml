@@ -29,7 +29,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 portable-pty = "0.9"
 libc = "0.2"
 blake3.workspace = true
-shlex = "1"
+shlex = "2"
 include_dir = "0.7"
 
 [dev-dependencies]
