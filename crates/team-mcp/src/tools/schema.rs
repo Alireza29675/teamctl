@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 
 /// JSON-Schema-ish tool list for `tools/list`.
 pub fn schema() -> Value {
-    json!([
+    let mut tools = json!([
         {
             "name": "whoami",
             "description": "Return the caller's fully-qualified agent id.",
@@ -91,12 +91,17 @@ pub fn schema() -> Value {
         },
         {
             "name": "org_chart",
-            "description": "Return the project's org chart: managers (top tier) and workers with their `reports_to` links. Use to introspect who is above you.",
+            "description": "Return agents and their optional reports_to hierarchy.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
+            "name": "list_interfaces",
+            "description": "List human interface instances available to this agent, including provider, stable ID, name, description and supported content. Multiple instances of the same provider are independent destinations.",
+            "inputSchema": {"type":"object","properties":{},"additionalProperties":false}
+        },
+        {
             "name": "reply_to_user",
-            "description": "Send a message to the human operator. Available only to managers (`is_manager: true`); the configured interface adapter (Telegram, Discord, …) forwards it. \n\nThis is the ONLY channel back to the human — anything you write outside this tool is invisible to them. Use it to answer their DMs, surface progress on long-running work, escalate blockers, or proactively share something they should know. Do NOT use `dm` for human traffic (it is project-scoped inter-agent). \n\nFor work that takes more than a minute, send a brief acknowledgement first (e.g. \"on it — checking the build\") and then a separate reply when done; do not leave the operator wondering whether you started. \n\nAttach an `image` (jpg/png/webp/gif, ≤50MB) or `file` (any type, ≤50MB) by passing `{source: \"path\"|\"url\", value: \"<path or URL>\", caption?: \"<short caption>\"}`. Each of `text`, `image`, `file` lands as its own chat message; combine them in one call to send a screenshot with a follow-up sentence in a single tool invocation. At least one of `text`, `image`, `file` is required.",
+            "description": "Reply to a human conversation through its configured adapter (UI, CLI, Telegram, WhatsApp or another adapter). Any agent may reply to a conversation addressed to that agent. Use conversation_id from inbound metadata, or reply_to_message_id; omit them only for a single unambiguous destination. Unaddressed legacy Telegram replies remain manager-only. \n\nThis is the ONLY channel back to the human — anything you write outside this tool is invisible to them. Use it to answer their DMs, surface progress on long-running work, escalate blockers, or proactively share something they should know. Do NOT use `dm` for human traffic (it is project-scoped inter-agent). \n\nFor work that takes more than a minute, send a brief acknowledgement first (e.g. \"on it — checking the build\") and then a separate reply when done; do not leave the operator wondering whether you started. \n\nAttach an `image` (jpg/png/webp/gif, ≤50MB) or `file` (any type, ≤50MB) by passing `{source: \"path\"|\"url\", value: \"<path or URL>\", caption?: \"<short caption>\"}`. Each of `text`, `image`, `file` lands as its own chat message; combine them in one call to send a screenshot with a follow-up sentence in a single tool invocation. At least one of `text`, `image`, `file` is required.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -106,7 +111,7 @@ pub fn schema() -> Value {
                     },
                     "image": {
                         "type": "object",
-                        "description": "Image attachment. Sources: `path` (absolute path on the manager's machine) or `url` (publicly fetchable). Allowed types: jpg/jpeg/png/webp/gif. Path-source files must be ≤50MB.",
+                        "description": "Image attachment. Sources: `path` (absolute path on the agent's filesystem) or `url` (publicly fetchable). Allowed types: jpg/jpeg/png/webp/gif. Path-source files must be ≤50MB.",
                         "required": ["source", "value"],
                         "properties": {
                             "source":  { "type": "string", "enum": ["path", "url"] },
@@ -130,9 +135,11 @@ pub fn schema() -> Value {
                         "type": "string",
                         "description": "Optional. Group this reply into its mailbox conversation thread: when the inbound message's channel meta carried a `thread_id`, pass that same value here so the conversation stays coherent across the timeline; omit it (start a fresh thread) only when you begin a genuinely new topic. Operator messages from Telegram currently arrive without a `thread_id`, so there's usually nothing to carry on this path — use `reply_to_message_id` for in-chat reply threading to the operator."
                     },
+                    "conversation_id": { "type": "string", "description": "Conversation ID from inbound metadata. Pins the human and transport destination; foreign conversations are rejected." },
+                    "request_id": { "type": "string", "minLength": 1, "maxLength": 1000, "description": "Stable ID for retrying the same multipart reply without duplication. Applies to modern human conversations." },
                     "reply_to_message_id": {
                         "type": "integer",
-                        "description": "Optional. Mailbox id of the inbound user message you're replying to — pass the `meta.id` value from the channel envelope (or `inbox_peek.id`). The bot resolves it to the right Telegram message id at insert time and threads the reply below the operator's message in the chat client. Omit when sending a fresh message. Applies to all of `text` / `image` / `file` in this call — they all reply to the same parent."
+                        "description": "Optional. Mailbox id of the inbound user message you're replying to — pass the `meta.id` value from the channel envelope (or `inbox_peek.id`). The conversation resolver validates caller ownership and carries the external reply reference to the correct adapter and peer. Omit when sending a fresh message. Applies to all of `text` / `image` / `file` in this call — they all reply to the same parent."
                     }
                 },
                 "additionalProperties": false
@@ -170,8 +177,15 @@ pub fn schema() -> Value {
         },
         {
             "name": "show_typing",
-            "description": "Show a Telegram \"typing…\" indicator in the operator's chat. Available only to managers (`is_manager: true`). Use right before kicking off work that takes more than a moment to produce visible output, so the operator gets a social cue that you're working rather than staring at silence. The indicator clears the moment any text from `reply_to_user` reaches the chat, or after a 10-second ceiling — whichever comes first. Calling `show_typing` again within an active window extends the ceiling (resets the 10s clock). No-op-safe: calling repeatedly is fine.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+            "description": "Show a typing indicator in the caller's human conversation for up to 10 seconds. Address it with conversation_id or reply_to_message_id when several conversations exist. Unsupported adapters return supported:false without enqueueing a message. Address a conversation when the agent has multiple interfaces.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "conversation_id": {"type": "string", "description": "Conversation owned by this agent."},
+                    "reply_to_message_id": {"type": "integer", "description": "Inbound mailbox meta.id identifying the human conversation."}
+                },
+                "additionalProperties": false
+            }
         },
         {
             "name": "read_attachment",
@@ -195,22 +209,36 @@ pub fn schema() -> Value {
         },
         {
             "name": "react_to_user",
-            "description": "Apply an emoji reaction to a specific Telegram message from the operator. Available only to managers (`is_manager: true`). Use to acknowledge an inbound DM lightly without sending a full reply — 👀 to signal you're on it, ✍ to signal you're typing, 👍 to ack done. Each `react_to_user` call replaces any previous bot reaction on that message; pass an unsupported emoji and the call rejects with a clear error before reaching Telegram. The set of allowed emoji is the standard Telegram bot-reaction set (premium-tier-agnostic, ~75 emoji); use what you'd reach for in normal chat reactions. Pass the `telegram_msg_id` value from the inbound mailbox row you're reacting to.",
+            "description": "React to an inbound human message in the caller's conversation. Pass message_id from the inbound mailbox meta.id, and conversation_id if needed. Unsupported adapters return supported:false. Telegram restricts emoji to its bot-reaction allowlist. For Telegram, telegram_msg_id addresses a provider message directly.",
             "inputSchema": {
                 "type": "object",
-                "required": ["telegram_msg_id", "emoji"],
+                "required": ["emoji"],
+                "anyOf": [{"required": ["message_id"]}, {"required": ["telegram_msg_id"]}],
                 "properties": {
-                    "telegram_msg_id": {
-                        "type": "integer",
-                        "description": "Telegram message id to react to. Pass the `telegram_msg_id` value from the inbound mailbox row you're acknowledging."
-                    },
-                    "emoji": {
-                        "type": "string",
-                        "description": "Reaction emoji. Must be one of the allowed bot-reaction emojis (👍 👎 ❤️ 🔥 🥰 👏 😁 🤔 🤯 😱 🤬 😢 🎉 🤩 🤮 💩 🙏 👌 🕊 🤡 🥱 🥴 😍 🐳 💯 🤣 ⚡ 🍌 🏆 💔 🤨 😐 🍓 🍾 💋 🖕 😈 😴 😭 🤓 👻 👀 🎃 🙈 😇 😨 🤝 ✍ 🤗 🫡 🎅 🎄 ☃ 💅 🤪 🗿 🆒 💘 🙉 🦄 😘 💊 🙊 😎 👾 🤷 😡 plus a few combos like ❤️‍🔥 🌚 🌭 👨‍💻). Out-of-set emoji rejected at the MCP boundary."
-                    }
+                    "conversation_id": {"type": "string", "description": "Conversation owned by this agent."},
+                    "message_id": {"type": "integer", "description": "Inbound mailbox meta.id to react to."},
+                    "telegram_msg_id": {"type": "integer", "description": "Legacy Telegram provider message id."},
+                    "emoji": {"type": "string", "description": "Provider-supported reaction emoji."}
                 },
                 "additionalProperties": false
             }
         }
-    ])
+    ]);
+    if let Some(tool) = tools
+        .as_array_mut()
+        .and_then(|tools| tools.iter_mut().find(|t| t["name"] == "reply_to_user"))
+    {
+        tool["description"]=json!("Send rich content to the human through an authorized named interface. Reply to the inbound message ID to inherit its interface and conversation; choose interface_id for proactive messages, or conversation_id when multiple human peers share an interface. Use list_interfaces to discover IDs and capabilities. Web supports Markdown text, images/files/audio and sandboxed HTML interactive components.");
+        let properties = &mut tool["inputSchema"]["properties"];
+        properties["interface_id"] = json!({"type":"string","description":"Stable named interface ID from list_interfaces. A reply inherits its inbound route when omitted."});
+        properties["html"] = json!({"type":"string","description":"Self-contained HTML interactive component. Web only; displayed in an isolated sandboxed iframe."});
+        properties["audio"] = properties["file"].clone();
+    }
+    if let Some(tool) = tools
+        .as_array_mut()
+        .and_then(|tools| tools.iter_mut().find(|t| t["name"] == "org_chart"))
+    {
+        tool["description"]=json!("Return agents and their optional reports_to hierarchy. All agents are peers with explicit capabilities.");
+    }
+    tools
 }

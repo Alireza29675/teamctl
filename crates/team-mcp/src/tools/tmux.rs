@@ -14,6 +14,21 @@ use super::{content_json, Ctx};
 /// Detachable — when the runtimes ship native agent-driven compaction,
 /// this whole handler + its registry entries delete in one PR.
 pub(super) async fn compact_self(ctx: &Ctx) -> Result<Value, String> {
+    if let Some(context) = &ctx.attachments {
+        let compose = team_core::compose::Compose::load_read_only(&context.compose_root)
+            .map_err(|error| format!("compact_self: cannot determine execution mode: {error}"))?;
+        let native = compose
+            .agents()
+            .find(|agent| agent.id() == ctx.agent_id)
+            .is_some_and(|agent| {
+                agent.spec.execution.as_ref().is_some_and(|execution| {
+                    execution.mode == team_core::compose::ExecutionMode::Native
+                })
+            });
+        if native {
+            return Err("compact_self is unavailable for native execution; the provider manages context compaction automatically. Terminal /compact requires execution.mode: tmux.".into());
+        }
+    }
     let runtime = ctx
         .store
         .runtime_for(&ctx.agent_id)

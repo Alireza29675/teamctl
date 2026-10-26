@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use team_core::compose::Compose;
 use team_core::render::{codex_home_dir, opencode_home_dir};
-use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
+use team_core::supervisor::{AgentSpec, AgentState, AgentSupervisor, Supervisor};
 
 use super::agent_filter::AgentSelector;
 
@@ -18,6 +18,9 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
             eprintln!("error: {e}");
         }
         bail!("{} validation error(s) — fix before up", errs.len());
+    }
+    for h in compose.agents() {
+        super::agent_run::validate_execution(&compose, h)?;
     }
     let scoped = project
         .map(|name| super::project_filter::resolve(&compose, name))
@@ -71,7 +74,7 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
     }
 
     reserve_in_registry(&compose, scoped.as_deref())?;
-    let sup = TmuxSupervisor;
+    let sup = AgentSupervisor;
     let previous = applied.clone();
     let mut touched = start_agents_with(
         &compose,
@@ -146,6 +149,8 @@ fn start_agents_with(
         if targets.is_some_and(|t| !t.contains(h.agent)) {
             continue;
         }
+        team_core::mcp::validate_mcp_environment(h.spec, |name| std::env::var(name).ok())
+            .map_err(anyhow::Error::msg)?;
         let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
         let mut observed = spec.clone();
         if let Some(entry) = prior.and_then(|snapshot| snapshot.agents.get(&h.id())) {

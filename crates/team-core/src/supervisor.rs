@@ -13,6 +13,9 @@ use anyhow::{Context, Result};
 
 use crate::compose::AgentHandle;
 
+mod process;
+pub use process::{native_log_path, native_process_path, AgentSupervisor, ProcessSupervisor};
+
 #[derive(Debug, Clone)]
 pub struct AgentSpec {
     pub project: String,

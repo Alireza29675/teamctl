@@ -34,12 +34,9 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()?;
         let out = serde_json::json!({
             "project": project,
-            "managers": rows.iter().filter(|r| r.3).map(|r| serde_json::json!({
-                "id": r.0, "role": r.1, "runtime": r.2
-            })).collect::<Vec<_>>(),
-            "workers": rows.iter().filter(|r| !r.3).map(|r| serde_json::json!({
-                "id": r.0, "role": r.1, "runtime": r.2, "reports_to": r.4
-            })).collect::<Vec<_>>(),
+            "agents": rows.iter().map(|r| serde_json::json!({
+                "id":r.0,"role":r.1,"runtime":r.2,"reports_to":r.4
+            })).collect::<Vec<_>>()
         });
         Ok(out)
     }

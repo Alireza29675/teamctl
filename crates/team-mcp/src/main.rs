@@ -473,6 +473,34 @@ fn format_channel_event(m: &store::Message, lazy_inbox: bool) -> Value {
     meta.insert("sender".into(), Value::String(m.sender.clone()));
     meta.insert("recipient".into(), Value::String(m.recipient.clone()));
     meta.insert("sent_at".into(), Value::String(m.sent_at.to_string()));
+    for (key, value) in [
+        ("conversation_id", &m.conversation_id),
+        ("adapter_id", &m.adapter_id),
+        ("external_id", &m.external_id),
+        ("peer_id", &m.peer_id),
+    ] {
+        if let Some(value) = value {
+            meta.insert(key.into(), Value::String(value.clone()));
+        }
+    }
+    if let Some(interface) = &m.interface {
+        meta.insert("interface_id".into(), Value::String(interface.id.clone()));
+        meta.insert(
+            "interface_provider".into(),
+            Value::String(interface.provider.clone()),
+        );
+        meta.insert(
+            "interface_name".into(),
+            Value::String(interface.name.clone()),
+        );
+        meta.insert(
+            "interface_description".into(),
+            Value::String(interface.description.clone()),
+        );
+    }
+    if let Some(id) = m.chat_message_id {
+        meta.insert("chat_message_id".into(), Value::String(id.to_string()));
+    }
     if let Some(t) = m.thread_id.as_ref() {
         meta.insert("thread_id".into(), Value::String(t.clone()));
     }

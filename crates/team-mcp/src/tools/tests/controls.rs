@@ -100,7 +100,7 @@ async fn show_typing_persists_kind_and_empty_payload() {
     // dispatcher discriminates on `kind` alone, so the payload only
     // has to be valid JSON.
     let (ctx, _f) = ctx_with_manager();
-    let resp = show_typing(&ctx).await.unwrap();
+    let resp = show_typing(&ctx, json!({})).await.unwrap();
     let id = resp["structuredContent"]["id"].as_i64().unwrap();
     let (kind, payload) = fetch_kind_and_payload(&ctx.store, id);
     assert_eq!(kind.as_deref(), Some("typing"));
@@ -116,7 +116,7 @@ async fn show_typing_returns_message_id_and_recipient() {
     // emit, so a single response shape spans the manager-side
     // tools.
     let (ctx, _f) = ctx_with_manager();
-    let resp = show_typing(&ctx).await.unwrap();
+    let resp = show_typing(&ctx, json!({})).await.unwrap();
     assert!(resp["structuredContent"]["id"].as_i64().is_some());
     assert_eq!(resp["structuredContent"]["recipient"], "user:telegram");
 }
@@ -132,7 +132,7 @@ async fn show_typing_non_manager_is_rejected() {
         .upsert_agent("p:dev", "p", "P", "dev", "claude-code", false)
         .unwrap();
     let ctx = Ctx::new("p:dev".to_string(), store, "t-".to_string());
-    let err = show_typing(&ctx).await.unwrap_err();
+    let err = show_typing(&ctx, json!({})).await.unwrap_err();
     assert!(
         err.contains("only managers"),
         "non-manager must be gated: {err}"

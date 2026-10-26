@@ -46,3 +46,7 @@ dev:
 # Build the docs site locally (install its locked dependencies first).
 docs:
     cd docs && npm run build
+
+# Browser trust-boundary tests; no npm installation or provider calls.
+web-test:
+    node --test crates/teamctl/assets/web/*.test.cjs

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 use team_core::compose::Compose;
-use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
+use team_core::supervisor::{AgentSpec, AgentState, AgentSupervisor, Supervisor};
 
 use super::agent_filter::AgentSelector;
 
@@ -45,7 +45,7 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
         .and_then(|dir| team_core::registry::load(&dir).ok())
         .map(|reg| reg.roster_for_root(&compose.root))
         .unwrap_or_default();
-    let sup = TmuxSupervisor;
+    let sup = AgentSupervisor;
     for h in compose.agents() {
         if scoped.as_deref().is_some_and(|id| id != h.project) {
             continue;
@@ -61,7 +61,7 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
         touched += 1;
     }
     let bot_specs = super::bot::bot_specs(&compose);
-    let desired_bots = bot_specs.iter().map(|spec| spec.manager.clone()).collect();
+    let desired_bots = bot_specs.iter().map(|spec| spec.identity()).collect();
     for spec in bot_specs {
         // Project guard preserved verbatim from the pre-T-305 path.
         let split = spec.manager.split_once(':');
@@ -168,7 +168,7 @@ fn registry_clear_scope(per_agent: bool, scoped: Option<&str>) -> Option<Option<
 /// Shares `reap_targets`' scope contract (skips on a per-agent down).
 fn reap_orphans(
     compose: &Compose,
-    sup: &TmuxSupervisor,
+    sup: &AgentSupervisor,
     scoped: Option<&str>,
     per_agent: bool,
 ) -> Result<usize> {
@@ -225,7 +225,7 @@ fn reap_orphans(
 
 /// Build a teardown spec for an orphan from its registry roster entry. The
 /// agent's compose handle is gone, so the spec is assembled directly: only
-/// `tmux_session` matters to `TmuxSupervisor::down` (it runs
+/// `tmux_session` matters to `AgentSupervisor::down` (it runs
 /// `tmux kill-session -t <session>`); the other fields are inert here.
 fn orphan_spec(compose: &Compose, e: &team_core::registry::RosterEntry) -> AgentSpec {
     AgentSpec {

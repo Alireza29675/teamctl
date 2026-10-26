@@ -6,26 +6,21 @@ pub(super) fn list(root: &Path) -> Result<()> {
     let mut any = false;
     println!(
         "{:<24} {:<28} {:<28} {:<8} {:<8}",
-        "MANAGER", "TOKEN_ENV", "CHATS_ENV", "TOKEN", "CHATS"
+        "AGENT / INTERFACE", "TOKEN_ENV", "CHATS_ENV", "TOKEN", "CHATS"
     );
-    for proj in &compose.projects {
-        for (role, agent) in &proj.managers {
-            if let Some(tg) = agent.telegram() {
-                any = true;
-                let mgr = format!("{}:{}", proj.project.id, role);
-                println!(
-                    "{:<24} {:<28} {:<28} {:<8} {:<8}",
-                    mgr,
-                    tg.bot_token_env,
-                    tg.chat_ids_env,
-                    env_state(&tg.bot_token_env),
-                    env_state(&tg.chat_ids_env),
-                );
-            }
-        }
+    for spec in bot_specs(&compose) {
+        any = true;
+        println!(
+            "{:<24} {:<28} {:<28} {:<8} {:<8}",
+            spec.identity(),
+            spec.token_env,
+            spec.chats_env,
+            env_state(&spec.token_env),
+            env_state(&spec.chats_env)
+        );
     }
     if !any {
-        println!("(no managers have an `interfaces.telegram` block — try `teamctl bot setup`)");
+        println!("(no Telegram interfaces configured — try `teamctl bot setup`)");
     }
     Ok(())
 }
@@ -38,7 +33,7 @@ pub(super) fn status(root: &Path) -> Result<()> {
         let (session, state) = super::supervisor::observed_state(&spec, &compose.root)?;
         println!(
             "{:<24} {:<8} {}",
-            spec.manager,
+            spec.identity(),
             if state == team_core::supervisor::AgentState::Running {
                 "running"
             } else {
@@ -48,7 +43,7 @@ pub(super) fn status(root: &Path) -> Result<()> {
         );
     }
     if !any {
-        println!("(no managers have an `interfaces.telegram` block — try `teamctl bot setup`)");
+        println!("(no Telegram interfaces configured — try `teamctl bot setup`)");
     }
     Ok(())
 }

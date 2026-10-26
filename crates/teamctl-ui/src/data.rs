@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use team_core::compose::Compose;
-use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
+use team_core::supervisor::{AgentSpec, AgentState, AgentSupervisor, Supervisor};
 
 /// Per-agent fields the UI reads to render the roster + drive
 /// selection / detail-pane streaming.
@@ -211,7 +211,7 @@ impl TeamSnapshot {
         let mailbox = compose.root.join(&compose.global.broker.path);
         let counts = mailbox_counts(&mailbox).unwrap_or_default();
 
-        let supervisor = TmuxSupervisor;
+        let supervisor = AgentSupervisor;
         let team_name = compose
             .projects
             .first()

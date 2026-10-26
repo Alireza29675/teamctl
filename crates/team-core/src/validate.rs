@@ -11,8 +11,19 @@ use crate::compose::{ChannelMembers, Compose};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ValidationError {
+    #[error("agent `{agent}` execution: {reason}")]
+    InvalidExecution { agent: String, reason: String },
     #[error("runtime descriptors could not be loaded: {0}")]
     RuntimeDescriptors(String),
+
+    #[error("invalid interface configuration: {0}")]
+    Interface(String),
+
+    #[error("invalid agent hierarchy: {0}")]
+    Hierarchy(String),
+
+    #[error("invalid MCP configuration: {0}")]
+    Mcp(String),
 
     #[error(
         "derived session name `{name}` collision between `{first}` and `{second}`; choose distinct project/agent names"
@@ -55,9 +66,7 @@ pub enum ValidationError {
     )]
     TelegramInboxOnWorker { project: String, agent: String },
 
-    #[error(
-        "worker `{project}:{agent}` declares `reports_to: {target}` but no such manager exists"
-    )]
+    #[error("agent `{project}:{agent}` declares `reports_to: {target}` but no such agent exists")]
     UnknownManager {
         project: String,
         agent: String,
@@ -295,6 +304,63 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
     let check_runtime = !runtimes.is_empty();
     let mut derived_names = BTreeMap::new();
     for h in compose.agents() {
+        if let Some(e) = &h.spec.execution {
+            let mut reasons = Vec::new();
+            if !(1..=3600).contains(&e.turn_timeout_seconds) {
+                reasons.push("turn_timeout_seconds must be 1..=3600".to_string());
+            }
+            if e.wake_interval_seconds.is_some_and(|s| s < 10) {
+                reasons.push("wake_interval_seconds must be at least 10".to_string());
+            }
+            if e.mode == crate::compose::ExecutionMode::Native
+                && !["claude-code", "codex", "opencode"].contains(&h.spec.runtime.as_str())
+            {
+                reasons.push("native execution supports claude-code, codex, opencode".to_string());
+            }
+            if e.sandbox.r#type == crate::compose::SandboxType::Docker {
+                if e.mode != crate::compose::ExecutionMode::Native {
+                    reasons.push("Docker sandbox requires native execution".to_string());
+                }
+                if e.sandbox
+                    .image
+                    .as_ref()
+                    .is_none_or(|i| i.trim().is_empty() || i.starts_with('-'))
+                {
+                    reasons.push("Docker sandbox requires an image".to_string());
+                }
+                for name in &e.sandbox.env {
+                    let mut chars = name.chars();
+                    if !chars
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                        || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    {
+                        reasons.push(format!("invalid sandbox env name `{name}`"));
+                    }
+                }
+                for mount in &e.sandbox.mounts {
+                    if !mount.target.is_absolute() {
+                        reasons.push("Docker mount targets must be absolute".to_string());
+                    }
+                    if mount.source.to_string_lossy().contains("docker.sock")
+                        || mount.target.to_string_lossy().contains("docker.sock")
+                    {
+                        reasons.push("Docker socket mounts are not supported".to_string());
+                    }
+                }
+                if e.sandbox.workdir.as_ref().is_some_and(|p| !p.is_absolute()) {
+                    reasons.push("Docker workdir must be absolute".to_string());
+                }
+            }
+            errs.extend(
+                reasons
+                    .into_iter()
+                    .map(|reason| ValidationError::InvalidExecution {
+                        agent: h.id(),
+                        reason,
+                    }),
+            );
+        }
         // Tmux replaces dots in session names with underscores. Check the
         // same normalized namespace as tmux as well as the artifact stem.
         let name = format!("{}-{}", h.project, h.agent).replace('.', "_");
@@ -314,6 +380,18 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
     {
         let name = format!("bot-{}-{}", h.project, h.agent).replace('.', "_");
         let identity = format!("bot:{}", h.id());
+        if let Some(first) = derived_names.insert(name.clone(), identity.clone()) {
+            errs.push(ValidationError::DerivedNameCollision {
+                name,
+                first,
+                second: identity,
+            });
+        }
+    }
+
+    for interface in compose.global.interfaces.iter().filter(|i| i.is_telegram()) {
+        let name = format!("bot-interface-{}", interface.instance_id()).replace('.', "_");
+        let identity = format!("interface:{}", interface.instance_id());
         if let Some(first) = derived_names.insert(name.clone(), identity.clone()) {
             errs.push(ValidationError::DerivedNameCollision {
                 name,
@@ -351,6 +429,62 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
         });
     }
 
+    let mut interface_ids = BTreeSet::from(["web"]);
+    let known_agents: BTreeSet<_> = compose.agents().map(|a| a.id()).collect();
+    for interface in &compose.global.interfaces {
+        let id = interface.instance_id();
+        if !is_valid_id(id) || !interface_ids.insert(id) {
+            errs.push(ValidationError::Interface(format!(
+                "ID `{id}` must be unique, valid and not reserved web"
+            )));
+        }
+        if interface.name.trim().is_empty()
+            || interface.name.len() > 128
+            || interface.description.len() > 1024
+        {
+            errs.push(ValidationError::Interface(format!(
+                "`{id}` needs a name <=128 bytes and description <=1024 bytes"
+            )));
+        }
+        if interface.is_telegram()
+            && (interface.agent().is_none()
+                || interface.bot_token_env().is_none()
+                || interface
+                    .authorized_chat_ids_env()
+                    .or_else(|| {
+                        interface
+                            .config
+                            .get("chat_ids_env")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    })
+                    .is_none())
+        {
+            errs.push(ValidationError::Interface(format!(
+                "Telegram `{id}` requires config.agent, bot_token_env and authorized_chat_ids_env"
+            )));
+        }
+        if let Some(agent) = interface.agent() {
+            if !known_agents.contains(&agent) {
+                errs.push(ValidationError::Interface(format!(
+                    "`{id}` targets unknown agent `{agent}`"
+                )));
+            }
+        }
+    }
+    for agent in compose.agents() {
+        if let Some(interfaces) = &agent.spec.interfaces {
+            for id in &interfaces.instances {
+                if !interface_ids.contains(id.as_str()) {
+                    errs.push(ValidationError::Interface(format!(
+                        "`{}` references unknown interface `{id}`",
+                        agent.id()
+                    )));
+                }
+            }
+        }
+    }
+
     let mut seen_projects = BTreeSet::new();
     for p in &compose.projects {
         if !seen_projects.insert(p.project.id.clone()) {
@@ -382,6 +516,25 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
         }
         let all_agents: BTreeSet<&str> = mgr_ids.union(&wrk_ids).copied().collect();
 
+        for start in &all_agents {
+            let mut visited = BTreeSet::new();
+            let mut current = Some(*start);
+            while let Some(id) = current {
+                if !visited.insert(id) {
+                    errs.push(ValidationError::Hierarchy(format!(
+                        "{}:{start} has a reports_to cycle through `{id}`",
+                        p.project.id
+                    )));
+                    break;
+                }
+                current = p
+                    .managers
+                    .get(id)
+                    .or_else(|| p.workers.get(id))
+                    .and_then(|a| a.reports_to.as_deref());
+            }
+        }
+
         // Channel members reference known agents.
         let channel_names: BTreeSet<&str> = p.channels.iter().map(|c| c.name.as_str()).collect();
         for ch in &p.channels {
@@ -402,13 +555,7 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
         let check_agent = |errs: &mut Vec<ValidationError>,
                            id: &str,
                            a: &crate::compose::Agent,
-                           is_manager: bool| {
-            if a.telegram().is_some() && !is_manager {
-                errs.push(ValidationError::TelegramInboxOnWorker {
-                    project: p.project.id.clone(),
-                    agent: id.into(),
-                });
-            }
+                           _is_manager: bool| {
             for t in &a.can_dm {
                 if !all_agents.contains(t.as_str()) {
                     errs.push(ValidationError::DmUnknownTarget {
@@ -428,7 +575,7 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
                 }
             }
             if let Some(t) = &a.reports_to {
-                if !mgr_ids.contains(t.as_str()) {
+                if !all_agents.contains(t.as_str()) {
                     errs.push(ValidationError::UnknownManager {
                         project: p.project.id.clone(),
                         agent: id.into(),
@@ -475,6 +622,14 @@ pub fn validate(compose: &Compose) -> Vec<ValidationError> {
             // injected on every agent. A declared server of the same name
             // would shadow the bus, so reject it at validate (render also
             // skips it defensively).
+            for (name, server) in &a.mcps {
+                if let Err(reason) = crate::mcp::validate_server(server) {
+                    errs.push(ValidationError::Mcp(format!(
+                        "{}:{id}/{name}: {reason}",
+                        p.project.id
+                    )));
+                }
+            }
             if a.mcps.contains_key("team") {
                 errs.push(ValidationError::ReservedMcpServerName {
                     project: p.project.id.clone(),
@@ -626,6 +781,7 @@ mod tests {
         managers.insert(
             "mgr".into(),
             Agent {
+                execution: None,
                 runtime: "claude-code".into(),
                 model: Some("claude-opus-4-8".into()),
                 role_prompt: None,
@@ -649,6 +805,7 @@ mod tests {
         workers.insert(
             "dev".into(),
             Agent {
+                execution: None,
                 runtime: "claude-code".into(),
                 model: None,
                 role_prompt: None,
@@ -671,6 +828,7 @@ mod tests {
         Compose {
             root: PathBuf::from("."),
             global: Global {
+                web: Default::default(),
                 version: crate::compose::SchemaVersion::new("2.0.0"),
                 broker: Default::default(),
                 supervisor: Default::default(),
@@ -806,6 +964,10 @@ mod tests {
         mcps.insert(
             "team".into(),
             crate::compose::McpServer {
+                url: None,
+                bearer_token_env_var: None,
+                env_http_headers: Default::default(),
+                env_vars: vec![],
                 command: "evil".into(),
                 args: vec![],
                 env: Default::default(),
@@ -825,6 +987,10 @@ mod tests {
         mcps.insert(
             "github".into(),
             crate::compose::McpServer {
+                url: None,
+                bearer_token_env_var: None,
+                env_http_headers: Default::default(),
+                env_vars: vec![],
                 command: "npx".into(),
                 args: vec![],
                 env: Default::default(),
@@ -1202,6 +1368,10 @@ mod tests {
     /// An `mcps:` server whose env carries a `${VAR}` placeholder.
     fn github_mcp_with_placeholder() -> crate::compose::McpServer {
         crate::compose::McpServer {
+            url: None,
+            bearer_token_env_var: None,
+            env_http_headers: Default::default(),
+            env_vars: vec![],
             command: "npx".into(),
             args: vec!["-y".into(), "@modelcontextprotocol/server-github".into()],
             env: [("GITHUB_TOKEN".to_string(), "${GITHUB_TOKEN}".to_string())]

@@ -65,6 +65,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Open the private browser workspace for every configured agent.
+    Serve(cmd::serve::Args),
+
+    /// Internal native agent worker, launched by the process supervisor.
+    #[command(hide = true)]
+    AgentRun {
+        target: String,
+        #[arg(long, hide = true)]
+        worker_token: String,
+    },
     // ── Setup ────────────────────────────────────────────────────────
     /// Scaffold a fresh `.team/` directory.
     ///
@@ -75,9 +85,9 @@ enum Command {
         /// Folder name to create. Doubles as the default project id.
         /// When omitted, scaffolds `.team/` directly in cwd.
         name: Option<String>,
-        /// Template name. Known: `guided`, `essentials`, `blank`. With
-        /// `--yes`, defaults to `essentials`; without, the interactive
-        /// picker defaults to `guided`. `--template guided --yes` is
+        /// Template name. Known: `personal`, `guided`, `blank`. With
+        /// `--yes`, defaults to `personal`; without, the interactive
+        /// picker defaults to `personal`. `--template guided --yes` is
         /// an error — `guided` requires interactive confirmation.
         #[arg(long)]
         template: Option<String>,
@@ -192,7 +202,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Tail an agent's tmux pane scrollback.
+    /// Show an agent's native worker log or interactive tmux scrollback.
     Logs { target: String },
     /// Live message stream for an agent (-f to follow).
     Tail {
@@ -508,6 +518,11 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
+        Command::Serve(args) => cmd::serve::run(&root, args),
+        Command::AgentRun {
+            target,
+            worker_token,
+        } => cmd::agent_run::run(&root, &target, &worker_token),
         Command::Validate => cmd::validate::run(&root),
         Command::Up { scope, fresh } => {
             let sel = cmd::agent_filter::AgentSelector::from_args(scope.agents, scope.except);

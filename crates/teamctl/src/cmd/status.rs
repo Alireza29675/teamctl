@@ -1,17 +1,17 @@
 use std::path::Path;
 
 use anyhow::Result;
-use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
+use team_core::supervisor::{AgentSpec, AgentState, AgentSupervisor, Supervisor};
 
 pub fn run(root: &Path) -> Result<()> {
     let compose = super::load(root)?;
     super::update_check::maybe_print_banner(&compose.root);
-    let sup = TmuxSupervisor;
+    let sup = AgentSupervisor;
     let depth = inbox_depths(&compose)?;
 
     println!(
         "{:<28} {:<10} {:<14} {:<18} INBOX",
-        "AGENT", "MANAGER", "STATE", "TMUX",
+        "AGENT", "RUNTIME", "STATE", "EXECUTION",
     );
     for h in compose.agents() {
         let spec = AgentSpec::from_handle(h, &compose.root, &compose.global.supervisor.tmux_prefix);
@@ -24,9 +24,17 @@ pub fn run(root: &Path) -> Result<()> {
         println!(
             "{:<28} {:<10} {:<14} {:<18} {}",
             h.id(),
-            if h.is_manager { "yes" } else { "" },
+            h.spec.runtime,
             state,
-            spec.tmux_session,
+            if h.spec
+                .execution
+                .as_ref()
+                .is_some_and(|e| e.mode == team_core::compose::ExecutionMode::Native)
+            {
+                "native".to_string()
+            } else {
+                spec.tmux_session
+            },
             n,
         );
     }

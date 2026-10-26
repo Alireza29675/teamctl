@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use rusqlite::{params, Connection};
 use teloxide::prelude::*;
 use teloxide::types::ParseMode;
 
 use crate::{
+    chat::{inbound_message, lookup_replied_row, record_text},
     media::handle_inbound_media,
     render::{html_escape_str, render_html},
     repository::{active_approvals, agent_runtime, should_route},
@@ -61,43 +61,6 @@ pub(super) fn truncate_quote(text: &str) -> String {
     out
 }
 
-/// Reverse of `team-mcp`'s `resolve_telegram_msg_id` (#168): find the mailbox
-/// row (id + sender) a Telegram message id belongs to, for the inbound reply
-/// prefix (#334). `None` when no row carries that id (e.g. a message older than
-/// the bot's history); a real query error is warn-logged and also degrades to
-/// `None`, mirroring the forward path's warn-and-degrade.
-///
-/// Telegram message ids are per-CHAT, and one bot can serve several chats into
-/// the shared mailbox, which stores no chat id — so two chats can hold rows
-/// with the same `telegram_msg_id`. `ORDER BY id DESC LIMIT 1` resolves to the
-/// most recent, which can be the wrong chat's row on a collision. That is
-/// tolerated on purpose: this lookup only supplies the header's sender label
-/// and `msg <id>` handle; the quoted *text* the agent reads comes from the live
-/// `reply_to_message`/`quote` on the inbound update, never from this row. So a
-/// collision mislabels the header (cosmetic, recoverable), never the content.
-/// Scoping by chat would need a schema change (persist a chat id) and is out of
-/// this ticket's lane. The `ORDER BY id DESC` is load-bearing — see the
-/// collision test.
-pub(super) fn lookup_replied_row(conn: &Connection, telegram_msg_id: i64) -> Option<(i64, String)> {
-    match conn.query_row(
-        "SELECT id, sender FROM messages WHERE telegram_msg_id = ?1
-         AND (kind IS NULL OR kind != 'media_pending') ORDER BY id DESC LIMIT 1",
-        params![telegram_msg_id],
-        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
-    ) {
-        Ok(row) => Some(row),
-        Err(rusqlite::Error::QueryReturnedNoRows) => None,
-        Err(e) => {
-            tracing::warn!(
-                telegram_msg_id,
-                error = %e,
-                "inbound reply: mailbox lookup failed; quoting without a row id"
-            );
-            None
-        }
-    }
-}
-
 /// Classify a replied-to message's sender from the Telegram `from.is_bot` flag:
 /// a bot account is an agent's outbound message, a human is the operator, an
 /// absent sender (channel / anonymous admin) is unknown. Pure so the three
@@ -133,10 +96,19 @@ pub(super) async fn resolve_reply_context(msg: &Message, state: &State) -> Optio
         Some(r) => {
             let row = {
                 let c = state.conn.lock().await;
-                lookup_replied_row(&c, r.id.0 as i64)
+                lookup_replied_row(
+                    &c,
+                    &state.adapter_id(),
+                    &msg.chat.id.0.to_string(),
+                    i64::from(r.id.0),
+                )
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "inbound reply lookup failed");
+                    None
+                })
             };
             match row {
-                Some((id, sender)) => (sender, Some(id)),
+                Some((id, sender)) => (sender, id),
                 None => (telegram_sender_label(r), None),
             }
         }
@@ -246,29 +218,29 @@ pub(super) async fn handle_message(
     // emoji reactions. T-168 also has the store look it up server-side
     // when an agent's `reply_to_user.reply_to_message_id` (= a mailbox
     // id) references this row, resolving to the value persisted here.
-    let inbound_msg_id: i64 = msg.id.0 as i64;
     // #334: when the user tap-replied to (or quoted) an earlier message,
     // resolve that context once so every mailbox-writing arm below can prefix
     // the body with it. `None` for an ordinary message (no extra DB work).
     let reply_ctx = resolve_reply_context(&msg, &state).await;
     if let Some(rest) = trimmed.strip_prefix("/dm ") {
         if let Some((target, body)) = rest.split_once(' ') {
-            if let Some((project, _)) = target.split_once(':') {
+            if target.split_once(':').is_some() {
                 // T-104: `/readnow ` on the body bypasses lazy delivery so
                 // the message lands inline in the agent's input stream
                 // instead of as a stub. Single-space-separated, case-
                 // sensitive prefix; stripped before insert.
                 let (body, delivery_mode) = peel_readnow(body);
                 let body = build_inbound_body(body, reply_ctx.as_ref());
-                let c = state.conn.lock().await;
-                let inserted = c.execute(
-                    "INSERT INTO messages
-                        (project_id, sender, recipient, text, sent_at, telegram_msg_id, delivery_mode)
-                     VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4, ?5)",
-                    params![project, target, body, inbound_msg_id, delivery_mode],
-                );
-                drop(c);
-                confirm_inbound(&bot, msg.chat.id, inserted, format!("→ {target}")).await?;
+                forward_text_to(
+                    &bot,
+                    &msg,
+                    &state,
+                    target,
+                    &body,
+                    delivery_mode,
+                    format!("→ {target}"),
+                )
+                .await?;
             }
         }
     } else if !trimmed.is_empty() && !trimmed.starts_with('/') && state.manager.is_some() {
@@ -277,17 +249,18 @@ pub(super) async fn handle_message(
         // mapping is that DMing the bot reaches the matching manager
         // without `/dm role text` ceremony.
         let target = state.manager.as_deref().unwrap();
-        if let Some((project, _)) = target.split_once(':') {
+        if target.split_once(':').is_some() {
             let body = build_inbound_body(trimmed, reply_ctx.as_ref());
-            let c = state.conn.lock().await;
-            let inserted = c.execute(
-                "INSERT INTO messages
-                    (project_id, sender, recipient, text, sent_at, telegram_msg_id)
-                 VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4)",
-                params![project, target, body, inbound_msg_id],
-            );
-            drop(c);
-            confirm_inbound(&bot, msg.chat.id, inserted, format!("→ {target}")).await?;
+            forward_text_to(
+                &bot,
+                &msg,
+                &state,
+                target,
+                &body,
+                None,
+                format!("→ {target}"),
+            )
+            .await?;
         }
     } else if trimmed.starts_with("/readnow ") && state.manager.is_some() {
         // T-104: plain-text `/readnow ` on a manager-scoped bot. Strip the
@@ -298,19 +271,18 @@ pub(super) async fn handle_message(
         // with `/` as a slash command.
         let target = state.manager.as_deref().unwrap();
         let (body, delivery_mode) = peel_readnow(trimmed);
-        if !body.is_empty() {
-            if let Some((project, _)) = target.split_once(':') {
-                let body = build_inbound_body(body, reply_ctx.as_ref());
-                let c = state.conn.lock().await;
-                let inserted = c.execute(
-                    "INSERT INTO messages
-                        (project_id, sender, recipient, text, sent_at, telegram_msg_id, delivery_mode)
-                     VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4, ?5)",
-                    params![project, target, body, inbound_msg_id, delivery_mode],
-                );
-                drop(c);
-                confirm_inbound(&bot, msg.chat.id, inserted, format!("→ {target} (now)")).await?;
-            }
+        if !body.is_empty() && target.split_once(':').is_some() {
+            let body = build_inbound_body(body, reply_ctx.as_ref());
+            forward_text_to(
+                &bot,
+                &msg,
+                &state,
+                target,
+                &body,
+                delivery_mode,
+                format!("→ {target} (now)"),
+            )
+            .await?;
         }
     } else if trimmed == "/pending" {
         let rows = {
@@ -363,7 +335,13 @@ pub(super) async fn handle_message(
             .manager
             .as_deref()
             .map(|mgr| state.manager_display_name.as_deref().unwrap_or(mgr));
-        let body = start_help_body(trimmed == "/help", name);
+        let body = if trimmed == "/help" && state.interface_id.is_some() {
+            format!("teamctl commands:\n/pending — show pending approvals\n\nType normally to chat with {}. This named interface connects directly to this agent. Use the web workspace to reach other agents.{}",name.unwrap_or("your agent"),if state.scoped_native().unwrap_or(true) {" Runtime terminal slash commands are unavailable for native agents."} else {""})
+        } else if trimmed == "/help" && state.scoped_native().unwrap_or(true) {
+            format!("teamctl commands:\n/pending — show pending approvals\n/dm <project>:<agent> <text> — message an agent\n\nType normally to chat with {}. Runtime terminal slash commands are unavailable for native agents; use the web workspace for inspection.",name.unwrap_or("your agent"))
+        } else {
+            start_help_body(trimmed == "/help", name)
+        };
         bot.send_message(msg.chat.id, body).await?;
     } else if trimmed.starts_with('/') && state.manager.is_some() {
         // T-086-G slash-passthrough: any unrecognised slash command on a
@@ -374,6 +352,10 @@ pub(super) async fn handle_message(
         // owns the bot" per Decision 7 — no allowlist on slash content; the
         // bot is per-operator and chat-id-gated, the trust boundary is the
         // same as the operator's existing `tmux attach` access.
+        if state.scoped_native().unwrap_or(true) {
+            bot.send_message(msg.chat.id,"This agent uses native execution. Terminal slash commands are unavailable; send a normal message to the agent, or inspect it in the web workspace.").await?;
+            return Ok(());
+        }
         let manager = state.manager.as_deref().unwrap();
         let runtime_opt = {
             let c = state.conn.lock().await;
@@ -406,10 +388,38 @@ pub(super) async fn handle_message(
     Ok(())
 }
 
-pub(super) async fn confirm_inbound(
+async fn forward_text_to(
+    bot: &Bot,
+    msg: &Message,
+    state: &State,
+    target: &str,
+    body: &str,
+    delivery_mode: Option<&str>,
+    confirmation: String,
+) -> ResponseResult<()> {
+    if state.interface_id.is_some()
+        && state
+            .manager
+            .as_deref()
+            .is_some_and(|agent| agent != target)
+    {
+        bot.send_message(msg.chat.id,"This named interface connects directly to its configured agent. Use the web workspace or another agent interface to reach a different agent.").await?;
+        return Ok(());
+    }
+    let inserted = match inbound_message(state, msg, target, body, "text", None) {
+        Ok(inbound) => {
+            let conn = state.conn.lock().await;
+            record_text(&conn, inbound, i64::from(msg.id.0), delivery_mode).map(|_| 1)
+        }
+        Err(error) => Err(error),
+    };
+    confirm_inbound(bot, msg.chat.id, inserted, confirmation).await
+}
+
+pub(super) async fn confirm_inbound<E: std::fmt::Display>(
     bot: &Bot,
     chat: ChatId,
-    inserted: rusqlite::Result<usize>,
+    inserted: Result<usize, E>,
     confirmation: String,
 ) -> ResponseResult<()> {
     let body = match inserted {

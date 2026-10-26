@@ -26,6 +26,7 @@ pub fn render_opencode_config(
     if h.spec.runtime != "opencode" {
         return None;
     }
+    let team_mcp_bin = super::mcp::container_mcp_bin(h, team_mcp_bin);
     let mut mcp = serde_json::Map::new();
     mcp.insert(
         "team".into(),
@@ -42,7 +43,33 @@ pub fn render_opencode_config(
             }
             mcp.insert(
                 name.clone(),
-                opencode_mcp_server(&server.command, &server.args, &server.env),
+                if let Some(url) = &server.url {
+                    let mut headers = serde_json::Map::new();
+                    for (name, variable) in &server.env_http_headers {
+                        headers.insert(
+                            name.clone(),
+                            serde_json::json!(format!("{{env:{variable}}}")),
+                        );
+                    }
+                    if let Some(variable) = &server.bearer_token_env_var {
+                        headers.insert(
+                            "Authorization".into(),
+                            serde_json::json!(format!("Bearer {{env:{variable}}}")),
+                        );
+                    }
+                    let mut remote = serde_json::json!({"type":"remote","url":url,"enabled":true});
+                    if !headers.is_empty() {
+                        remote["headers"] = serde_json::json!(headers);
+                        remote["oauth"] = serde_json::json!(false);
+                    }
+                    remote
+                } else {
+                    let mut env = server.env.clone();
+                    for variable in &server.env_vars {
+                        env.insert(variable.clone(), format!("{{env:{variable}}}"));
+                    }
+                    opencode_mcp_server(&server.command, &server.args, &env)
+                },
             );
         }
     }

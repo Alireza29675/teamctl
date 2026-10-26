@@ -35,7 +35,7 @@ impl SchemaVersion {
     // T-265: current compose schema version; bump on any schema-affecting type change.
     // 2.0.1: doc-only — McpServer.env description now names the codex
     // `${VAR}` interpolation gap (see McpEnvInterpolationUnsupported).
-    pub const CURRENT: &str = "2.0.1";
+    pub const CURRENT: &str = "3.0.0";
 
     /// Construct directly from a semver-shaped string; for fixtures
     /// and tests + the in-memory legacy coercion.

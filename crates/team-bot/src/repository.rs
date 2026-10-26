@@ -79,6 +79,7 @@ pub(super) fn outgoing_messages(
     let mut stmt = conn.prepare(
         "SELECT id, sender, text, kind, structured_payload, telegram_msg_id FROM messages
          WHERE recipient='user:telegram' AND acked_at IS NULL
+           AND conversation_id IS NULL
            AND (kind IS NULL OR kind != 'media_pending')
            AND (?1 IS NULL OR project_id = ?1) ORDER BY id",
     )?;

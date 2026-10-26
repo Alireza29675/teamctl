@@ -2,9 +2,20 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{content_json, Ctx};
+use crate::store::chat::{ControlMessage, ControlResult};
 
 #[derive(Deserialize)]
 pub(super) struct ReplyToUserArgs {
+    #[serde(default)]
+    interface_id: Option<String>,
+    #[serde(default)]
+    html: Option<String>,
+    #[serde(default)]
+    audio: Option<MediaArg>,
+    #[serde(default)]
+    conversation_id: Option<String>,
+    #[serde(default)]
+    request_id: Option<String>,
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
@@ -13,13 +24,9 @@ pub(super) struct ReplyToUserArgs {
     file: Option<MediaArg>,
     #[serde(default)]
     thread_id: Option<String>,
-    /// Mailbox id of the inbound user message to thread under (T-168).
-    /// Agents pass the `meta.id` they see in the channel envelope; the
-    /// store resolves it to the row's Telegram message id at insert time
-    /// (`resolve_telegram_msg_id` in `store.rs`) and persists that for the
-    /// bot's outbound dispatcher to feed `reply_parameters` with. Applies
-    /// to all of `text` / `image` / `file` for this call — they all
-    /// visually nest under the same parent message.
+    /// Inbound mailbox `meta.id` pins the human conversation and quoted
+    /// provider message for every part of this reply. Legacy Telegram rows
+    /// resolve their stored Telegram ID without acquiring a modern route.
     #[serde(default)]
     reply_to_message_id: Option<i64>,
 }
@@ -39,18 +46,16 @@ pub(super) enum MediaSource {
     Url,
 }
 
-/// Per-file size cap matching Telegram's bot-API ceiling for photo/document
-/// uploads. URLs bypass the local check — Telegram will validate on its end.
+/// Shared local-media cap preserving the existing Telegram upload policy.
+/// URL sources are passed to the destination adapter without fetching here.
 pub(super) const MEDIA_MAX_BYTES: u64 = 50 * 1024 * 1024;
 
 /// Telegram Bot API caps a single text message at 4096 and a media caption
 /// at 1024. The unit is **UTF-16 code units**, not bytes or Unicode
 /// scalars — the same unit Telegram uses for entity offsets (a non-BMP
-/// emoji counts as 2, most CJK/Latin chars as 1). We reject above these at
-/// the MCP boundary so the agent gets an actionable error: the bot's
-/// outbound dispatch only `warn`-logs Telegram's rejection (#168), which
-/// is invisible to the agent — it already holds an OK from this tool and
-/// moves on. Limits per Telegram Bot API as of 2026-05 (`sendMessage`
+/// emoji counts as 2, most CJK/Latin chars as 1). Rejecting these at the
+/// MCP boundary lets the agent correct its content before enqueueing.
+/// Limits per Telegram Bot API as of 2026-05 (`sendMessage`
 /// text, `sendPhoto`/`sendDocument` caption). Bump here if Telegram
 /// changes them. #252.
 pub(super) const MAX_TELEGRAM_TEXT_LEN: usize = 4096;
@@ -132,29 +137,109 @@ pub(super) fn payload_json(m: &MediaArg) -> String {
 
 pub(super) async fn reply_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
     let a: ReplyToUserArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+    let text_present = a.text.as_deref().is_some_and(|t| !t.is_empty());
+    if !text_present
+        && a.image.is_none()
+        && a.file.is_none()
+        && a.html.is_none()
+        && a.audio.is_none()
+    {
+        return Err("reply_to_user: at least one of `text`, `image`, `file` must be set".into());
+    }
+    let selected = a
+        .interface_id
+        .as_deref()
+        .map(|id| ctx.store.select_interface(&ctx.agent_id, id))
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    if a.conversation_id
+        .as_ref()
+        .zip(selected.as_ref())
+        .is_some_and(|(a, b)| a != b)
+    {
+        return Err("interface_id and conversation_id refer to different routes".into());
+    }
+    let conversation = a.conversation_id.as_deref().or(selected.as_deref());
+    let mut parts = Vec::new();
+    if a.html.as_ref().is_some_and(|html| html.len() > 64 * 1024) {
+        return Err("HTML component exceeds64KiB; attach a file instead".into());
+    }
+    if let Some(html) = &a.html {
+        parts.push(crate::store::chat::ReplyPart {
+            text: String::new(),
+            kind: "html",
+            payload: Some(json!({"html":html})),
+        });
+    }
+    if let Some(audio) = &a.audio {
+        parts.push(crate::store::chat::ReplyPart {
+            text: audio.caption.clone().unwrap_or_default(),
+            kind: "audio",
+            payload: Some(serde_json::from_str(&payload_json(audio)).map_err(|e| e.to_string())?),
+        });
+    }
+    if text_present {
+        parts.push(crate::store::chat::ReplyPart {
+            text: a.text.clone().unwrap_or_default(),
+            kind: "text",
+            payload: None,
+        });
+    }
+    for (kind, media) in [("image", &a.image), ("file", &a.file)] {
+        if let Some(media) = media {
+            parts.push(crate::store::chat::ReplyPart {
+                text: media.caption.clone().unwrap_or_default(),
+                kind,
+                payload: Some(
+                    serde_json::from_str(&payload_json(media)).map_err(|e| e.to_string())?,
+                ),
+            });
+        }
+    }
+    if let Some(messages) = ctx
+        .store
+        .reply_chat_prepared(
+            &ctx.agent_id,
+            conversation,
+            a.reply_to_message_id,
+            a.request_id.as_deref(),
+            &parts,
+            || {
+                validate_reply_media(&a.image, &a.file).map_err(anyhow::Error::msg)?;
+                if let Some(audio) = &a.audio {
+                    validate_media("audio", audio).map_err(anyhow::Error::msg)?;
+                }
+                Ok(())
+            },
+            |conn, route, parts| prepare_web_media(ctx, conn, route, parts),
+        )
+        .map_err(|e| e.to_string())?
+    {
+        let ids: Vec<_> = messages.iter().map(|m| m.id).collect();
+        return Ok(content_json(
+            &json!({"id":ids.first().copied().unwrap_or(0),"ids":ids,"chat_message_ids":ids,"conversation_id":messages.first().map(|m|&m.conversation_id),"recipient":"human"}),
+        ));
+    }
+    if a.html.is_some() || a.audio.is_some() || a.interface_id.is_some() {
+        return Err("selected interface has no usable conversation route".into());
+    }
+    // Legacy, unaddressed Telegram calls retain their manager-only behavior.
     if !ctx
         .store
         .is_manager(&ctx.agent_id)
         .map_err(|e| e.to_string())?
     {
         return Err(format!(
-            "reply_to_user: only managers can reply to the user (caller={})",
+            "reply_to_user: only managers can use an unaddressed legacy reply (caller={})",
             ctx.agent_id
         ));
     }
-    let text_present = a.text.as_deref().is_some_and(|t| !t.is_empty());
-    if !text_present && a.image.is_none() && a.file.is_none() {
-        return Err("reply_to_user: at least one of `text`, `image`, `file` must be set".into());
+    if a.request_id.is_some() {
+        return Err("request_id requires a human conversation route; provide conversation_id or an addressed inbound message".into());
     }
-    if let Some(m) = &a.image {
-        validate_media("image", m)?;
-    }
-    if let Some(m) = &a.file {
-        validate_media("file", m)?;
-    }
-    // Length-gate before any row insert. Telegram silent-drops oversized
-    // content and the bot only warn-logs that (#168) — reject here so the
-    // agent sees an actionable error instead of a false success. #252.
+    validate_reply_media(&a.image, &a.file)?;
+    // Reject oversized legacy content before any row insert, so the agent
+    // can correct a multipart request without leaving a partial delivery.
     if let Some(t) = a.text.as_deref() {
         check_telegram_len("text", t, MAX_TELEGRAM_TEXT_LEN)?;
     }
@@ -222,6 +307,15 @@ pub(super) async fn reply_to_user(ctx: &Ctx, args: Value) -> Result<Value, Strin
     Ok(content_json(
         &json!({ "id": first, "ids": ids, "recipient": recipient }),
     ))
+}
+
+fn validate_reply_media(image: &Option<MediaArg>, file: &Option<MediaArg>) -> Result<(), String> {
+    for (kind, media) in [("image", image), ("file", file)] {
+        if let Some(media) = media {
+            validate_media(kind, media)?;
+        }
+    }
+    Ok(())
 }
 
 /// Allowed bot-reaction emoji per Telegram's free-tier `setMessageReaction`
@@ -307,18 +401,42 @@ pub(super) const BOT_REACTION_ALLOWLIST: &[&str] = &[
     "😡",
 ];
 
-pub(super) fn is_allowed_reaction(emoji: &str) -> bool {
+pub(crate) fn is_allowed_reaction(emoji: &str) -> bool {
     BOT_REACTION_ALLOWLIST.contains(&emoji)
 }
 
 #[derive(Deserialize)]
 pub(super) struct ReactToUserArgs {
-    telegram_msg_id: i64,
+    #[serde(default)]
+    telegram_msg_id: Option<i64>,
+    #[serde(default)]
+    message_id: Option<i64>,
+    #[serde(default)]
+    conversation_id: Option<String>,
     emoji: String,
 }
 
 pub(super) async fn react_to_user(ctx: &Ctx, args: Value) -> Result<Value, String> {
     let a: ReactToUserArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+    let telegram_msg_id = match ctx
+        .store
+        .chat_control(
+            &ctx.agent_id,
+            a.conversation_id.as_deref(),
+            a.message_id,
+            ControlMessage::Reaction {
+                emoji: &a.emoji,
+                telegram_message_id: a.telegram_msg_id,
+            },
+        )
+        .map_err(|e| e.to_string())?
+    {
+        ControlResult::Modern(result) => return Ok(content_json(&result)),
+        ControlResult::Legacy {
+            telegram_message_id,
+        } => telegram_message_id
+            .ok_or("legacy reaction needs telegram_msg_id; new conversations use message_id")?,
+    };
     if !ctx
         .store
         .is_manager(&ctx.agent_id)
@@ -345,7 +463,7 @@ pub(super) async fn react_to_user(ctx: &Ctx, args: Value) -> Result<Value, Strin
     // (e.g. if a non-Telegram interface adapter ever needs to render
     // reactions as inline text).
     let payload = json!({
-        "telegram_msg_id": a.telegram_msg_id,
+        "telegram_msg_id": telegram_msg_id,
         "emoji": a.emoji,
     })
     .to_string();
@@ -363,18 +481,40 @@ pub(super) async fn react_to_user(ctx: &Ctx, args: Value) -> Result<Value, Strin
         )
         .map_err(|e| e.to_string())?;
     Ok(content_json(
-        &json!({ "id": id, "recipient": recipient, "telegram_msg_id": a.telegram_msg_id, "emoji": a.emoji }),
+        &json!({ "id": id, "recipient": recipient, "telegram_msg_id": telegram_msg_id, "emoji": a.emoji }),
     ))
 }
 
-/// T-102: open or extend a Telegram "typing…" window for the operator's
-/// chat. Like `reply_to_user` and `react_to_user`, the actual Telegram
-/// call happens in `team-bot`; this side just appends a discriminator
-/// row to the mailbox. The bot's outbound dispatcher reads
-/// `kind = "typing"` and refreshes `sendChatAction` until either a
-/// text/image/file row from the same agent path lands (which clears the
-/// window) or a 10-second ceiling expires.
-pub(super) async fn show_typing(ctx: &Ctx) -> Result<Value, String> {
+/// Open a bounded typing window in an authorized human conversation.
+/// Adapters consume the control and expiry from the shared delivery queue;
+/// legacy Telegram calls retain their existing mailbox discriminator.
+pub(super) async fn show_typing(ctx: &Ctx, args: Value) -> Result<Value, String> {
+    #[derive(Deserialize)]
+    struct Address {
+        #[serde(default)]
+        conversation_id: Option<String>,
+        #[serde(default)]
+        reply_to_message_id: Option<i64>,
+    }
+    let address: Address = serde_json::from_value(if args.is_null() { json!({}) } else { args })
+        .map_err(|e| e.to_string())?;
+    let expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+        + 10.0;
+    if let ControlResult::Modern(result) = ctx
+        .store
+        .chat_control(
+            &ctx.agent_id,
+            address.conversation_id.as_deref(),
+            address.reply_to_message_id,
+            ControlMessage::Typing { expires_at },
+        )
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(content_json(&result));
+    }
     if !ctx
         .store
         .is_manager(&ctx.agent_id)
@@ -397,8 +537,80 @@ pub(super) async fn show_typing(ctx: &Ctx) -> Result<Value, String> {
             None,
             "typing",
             "{}",
-            None,
+            address.reply_to_message_id,
         )
         .map_err(|e| e.to_string())?;
     Ok(content_json(&json!({ "id": id, "recipient": recipient })))
+}
+
+fn prepare_web_media(
+    ctx: &Ctx,
+    conn: &rusqlite::Connection,
+    route: &team_core::chat::Conversation,
+    parts: &mut [crate::store::chat::ReplyPart],
+) -> anyhow::Result<()> {
+    if team_core::interfaces::get(conn, &route.adapter_id)?.is_none_or(|i| i.provider != "web") {
+        return Ok(());
+    }
+    // Validate and capture every source before writing any cache file. A later
+    // rejected part cannot leave a partial multipart upload behind.
+    let mut captured = Vec::new();
+    for (index, part) in parts.iter().enumerate() {
+        if !matches!(part.kind, "image" | "file" | "audio") {
+            continue;
+        }
+        let payload = part
+            .payload
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("media payload missing"))?;
+        if payload["source"] != "path" {
+            anyhow::bail!("Web attachments require a local path; download remote content into the agent workspace first");
+        }
+        let path = std::path::Path::new(
+            payload["value"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("media path missing"))?,
+        );
+        let attachments=ctx.attachments.as_ref().ok_or_else(||anyhow::anyhow!("Web media requires the compose root and attachment policy; start team-mcp with --root"))?;
+        let bytes = team_core::attachments::check_and_read(
+            &attachments.cfg,
+            path,
+            attachments.scanner.as_deref(),
+        )
+        .map_err(|reason| anyhow::anyhow!(reason.human()))?;
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("attachment")
+            .to_string();
+        captured.push((index, bytes, name));
+    }
+    if captured.is_empty() {
+        return Ok(());
+    }
+    let attachments = ctx
+        .attachments
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("attachment policy missing"))?;
+    let config = team_core::compose::Compose::load_read_only(&attachments.compose_root)?
+        .global
+        .web;
+    if captured
+        .iter()
+        .any(|(_, bytes, _)| bytes.len() as u64 > config.max_upload_bytes)
+    {
+        anyhow::bail!("asset exceeds configured upload limit");
+    }
+    for (index, bytes, name) in captured {
+        let asset = team_core::web_assets::cache_bytes(
+            conn,
+            &attachments.compose_root,
+            &bytes,
+            &name,
+            team_core::web_assets::mime_from_name(&name),
+            config.max_upload_bytes,
+        )?;
+        parts[index].payload = Some(json!({"attachments":[asset]}));
+    }
+    Ok(())
 }

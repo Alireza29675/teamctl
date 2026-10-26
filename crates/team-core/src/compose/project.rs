@@ -9,10 +9,11 @@ pub struct Project {
     #[serde(default)]
     pub channels: Vec<Channel>,
 
-    #[serde(default)]
+    #[serde(default, rename = "agents", alias = "managers")]
     pub managers: BTreeMap<String, Agent>,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(skip)]
     pub workers: BTreeMap<String, Agent>,
 
     /// Project-scoped human-facing interfaces (#132 PR-1). Mirrors the
@@ -130,15 +131,28 @@ pub struct HookSpec {
 
 /// One per-agent MCP server declared in compose (#383 Phase 4).
 ///
-/// Serializes straight into the runtime's MCP config entry — `command` /
-/// `args` / `env` map onto the same shape the built-in `team` server
-/// emits. The HTTP (`url` / `headers`) transport variant is deferred
-/// (spike E2) until a concrete need lands.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// Choose a local stdio command or a remote Streamable HTTP URL.
+/// Authentication uses environment variable names, translated into the
+/// runtime-native reference syntax without resolving credentials to disk.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct McpServer {
     /// Executable that launches the MCP server, resolved on `$PATH` by
     /// the runtime (e.g. `npx`, `docker`).
+    #[serde(default)]
     pub command: String,
+
+    /// Streamable HTTP endpoint. Use instead of command/args/env.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Environment variable containing an access token. No secret is rendered.
+    #[serde(default)]
+    pub bearer_token_env_var: Option<String>,
+    /// HTTP header name to environment variable name (the complete header value).
+    #[serde(default)]
+    pub env_http_headers: BTreeMap<String, String>,
+    /// Environment variable names forwarded to a local stdio MCP server.
+    #[serde(default)]
+    pub env_vars: Vec<String>,
 
     /// Arguments passed to `command`. Empty (the default) → `[]`.
     #[serde(default)]
@@ -155,6 +169,9 @@ pub struct McpServer {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Agent {
+    /// Execution driver and explicit sandbox/authentication policy.
+    #[serde(default)]
+    pub execution: Option<Execution>,
     #[serde(default = "default_runtime")]
     pub runtime: String,
     pub model: Option<String>,
@@ -271,6 +288,9 @@ pub struct Agent {
 /// `discord:` / `imessage:` later is a strictly-additive YAML edit.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct AgentInterfaces {
+    /// IDs of named global interface instances available to this agent.
+    #[serde(default)]
+    pub instances: Vec<String>,
     /// 1:1 Telegram bot for this manager. When set, `teamctl up`
     /// spawns a `team-bot` tmux session scoped to this manager so the
     /// human DMs the bot directly (no `/dm role text` required).
@@ -473,4 +493,81 @@ fn default_runtime() -> String {
 
 fn default_autonomy() -> String {
     "low_risk_only".into()
+}
+
+/// Agent execution policy. Native drivers run one provider CLI turn at a time.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Execution {
+    #[serde(default)]
+    pub wake_interval_seconds: Option<u64>,
+    #[serde(default = "default_turn_timeout_seconds")]
+    pub turn_timeout_seconds: u64,
+    #[serde(default)]
+    pub mode: ExecutionMode,
+    #[serde(default)]
+    pub sandbox: Sandbox,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ExecutionMode {
+    Native,
+    #[default]
+    Tmux,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+pub struct Sandbox {
+    #[serde(default)]
+    pub r#type: SandboxType,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub mounts: Vec<Mount>,
+    /// Environment variable names forwarded at launch; never inline credentials.
+    #[serde(default)]
+    pub env: Vec<String>,
+    #[serde(default)]
+    pub workdir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SandboxType {
+    #[default]
+    Host,
+    Docker,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Mount {
+    pub source: PathBuf,
+    pub target: PathBuf,
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+fn default_turn_timeout_seconds() -> u64 {
+    300
+}
+impl Default for Execution {
+    fn default() -> Self {
+        Self {
+            mode: ExecutionMode::default(),
+            sandbox: Sandbox::default(),
+            wake_interval_seconds: None,
+            turn_timeout_seconds: default_turn_timeout_seconds(),
+        }
+    }
+}
+
+impl McpServer {
+    pub fn required_env_vars(&self) -> std::collections::BTreeSet<&str> {
+        self.env_vars
+            .iter()
+            .map(String::as_str)
+            .chain(self.bearer_token_env_var.iter().map(String::as_str))
+            .chain(self.env_http_headers.values().map(String::as_str))
+            .collect()
+    }
 }

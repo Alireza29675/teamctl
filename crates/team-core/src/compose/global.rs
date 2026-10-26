@@ -3,6 +3,8 @@ use super::*;
 /// Top-level `team-compose.yaml`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Global {
+    #[serde(default)]
+    pub web: WebConfig,
     pub version: SchemaVersion,
 
     #[serde(default)]
@@ -111,7 +113,14 @@ fn default_attachments_tempfile_ttl_seconds() -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Interface {
     /// Adapter type: `telegram`, `discord`, `imessage`, `cli`, `webhook`, ...
+    #[serde(rename = "provider", alias = "type")]
     pub r#type: String,
+    /// Stable instance ID, independent of its provider.
+    #[serde(default)]
+    pub id: String,
+    /// Human context included with every inbound message.
+    #[serde(default)]
+    pub description: String,
     /// Free-form name; used in logs and to route approvals.
     pub name: String,
     /// Adapter-specific config (bot token, channel id, allowlist, …).
@@ -124,13 +133,26 @@ pub struct Interface {
 }
 
 impl Interface {
+    pub fn instance_id(&self) -> &str {
+        if self.id.is_empty() {
+            &self.name
+        } else {
+            &self.id
+        }
+    }
+
+    pub fn agent(&self) -> Option<String> {
+        self.config_str("agent")
+            .or_else(|| self.config_str("manager"))
+    }
+
     pub fn is_telegram(&self) -> bool {
         self.r#type == "telegram"
     }
 
     /// `<project>:<manager>` this interface routes to, when set.
     pub fn manager(&self) -> Option<String> {
-        self.config_str("manager")
+        self.agent()
     }
 
     /// Env var name holding the bot token (e.g. `TEAMCTL_TG_PM_TOKEN`).
@@ -326,4 +348,40 @@ fn default_drain_timeout_secs() -> u64 {
 
 fn default_tmux_prefix() -> String {
     "a-".into()
+}
+
+/// Browser workspace policy. Retention applies to cached assets, not conversations.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WebConfig {
+    #[serde(default = "default_web_host")]
+    pub host: String,
+    #[serde(default = "default_web_port")]
+    pub port: u16,
+    /// Days to retain cached assets. null disables automatic cleanup.
+    #[serde(default = "default_web_retention")]
+    pub cache_retention_days: Option<u32>,
+    #[serde(default = "default_web_max_upload")]
+    pub max_upload_bytes: u64,
+}
+fn default_web_host() -> String {
+    "127.0.0.1".into()
+}
+fn default_web_port() -> u16 {
+    8787
+}
+fn default_web_retention() -> Option<u32> {
+    Some(30)
+}
+fn default_web_max_upload() -> u64 {
+    25 * 1024 * 1024
+}
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            host: default_web_host(),
+            port: default_web_port(),
+            cache_retention_days: default_web_retention(),
+            max_upload_bytes: default_web_max_upload(),
+        }
+    }
 }

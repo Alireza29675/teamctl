@@ -24,3 +24,10 @@ Cargo.lock.bak
 /docs/dist/
 /docs/.astro/
 /docs/node_modules/
+
+# Development fixtures and private personal notes
+/work/
+/workspace/*
+!/workspace/README.md
+/examples/personal-agent/workspace/*
+!/examples/personal-agent/workspace/README.md

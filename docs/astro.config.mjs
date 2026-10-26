@@ -54,7 +54,9 @@ export default defineConfig({
         {
           label: 'Guides',
           items: [
-            { label: 'Your first team', link: '/guides/first-team/' },
+            { label: 'Your first agent', link: '/guides/first-team/' },
+            { label: 'Browser workspace', link: '/guides/web-workspace/' },
+            { label: 'Native agents & containers', link: '/guides/native-agents/' },
             { label: 'Multi-runtime teams', link: '/guides/multi-runtime/' },
             { label: 'Existing MCP servers', link: '/guides/existing-mcps/' },
             { label: 'Telegram bot setup', link: '/guides/telegram-bot/' },

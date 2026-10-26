@@ -564,3 +564,34 @@ fn process_secret_bytes_rejects_invalid_utf8() {
     // rather than silently producing a lossy / corrupt token.
     assert!(process_secret_bytes(&[b'a', 0xff]).is_err());
 }
+
+#[test]
+fn named_telegram_instances_for_one_agent_have_independent_sessions_and_ids() {
+    let (_dir, mut compose) = crate::cmd::up::regression_tests::fixture();
+    compose.global.interfaces = serde_yaml::from_str(
+        r#"
+- id: home-bot
+  provider: telegram
+  name: Home
+  description: Personal requests
+  config: {agent: 'p:a', bot_token_env: HOME_TOKEN, authorized_chat_ids_env: HOME_CHATS}
+- id: work-bot
+  provider: telegram
+  name: Work
+  description: Work requests
+  config: {agent: 'p:a', bot_token_env: WORK_TOKEN, authorized_chat_ids_env: WORK_CHATS}
+"#,
+    )
+    .unwrap();
+    let specs = bot_specs(&compose);
+    assert_eq!(specs.len(), 2);
+    assert_eq!(specs[0].manager, "p:a");
+    assert_eq!(specs[1].manager, "p:a");
+    assert_ne!(specs[0].session, specs[1].session);
+    assert_eq!(specs[0].identity(), "p:a@home-bot");
+    assert_eq!(specs[1].identity(), "p:a@work-bot");
+    assert_eq!(
+        specs[1].interface_description.as_deref(),
+        Some("Work requests")
+    );
+}

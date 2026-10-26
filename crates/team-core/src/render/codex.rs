@@ -17,6 +17,7 @@ pub(super) const CODEX_PREAPPROVED_TEAM_TOOLS: &[&str] = &[
     "inbox_read",
     "inbox_watch",
     "list_team",
+    "list_interfaces",
     "org_chart",
     "react_to_user",
     "read_attachment",
@@ -55,6 +56,7 @@ pub fn render_codex_config(
     if h.spec.runtime != "codex" {
         return None;
     }
+    let team_mcp_bin = super::mcp::container_mcp_bin(h, team_mcp_bin);
     let mut s = String::from(
         "# teamctl-managed: rewritten on every `teamctl up` / `reload`.\n\
          # Customize MCP servers through the compose file's `mcps:` field.\n",
@@ -65,6 +67,7 @@ pub fn render_codex_config(
         team_mcp_bin,
         &team_server_args(compose, h),
         &Default::default(),
+        &[],
     );
     for tool in CODEX_PREAPPROVED_TEAM_TOOLS {
         s.push_str(&format!(
@@ -76,7 +79,38 @@ pub fn render_codex_config(
             if name == "team" {
                 continue; // non-clobberable bus; validate rejects this too
             }
-            push_mcp_server_table(&mut s, name, &server.command, &server.args, &server.env);
+            if let Some(url) = &server.url {
+                s.push_str(&format!(
+                    "\n[mcp_servers.{}]\nurl = {}\n",
+                    toml_key(name),
+                    toml_str(url)
+                ));
+                if let Some(variable) = &server.bearer_token_env_var {
+                    s.push_str(&format!("bearer_token_env_var = {}\n", toml_str(variable)));
+                }
+                if !server.env_http_headers.is_empty() {
+                    let headers: Vec<_> = server
+                        .env_http_headers
+                        .iter()
+                        .map(|(header, variable)| {
+                            format!("{} = {}", toml_key(header), toml_str(variable))
+                        })
+                        .collect();
+                    s.push_str(&format!(
+                        "env_http_headers = {{ {} }}\n",
+                        headers.join(", ")
+                    ));
+                }
+            } else {
+                push_mcp_server_table(
+                    &mut s,
+                    name,
+                    &server.command,
+                    &server.args,
+                    &server.env,
+                    &server.env_vars,
+                );
+            }
         }
     }
     // Trust the project cwd so the boot dialog never renders. Codex keys
@@ -146,11 +180,22 @@ fn push_mcp_server_table(
     command: &str,
     args: &[String],
     env: &std::collections::BTreeMap<String, String>,
+    env_vars: &[String],
 ) {
     buf.push_str(&format!("\n[mcp_servers.{}]\n", toml_key(name)));
     buf.push_str(&format!("command = {}\n", toml_str(command)));
     let args: Vec<String> = args.iter().map(|a| toml_str(a)).collect();
     buf.push_str(&format!("args = [{}]\n", args.join(", ")));
+    if !env_vars.is_empty() {
+        buf.push_str(&format!(
+            "env_vars = [{}]\n",
+            env_vars
+                .iter()
+                .map(|v| toml_str(v))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     if !env.is_empty() {
         buf.push_str(&format!("\n[mcp_servers.{}.env]\n", toml_key(name)));
         for (k, v) in env {

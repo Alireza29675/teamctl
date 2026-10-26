@@ -61,6 +61,14 @@ pub(crate) fn freshen_action(runtime: &str, fresh: bool) -> FreshenAction {
 /// new conversation to replace it (a latent desync), so the callers gate
 /// on "about to start this agent" before calling here.
 pub(crate) fn freshen_for_spec(root: &Path, spec: &AgentSpec, runtime: &str, fresh: bool) {
+    if fresh {
+        let path = super::super::agent_run::session_path(root, &spec.project, &spec.agent);
+        if path.exists() {
+            if let Err(e) = fs::rename(&path, path.with_extension("json.bak")) {
+                eprintln!("warn · native session could not be freshened: {e}");
+            }
+        }
+    }
     let id = format!("{}:{}", spec.project, spec.agent);
     match freshen_action(runtime, fresh) {
         FreshenAction::Skip => {}

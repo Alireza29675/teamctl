@@ -134,3 +134,7 @@ See the [Rate limits](/concepts/rate-limits/) concept for the hook chain that fi
 | 0 | Success (or `validate`: no errors). |
 | 1 | Validation errors; unknown agent; runtime failure. |
 | 2 | Missing dependency (`tmux`, runtime binary). |
+
+## Browser workspace
+
+`teamctl serve` opens the local messenger for every configured agent. Options: `--no-open`, `--port`, `--host`, `--token-env`, `--cache-days` and `--demo` for an empty disposable root. See [web workspace](../../guides/web-workspace/) for authentication, media, inspection and terminal controls.

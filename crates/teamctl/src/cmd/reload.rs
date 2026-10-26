@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use team_core::compose::Compose;
-use team_core::supervisor::{AgentSpec, AgentState, DrainOutcome, Supervisor, TmuxSupervisor};
+use team_core::supervisor::{AgentSpec, AgentState, AgentSupervisor, DrainOutcome, Supervisor};
 
 use super::agent_filter::AgentSelector;
 use super::snapshot::{self, AgentEntry, ReloadPlan, RemovedAgent};
@@ -86,6 +86,13 @@ pub fn run(
     };
     if !dry_run {
         super::up::source_dotenv_into_process(&compose.root);
+        for h in compose
+            .agents()
+            .filter(|h| scoped.as_deref().is_none_or(|p| p == h.project))
+        {
+            team_core::mcp::validate_mcp_environment(h.spec, |name| std::env::var(name).ok())
+                .map_err(anyhow::Error::msg)?;
+        }
     }
 
     // T-305: a per-agent scope force-restarts exactly the selected
@@ -133,7 +140,7 @@ pub fn run(
     if force {
         force_promote_keeps(&mut plan, prev.as_ref());
     }
-    let sup = TmuxSupervisor;
+    let sup = AgentSupervisor;
     let stopped = stopped_keeps(&compose, &plan, &sup)?;
     let bot_plan = super::bot::plan_bots(&compose, scoped.as_deref(), None, force)?;
     let no_changes = plan.is_empty()
@@ -273,7 +280,7 @@ fn force_restart_scoped(
         .unwrap_or_default();
     super::up::reserve_in_registry(compose, Some(project_id))?;
     super::bot::stop_bots(&bot_plan, &compose.root)?;
-    let sup = TmuxSupervisor;
+    let sup = AgentSupervisor;
     let drain_timeout = Duration::from_secs(compose.global.supervisor.drain_timeout_secs);
 
     for id in &ids {

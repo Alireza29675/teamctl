@@ -720,6 +720,7 @@ fn compose_with_multi_role_prompt(root: &Path, project_id: &str) -> Compose {
     managers.insert(
         "mgr".into(),
         Agent {
+            execution: None,
             runtime: "claude-code".into(),
             model: None,
             role_prompt: Some(RolePrompt::Multiple(vec![
@@ -745,6 +746,7 @@ fn compose_with_multi_role_prompt(root: &Path, project_id: &str) -> Compose {
     Compose {
         root: root.to_path_buf(),
         global: Global {
+            web: Default::default(),
             version: team_core::compose::SchemaVersion::new("2.0.0"),
             broker: Default::default(),
             supervisor: Default::default(),

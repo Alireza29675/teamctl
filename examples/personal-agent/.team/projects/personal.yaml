@@ -1,0 +1,22 @@
+version: 1
+project:
+  id: personal
+  name: Personal workspace
+  cwd: ../workspace
+channels:
+  - name: notes
+    members: "*"
+agents:
+  companion:
+    display_name: Companion
+    runtime: codex # claude-code or opencode also work; authenticate that CLI first
+    role_prompt: roles/companion.md
+    autonomy: low_risk_only
+    can_dm: []
+    can_broadcast: [notes]
+    execution:
+      mode: native
+      turn_timeout_seconds: 300
+      wake_interval_seconds: 900
+      sandbox:
+        type: host

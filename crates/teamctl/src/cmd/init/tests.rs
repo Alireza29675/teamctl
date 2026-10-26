@@ -44,21 +44,21 @@ fn substitute_replaces_handlebars() {
 }
 
 #[test]
-fn picker_empty_input_defaults_to_ideate_and_build() {
+fn picker_empty_input_defaults_to_personal() {
     // Menu order is Ideate & Build, Essentials, Guided, Blank. A bare
     // Enter lands the operator on slot 1 — the flagship — which is the
     // path we most want to be the default.
     match parse_picker_input("") {
-        Choice::Template(t) => assert_eq!(t.key, "ideate-and-build"),
-        _ => panic!("expected Choice::Template(ideate-and-build) for empty input"),
+        Choice::Template(t) => assert_eq!(t.key, "personal"),
+        _ => panic!("expected Choice::Template(personal) for empty input"),
     }
 }
 
 #[test]
-fn picker_one_selects_ideate_and_build() {
+fn picker_one_selects_personal() {
     match parse_picker_input("1") {
-        Choice::Template(t) => assert_eq!(t.key, "ideate-and-build"),
-        _ => panic!("expected Choice::Template(ideate-and-build) for input `1`"),
+        Choice::Template(t) => assert_eq!(t.key, "personal"),
+        _ => panic!("expected Choice::Template(personal) for input `1`"),
     }
 }
 
@@ -94,16 +94,16 @@ fn picker_essentials_hidden_but_flag_still_resolves() {
 }
 
 #[test]
-fn picker_out_of_range_falls_back_to_ideate_and_build() {
+fn picker_out_of_range_falls_back_to_personal() {
     // Out-of-range / unparseable lands on slot 1 (the default), same
     // as a bare Enter.
     for input in ["99", "0", "hello"] {
         match parse_picker_input(input) {
             Choice::Template(t) => assert_eq!(
-                t.key, "ideate-and-build",
+                t.key, "personal",
                 "input `{input}` should fall back to the flagship"
             ),
-            _ => panic!("expected Choice::Template(ideate-and-build) for input `{input}`"),
+            _ => panic!("expected Choice::Template(personal) for input `{input}`"),
         }
     }
 }
@@ -117,7 +117,7 @@ fn template_keys_lists_guided_first() {
         keys.starts_with("guided"),
         "expected `guided` to lead; got `{keys}`"
     );
-    assert!(keys.contains("ideate-and-build"));
+    assert!(keys.contains("personal"));
     assert!(keys.contains("essentials"));
     assert!(keys.contains("blank"));
 }
@@ -303,7 +303,7 @@ fn picker_menu_is_in_display_order() {
     // is intentionally hidden — see `picker_menu`.)
     let menu = picker_menu();
     assert_eq!(menu.len(), 3);
-    assert!(matches!(menu[0], Choice::Template(t) if t.key == "ideate-and-build"));
+    assert!(matches!(menu[0], Choice::Template(t) if t.key == "personal"));
     assert!(matches!(menu[1], Choice::Guided));
     assert!(matches!(menu[2], Choice::Template(t) if t.key == "blank"));
 }
@@ -1020,4 +1020,16 @@ fn treenode_inserting_existing_path_does_not_duplicate() {
         1,
         "the shared `a/` dir is a single node, not duplicated"
     );
+}
+
+#[test]
+fn canonical_agents_preview_renders_multilevel_hierarchy() {
+    let files=tree_files("version: \"3.0.0\"\nprojects: [{file: projects/p.yaml}]\n",&[("projects/p.yaml","version: 1\nproject: {id: p, name: P, cwd: ..}\nagents:\n  root: {}\n  middle: {reports_to: root}\n  leaf: {reports_to: middle}\n")]);
+    let lines = team_structure_lines(&files)
+        .into_iter()
+        .map(|s| strip_ansi(&s))
+        .collect::<Vec<_>>();
+    assert!(lines[1].starts_with("└── root"), "{lines:?}");
+    assert!(lines[2].starts_with("    └── middle"), "{lines:?}");
+    assert!(lines[3].starts_with("        └── leaf"), "{lines:?}");
 }

@@ -64,6 +64,7 @@ static IDEATE_DIR: Dir<'static> =
 static ESSENTIALS_DIR: Dir<'static> =
     include_dir!("$CARGO_MANIFEST_DIR/assets/templates/essentials");
 static BLANK_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/templates/blank");
+static PERSONAL_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/templates/personal");
 
 /// `_common/` files shared across templates, embedded once so they stay
 /// single-source. Referenced from each template's `shared` overlay under
@@ -84,6 +85,13 @@ pub const GUIDED_KEY: &str = "guided";
 /// from the interactive picker); its order is independent of display
 /// order, which `picker_menu` spells out explicitly.
 pub const TEMPLATES: &[Template] = &[
+    Template {
+        key: "personal",
+        label: "Personal agent",
+        blurb: "One agent, a durable notebook, and a private web workspace.",
+        dir: &PERSONAL_DIR,
+        shared: &[],
+    },
     Template {
         key: "ideate-and-build",
         label: "Ideate & Build",
@@ -140,7 +148,7 @@ pub(super) fn picker_menu() -> Vec<Choice> {
             .unwrap_or_else(|| panic!("missing template `{k}` in TEMPLATES"))
     };
     vec![
-        Choice::Template(by_key("ideate-and-build")),
+        Choice::Template(by_key("personal")),
         Choice::Guided,
         Choice::Template(by_key("blank")),
     ]

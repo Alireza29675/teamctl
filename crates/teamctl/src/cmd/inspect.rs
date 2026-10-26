@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection};
 use team_core::render::{env_path, mcp_path};
-use team_core::supervisor::{AgentSpec, Supervisor, TmuxSupervisor};
+use team_core::supervisor::{native_log_path, AgentSpec, AgentSupervisor, Supervisor};
 
 pub fn run(root: &Path, target: &str) -> Result<()> {
     let compose = super::load(root)?;
@@ -17,14 +17,7 @@ pub fn run(root: &Path, target: &str) -> Result<()> {
     println!();
     println!("project:    {}", handle.project);
     println!("agent:      {}", handle.agent);
-    println!(
-        "role:       {}",
-        if handle.is_manager {
-            "manager"
-        } else {
-            "worker"
-        }
-    );
+    println!("type:       agent");
     println!("runtime:    {}", handle.spec.runtime);
     if let Some(m) = &handle.spec.model {
         println!("model:      {m}");
@@ -49,9 +42,19 @@ pub fn run(root: &Path, target: &str) -> Result<()> {
         &compose.root,
         &compose.global.supervisor.tmux_prefix,
     );
-    let state = TmuxSupervisor.state(&spec)?;
+    let state = AgentSupervisor.state(&spec)?;
     println!("supervisor: {:?}", state);
-    println!("tmux:       {}", spec.tmux_session);
+    if handle
+        .spec
+        .execution
+        .as_ref()
+        .is_some_and(|e| e.mode == team_core::compose::ExecutionMode::Native)
+    {
+        println!("execution:  native");
+        println!("log file:   {}", native_log_path(&spec).display());
+    } else {
+        println!("tmux:       {}", spec.tmux_session);
+    }
     println!(
         "env file:   {}",
         env_path(&compose.root, handle.project, handle.agent).display()

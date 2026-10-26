@@ -49,8 +49,9 @@ pub fn current_schema_json() -> String {
 const EMBEDDED: &[(&str, &str)] = &[
     (
         SchemaVersion::CURRENT,
-        include_str!("../schemas/compose-2.0.1.json"),
+        include_str!("../schemas/compose-3.0.0.json"),
     ),
+    ("2.0.1", include_str!("../schemas/compose-2.0.1.json")),
     ("2.0.0", include_str!("../schemas/compose-2.0.0.json")),
 ];
 

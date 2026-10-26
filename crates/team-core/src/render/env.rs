@@ -28,6 +28,22 @@ pub(super) fn render_env(compose: &Compose, h: AgentHandle<'_>) -> String {
     s.push_str(&format!("AGENT_ID={}:{}\n", h.project, h.agent));
     s.push_str(&format!("PROJECT_ID={}\n", h.project));
     s.push_str(&format!("RUNTIME={}\n", h.spec.runtime));
+    if let Some(execution) = &h.spec.execution {
+        s.push_str(&format!(
+            "EXECUTION_MODE={}\n",
+            match execution.mode {
+                crate::compose::ExecutionMode::Native => "native",
+                crate::compose::ExecutionMode::Tmux => "tmux",
+            }
+        ));
+        s.push_str(&format!(
+            "SANDBOX_TYPE={}\n",
+            match execution.sandbox.r#type {
+                crate::compose::SandboxType::Docker => "docker",
+                crate::compose::SandboxType::Host => "host",
+            }
+        ));
+    }
     if let Some(m) = h
         .spec
         .model

@@ -78,6 +78,7 @@ mod tests {
         Compose {
             root: PathBuf::from("/tmp/fake"),
             global: Global {
+                web: Default::default(),
                 version: team_core::compose::SchemaVersion::new("2.0.0"),
                 broker: Broker::default(),
                 supervisor: SupervisorCfg::default(),

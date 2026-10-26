@@ -21,8 +21,25 @@ fn discover_with(
     let mut candidates = BTreeMap::new();
     let mut agent_sessions = BTreeSet::new();
     let mut mailboxes = BTreeSet::new();
-    let mut add_agent = |id: String, session: String| {
+    let native_agents: BTreeSet<String> = Compose::load_read_only(root)
+        .ok()
+        .map(|c| {
+            c.agents()
+                .filter(|h| {
+                    h.spec
+                        .execution
+                        .as_ref()
+                        .is_some_and(|e| e.mode == team_core::compose::ExecutionMode::Native)
+                })
+                .map(|h| h.id())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut add_agent = |id: String, session: String, candidate: bool| {
         agent_sessions.insert(session.replace('.', "_"));
+        if !candidate || native_agents.contains(&id) {
+            return;
+        }
         let suffix = id.replace(':', "-");
         if let Some(prefix) = session.strip_suffix(&suffix) {
             candidates.insert((id.clone(), bot_session_name(prefix, &id)), ());
@@ -31,7 +48,10 @@ fn discover_with(
     if let Some(snapshot) = super::super::snapshot::read(root) {
         mailboxes.insert(root.join(snapshot.global.broker_path));
         for (id, entry) in snapshot.agents {
-            add_agent(id, entry.tmux_session);
+            let native = fs::read_to_string(&entry.env_file)
+                .ok()
+                .is_some_and(|env| env.lines().any(|line| line == "EXECUTION_MODE=native"));
+            add_agent(id, entry.tmux_session, !native);
         }
     }
     if let Ok(compose) = Compose::load_read_only(root) {
@@ -41,13 +61,13 @@ fn discover_with(
                 "{}{}-{}",
                 compose.global.supervisor.tmux_prefix, h.project, h.agent
             );
-            add_agent(h.id(), session);
+            add_agent(h.id(), session, true);
         }
     }
     if let Some(directory) = team_core::registry::config_dir() {
         let registry = team_core::registry::load(&directory)?;
         for row in registry.roster_for_root(root) {
-            add_agent(row.id(), row.tmux_session);
+            add_agent(row.id(), row.tmux_session, true);
         }
         // Known agents in any root take precedence over a guessed legacy
         // bot identity, including pre-upgrade namespace collisions.

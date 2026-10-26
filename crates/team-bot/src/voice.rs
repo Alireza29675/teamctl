@@ -1,8 +1,8 @@
-use rusqlite::params;
 use teloxide::types::{ChatAction, ReplyParameters};
 use teloxide::{net::Download, prelude::*};
 
 use crate::{
+    chat::{inbound_message, record_text, source_recorded},
     download::{media_size_pre_reject, BoundedWriter},
     State, SttRuntime, VOICE_INBOX_PREFIX,
 };
@@ -55,15 +55,43 @@ pub(super) fn map_voice_outcome(outcome: &SttOutcome) -> VoiceDecision {
 pub(super) async fn handle_voice(bot: &Bot, msg: &Message, state: &State) -> ResponseResult<()> {
     let manager = state.manager.as_deref().expect("checked by caller");
     let stt = state.stt.as_ref().expect("checked by caller");
-    let Some((project, _)) = manager.split_once(':') else {
+    if manager.split_once(':').is_none() {
         return Ok(());
-    };
+    }
     let Some(voice) = msg.voice() else {
         return Ok(());
     };
     let file_id = voice.file.id.to_string();
-    let inbound_msg_id: i64 = msg.id.0 as i64;
     let reply_to = ReplyParameters::new(msg.id);
+    let inbound = match inbound_message(state, msg, manager, "", "voice", None) {
+        Ok(inbound) => inbound,
+        Err(error) => {
+            return crate::inbound::confirm_inbound(
+                bot,
+                msg.chat.id,
+                Err::<usize, _>(error),
+                format!("→ {manager}"),
+            )
+            .await;
+        }
+    };
+    {
+        let conn = state.conn.lock().await;
+        match source_recorded(&conn, &inbound) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => {
+                drop(conn);
+                return crate::inbound::confirm_inbound(
+                    bot,
+                    msg.chat.id,
+                    Err::<usize, _>(error),
+                    format!("→ {manager}"),
+                )
+                .await;
+            }
+        }
+    }
 
     // Soft cue while the provider call is in flight. Best-effort — a
     // typing-action failure should not cancel the actual transcription.
@@ -91,12 +119,10 @@ pub(super) async fn handle_voice(bot: &Bot, msg: &Message, state: &State) -> Res
         // INSERT fails we still send the reply (matches the existing
         // text/dm paths) but log loudly so the drop is diagnosable —
         // mirrors the `tracing::error!` in `handle_inbound_media`.
-        match c.execute(
-            "INSERT INTO messages
-                (project_id, sender, recipient, text, sent_at, telegram_msg_id)
-             VALUES (?1, 'user:telegram', ?2, ?3, strftime('%s','now'), ?4)",
-            params![project, manager, inbox_text, inbound_msg_id],
-        ) {
+        let mut inbound = inbound;
+        inbound.text = inbox_text.to_string();
+        inbound.kind = "text".into();
+        match record_text(&c, inbound, i64::from(msg.id.0), None) {
             Ok(_) => insert_ok = true,
             Err(e) => tracing::error!(
                 "voice transcript INSERT failed for {manager}: {e} (operator was \
@@ -105,16 +131,8 @@ pub(super) async fn handle_voice(bot: &Bot, msg: &Message, state: &State) -> Res
         }
     }
 
-    // #263: confirm the routing to the manager with the same `→ {target}` echo
-    // string the text / dm / media paths use, as a plain send (no
-    // `reply_parameters`) and before the transcript echo so the chat reads as
-    // routing confirmation then what was heard. Note this echo is gated
-    // STRICTER than those sibling paths on purpose: they echo unconditionally
-    // (`let _ = c.execute(...)`), confirming the route even when the INSERT was
-    // dropped, whereas `voice_should_echo_routing` requires the row to have
-    // landed. Confirming a route that never reached the mailbox is exactly the
-    // false "agent got it" this ticket exists to kill, so do not "align" this
-    // gate away. (The siblings' unconditional echo is a separate latent gap.)
+    // Confirm routing only after the inbox row and conversation metadata have
+    // both committed. The transcript echo remains threaded under the audio.
     if voice_should_echo_routing(&decision, insert_ok) {
         bot.send_message(msg.chat.id, format!("→ {manager}"))
             .await?;

@@ -1,5 +1,6 @@
 pub mod adjust;
 pub mod agent_filter;
+pub mod agent_run;
 pub mod approval;
 pub mod attach;
 pub mod bot;
@@ -23,6 +24,7 @@ pub mod reload;
 pub mod rl_hit;
 pub mod rl_watch;
 pub mod send;
+pub mod serve;
 pub mod sessions;
 pub mod snapshot;
 pub mod status;

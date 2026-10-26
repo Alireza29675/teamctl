@@ -24,7 +24,9 @@ pub(super) async fn run() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let bot = Bot::new(&cli.token);
+    let token = cli.resolved_token()?;
+    let stt_key = cli.resolved_stt_key()?;
+    let bot = Bot::new(token);
     let conn = open_mailbox(&cli.mailbox)?;
     let allow = parse_authorized_chats(cli.authorized_chat_ids.as_deref())?;
     let media_root = cli
@@ -36,7 +38,7 @@ pub(super) async fn run() -> Result<()> {
     // (provider, key, model) are present. Partial config is treated as
     // "no voice" rather than an error — `teamctl bot up` already prints a
     // skip line when the API key env var is unset.
-    let stt = match (cli.stt_provider, cli.stt_api_key, cli.stt_model) {
+    let stt = match (cli.stt_provider, stt_key, cli.stt_model) {
         (Some(provider), Some(api_key), Some(model)) => Some(SttRuntime {
             provider,
             api_key,
@@ -46,7 +48,31 @@ pub(super) async fn run() -> Result<()> {
         }),
         _ => None,
     };
+    if let Some(id) = &cli.interface_id {
+        let agents = cli.manager.iter().cloned().collect::<Vec<_>>();
+        let existing = team_core::interfaces::get(&conn, id)?;
+        let info = team_core::interfaces::InterfaceInfo {
+            id: id.clone(),
+            provider: "telegram".into(),
+            name: cli
+                .interface_name
+                .clone()
+                .or_else(|| existing.as_ref().map(|i| i.name.clone()))
+                .unwrap_or_else(|| id.clone()),
+            description: cli
+                .interface_description
+                .clone()
+                .or_else(|| existing.as_ref().map(|i| i.description.clone()))
+                .unwrap_or_default(),
+            capabilities: ["text", "image", "file", "typing", "reaction"]
+                .map(str::to_string)
+                .to_vec(),
+        };
+        team_core::interfaces::register(&conn, &info, &agents)?;
+    }
     let state = Arc::new(State {
+        compose_root: cli.compose_root,
+        interface_id: cli.interface_id,
         conn: Mutex::new(conn),
         allow,
         manager: cli.manager,
@@ -57,6 +83,10 @@ pub(super) async fn run() -> Result<()> {
         typing: Mutex::new(HashMap::new()),
         rich: !cli.no_rich_messages,
     });
+    {
+        let conn = state.conn.lock().await;
+        crate::chat::register_capabilities(&conn, &state.adapter_id())?;
+    }
 
     // T-086-H: register the manager's runtime-appropriate slash commands
     // with Telegram so the operator gets autocomplete on `/`. Manager-scoped
@@ -71,7 +101,14 @@ pub(super) async fn run() -> Result<()> {
     } else {
         None
     };
-    let commands = commands_for_runtime(runtime.as_deref());
+    let commands = if state.scoped_native()? {
+        vec![
+            teloxide::types::BotCommand::new("help", "Show messaging commands"),
+            teloxide::types::BotCommand::new("pending", "Show pending approvals"),
+        ]
+    } else {
+        commands_for_runtime(runtime.as_deref())
+    };
     if !commands.is_empty() {
         if let Err(e) = bot.set_my_commands(commands).await {
             tracing::warn!(
@@ -81,7 +118,8 @@ pub(super) async fn run() -> Result<()> {
         }
     }
 
-    // Outbound: poll approvals + mailbox, surface to primary chat.
+    // Conversation replies use their recorded peer; approvals and legacy
+    // mailbox rows retain the primary-chat compatibility fallback.
     {
         let bot = bot.clone();
         let state = state.clone();

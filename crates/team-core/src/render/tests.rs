@@ -8,6 +8,7 @@ fn fixture() -> Compose {
     managers.insert(
         "mgr".into(),
         Agent {
+            execution: None,
             runtime: "claude-code".into(),
             model: Some("claude-opus-4-8".into()),
             role_prompt: Some(RolePrompt::Single(PathBuf::from("roles/mgr.md"))),
@@ -30,6 +31,7 @@ fn fixture() -> Compose {
     Compose {
         root: PathBuf::from("/teamctl"),
         global: Global {
+            web: Default::default(),
             version: crate::compose::SchemaVersion::new("2.0.0"),
             broker: Broker {
                 r#type: "sqlite".into(),
@@ -188,6 +190,10 @@ fn mcp_json_threads_tmux_prefix_from_compose() {
 /// Build a `McpServer` test value tersely.
 fn server(command: &str, args: &[&str]) -> McpServer {
     McpServer {
+        url: None,
+        bearer_token_env_var: None,
+        env_http_headers: Default::default(),
+        env_vars: vec![],
         command: command.into(),
         args: args.iter().map(|s| s.to_string()).collect(),
         env: Default::default(),
@@ -1663,5 +1669,82 @@ fn custom_descriptor_launches_binary_with_literal_argv_and_effective_env() {
         render_agent(&compose, compose.agents().next().unwrap(), "team-mcp")
             .0
             .contains("MODEL=agent-model\n")
+    );
+}
+
+#[test]
+fn remote_mcp_auth_references_map_to_each_provider_without_resolving_secrets() {
+    let mut c = fixture();
+    let remote:McpServer=serde_yaml::from_str("url: https://mcp.example.com/mcp\nbearer_token_env_var: MCP_ACCESS_TOKEN\nenv_http_headers: {X-Workspace: MCP_WORKSPACE}\n").unwrap();
+    c.projects[0]
+        .managers
+        .get_mut("mgr")
+        .unwrap()
+        .mcps
+        .insert("remote".into(), remote);
+    let h = c.agents().find(|a| a.agent == "mgr").unwrap();
+    let (_, claude) = render_agent(&c, h, "team-mcp");
+    let claude: serde_json::Value = serde_json::from_str(&claude).unwrap();
+    assert_eq!(claude["mcpServers"]["remote"]["type"], "http");
+    assert_eq!(
+        claude["mcpServers"]["remote"]["headers"]["Authorization"],
+        "Bearer ${MCP_ACCESS_TOKEN}"
+    );
+    assert_eq!(
+        claude["mcpServers"]["remote"]["headers"]["X-Workspace"],
+        "${MCP_WORKSPACE}"
+    );
+    assert!(claude["mcpServers"]["remote"].get("command").is_none());
+    c.projects[0].managers.get_mut("mgr").unwrap().runtime = "codex".into();
+    let h = c.agents().find(|a| a.agent == "mgr").unwrap();
+    let codex = render_codex_config(&c, h, "team-mcp").unwrap();
+    assert!(codex.contains("[mcp_servers.remote]\nurl = \"https://mcp.example.com/mcp\"\nbearer_token_env_var = \"MCP_ACCESS_TOKEN\"\nenv_http_headers = { X-Workspace = \"MCP_WORKSPACE\" }"));
+    c.projects[0].managers.get_mut("mgr").unwrap().runtime = "opencode".into();
+    let h = c.agents().find(|a| a.agent == "mgr").unwrap();
+    let opencode: serde_json::Value =
+        serde_json::from_str(&render_opencode_config(&c, h, "team-mcp").unwrap()).unwrap();
+    assert_eq!(opencode["mcp"]["remote"]["type"], "remote");
+    assert_eq!(
+        opencode["mcp"]["remote"]["headers"]["Authorization"],
+        "Bearer {env:MCP_ACCESS_TOKEN}"
+    );
+    assert_eq!(
+        opencode["mcp"]["remote"]["headers"]["X-Workspace"],
+        "{env:MCP_WORKSPACE}"
+    );
+    assert_eq!(opencode["mcp"]["remote"]["oauth"], false);
+}
+
+#[test]
+fn stdio_mcp_forwarded_env_names_map_to_all_provider_formats() {
+    let mut c = fixture();
+    let server: McpServer = serde_yaml::from_str(
+        "command: example-mcp\nenv_vars: [MCP_TOKEN]\nenv: {MODE: readonly}\n",
+    )
+    .unwrap();
+    c.projects[0]
+        .managers
+        .get_mut("mgr")
+        .unwrap()
+        .mcps
+        .insert("local".into(), server);
+    let h = c.agents().find(|a| a.agent == "mgr").unwrap();
+    let (_, claude) = render_agent(&c, h, "team-mcp");
+    let claude: serde_json::Value = serde_json::from_str(&claude).unwrap();
+    assert_eq!(
+        claude["mcpServers"]["local"]["env"]["MCP_TOKEN"],
+        "${MCP_TOKEN}"
+    );
+    c.projects[0].managers.get_mut("mgr").unwrap().runtime = "codex".into();
+    let h = c.agents().find(|a| a.agent == "mgr").unwrap();
+    let codex = render_codex_config(&c, h, "team-mcp").unwrap();
+    assert!(codex.contains("env_vars = [\"MCP_TOKEN\"]\n\n[mcp_servers.local.env]"));
+    c.projects[0].managers.get_mut("mgr").unwrap().runtime = "opencode".into();
+    let h = c.agents().find(|a| a.agent == "mgr").unwrap();
+    let opencode: serde_json::Value =
+        serde_json::from_str(&render_opencode_config(&c, h, "team-mcp").unwrap()).unwrap();
+    assert_eq!(
+        opencode["mcp"]["local"]["environment"]["MCP_TOKEN"],
+        "{env:MCP_TOKEN}"
     );
 }

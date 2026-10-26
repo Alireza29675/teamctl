@@ -1,0 +1,12 @@
+.git
+.worktrees
+target
+**/node_modules
+docs/dist
+docs/.astro
+state
+**/.team/state
+**/.env
+**/auth.json
+**/credentials.json
+

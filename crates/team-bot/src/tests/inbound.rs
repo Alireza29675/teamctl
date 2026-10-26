@@ -135,7 +135,7 @@ fn build_inbound_body_header_only_when_nothing_quotable() {
 }
 
 #[test]
-fn lookup_replied_row_finds_row_by_telegram_id() {
+fn lookup_replied_row_does_not_guess_a_legacy_rows_peer() {
     let conn = Connection::open_in_memory().unwrap();
     seed(&conn);
     // A user inbound row and an agent outbound row, each carrying its
@@ -146,24 +146,22 @@ fn lookup_replied_row_finds_row_by_telegram_id() {
         [],
     )
     .unwrap();
-    let user_row = conn.last_insert_rowid();
     conn.execute(
         "INSERT INTO messages (project_id, sender, recipient, text, sent_at, telegram_msg_id)
          VALUES ('p','p:eng_lead','user:telegram','on it',0,731)",
         [],
     )
     .unwrap();
-    let agent_row = conn.last_insert_rowid();
 
     assert_eq!(
-        lookup_replied_row(&conn, 730),
-        Some((user_row, "user:telegram".to_string())),
-        "a user's own message resolves to its mailbox row + sender"
+        lookup_replied_row(&conn, "telegram:p:eng_lead", "7", 730).unwrap(),
+        None,
+        "legacy rows without a recorded peer cannot be resolved safely"
     );
     assert_eq!(
-        lookup_replied_row(&conn, 731),
-        Some((agent_row, "p:eng_lead".to_string())),
-        "an agent's outbound message resolves to its <project>:<agent> sender"
+        lookup_replied_row(&conn, "telegram:p:eng_lead", "7", 731).unwrap(),
+        None,
+        "legacy outbound rows also have no trustworthy peer"
     );
 }
 
@@ -172,15 +170,16 @@ fn lookup_replied_row_returns_none_when_absent() {
     let conn = Connection::open_in_memory().unwrap();
     seed(&conn);
     // A Telegram id with no matching row (older than the bot's history).
-    assert_eq!(lookup_replied_row(&conn, 999), None);
+    assert_eq!(
+        lookup_replied_row(&conn, "telegram:p:eng_lead", "7", 999).unwrap(),
+        None
+    );
 }
 
 #[test]
-fn lookup_replied_row_picks_most_recent_on_telegram_id_collision() {
-    // Telegram ids are per-chat, so the shared mailbox can hold two rows
-    // with the same telegram_msg_id from different chats. The `ORDER BY id
-    // DESC LIMIT 1` is load-bearing: it resolves to the most recently
-    // inserted row. Pin that so a refactor can't silently drop the ORDER BY.
+fn lookup_replied_row_does_not_resolve_an_unscoped_legacy_collision() {
+    // Legacy rows do not identify their chat. Reusing a Telegram ID must
+    // not turn the latest row into another chat's apparent reply target.
     let conn = Connection::open_in_memory().unwrap();
     seed(&conn);
     conn.execute(
@@ -195,11 +194,10 @@ fn lookup_replied_row_picks_most_recent_on_telegram_id_collision() {
         [],
     )
     .unwrap();
-    let newer = conn.last_insert_rowid();
     assert_eq!(
-        lookup_replied_row(&conn, 42),
-        Some((newer, "p:eng_lead".to_string())),
-        "collision resolves to the most recently inserted row"
+        lookup_replied_row(&conn, "telegram:p:eng_lead", "7", 42).unwrap(),
+        None,
+        "unknown peers remain unresolved"
     );
 }
 

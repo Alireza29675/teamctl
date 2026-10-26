@@ -21,6 +21,7 @@ rusqlite.workspace = true
 blake3.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 uuid.workspace = true
+url = "2"
 
 tempfile = "3"
 

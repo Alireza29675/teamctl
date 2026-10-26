@@ -88,83 +88,61 @@ pub(super) fn team_structure_lines(files: &[(String, &'static str)]) -> Vec<Stri
             continue;
         }
 
-        // Group workers under the manager they report to; any worker
-        // whose `reports_to` isn't a manager in this project hangs at
-        // the top level. BTreeMap iteration keeps each group id-sorted.
-        let mut children: BTreeMap<&str, Vec<&String>> = BTreeMap::new();
-        let mut orphans: Vec<&String> = Vec::new();
-        for (wid, w) in &project.workers {
-            match w.reports_to.as_deref() {
-                Some(m) if project.managers.contains_key(m) => {
-                    children.entry(m).or_default().push(wid)
-                }
-                _ => orphans.push(wid),
+        // Every agent participates in the same optional hierarchy. Preserve
+        // deterministic source order, including legacy input maps.
+        let ordered: Vec<_> = project
+            .managers
+            .iter()
+            .chain(project.workers.iter())
+            .collect();
+        let agents: BTreeMap<_, _> = ordered
+            .iter()
+            .map(|(id, agent)| (id.as_str(), *agent))
+            .collect();
+        let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        let mut roots = Vec::new();
+        for (id, agent) in &ordered {
+            if let Some(parent) = agent
+                .reports_to
+                .as_deref()
+                .filter(|parent| *parent != id.as_str() && agents.contains_key(parent))
+            {
+                children.entry(parent).or_default().push(id.as_str());
+            } else {
+                roots.push(id.as_str());
             }
         }
-
-        // Top level: every manager (id-sorted), then any orphan workers.
-        let top: Vec<(&String, &str)> = project
-            .managers
-            .keys()
-            .map(|id| (id, "manager"))
-            .chain(orphans.iter().map(|id| (*id, "worker")))
-            .collect();
-
-        // Flush-left (no leading indent), whole tree in light pink with
-        // grey connectors + a grey runtime/model/counts descriptor. The
-        // root is "You" — the operator — so the tree reads as a reporting
-        // hierarchy (managers report to you; workers to their manager).
-        // (Current templates each ship one agent-bearing project, so this
-        // emits a single "You"; a future multi-agent-project template
-        // would want one shared "You" — flagged for the hardening pass.)
         out.push(paint(&format!("1;{PINK}"), "You"));
-
-        let row = |indent: &str, connector: &str, label: &str, descriptor: &str| {
-            format!(
+        let mut stack = Vec::new();
+        for (i, id) in roots.iter().enumerate().rev() {
+            stack.push((*id, String::new(), i + 1 == roots.len()));
+        }
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some((id, prefix, last)) = stack.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let agent = agents[id];
+            out.push(format!(
                 "{}{}{}  {}",
-                indent,
-                paint(GREY, connector),
-                paint(PINK, label),
-                paint(GREY, descriptor),
-            )
-        };
-
-        let last_top = top.len().saturating_sub(1);
-        for (i, (id, _role)) in top.iter().enumerate() {
-            let agent = project
-                .managers
-                .get(*id)
-                .or_else(|| project.workers.get(*id));
-            let label = agent.map_or_else(|| (*id).to_string(), |a| label_for(id, a));
-            let descriptor = agent.map(agent_descriptor).unwrap_or_default();
-            let top_last = i == last_top;
-            out.push(row(
-                "",
-                if top_last { "└── " } else { "├── " },
-                &label,
-                &descriptor,
+                prefix,
+                paint(GREY, if last { "└── " } else { "├── " }),
+                paint(PINK, &label_for(id, agent)),
+                paint(GREY, &agent_descriptor(agent))
             ));
-
-            // Workers reporting to this manager, nested one level in. The
-            // continuation column is a grey `│` unless this manager is the
-            // last top-level entry, in which case it's blank.
-            let kids = children.get(id.as_str()).cloned().unwrap_or_default();
-            let cont = if top_last {
-                "    ".to_string()
-            } else {
-                format!("{}   ", paint(GREY, "│"))
-            };
-            let last_kid = kids.len().saturating_sub(1);
-            for (j, wid) in kids.iter().enumerate() {
-                let w = project.workers.get(wid.as_str());
-                let label = w.map_or_else(|| (*wid).to_string(), |a| label_for(wid, a));
-                let descriptor = w.map(agent_descriptor).unwrap_or_default();
-                let conn = if j == last_kid {
-                    "└── "
-                } else {
-                    "├── "
-                };
-                out.push(row(&cont, conn, &label, &descriptor));
+            if let Some(kids) = children.get(id) {
+                let next_prefix = format!(
+                    "{}{}",
+                    prefix,
+                    if last {
+                        "    ".to_string()
+                    } else {
+                        format!("{}   ", paint(GREY, "│"))
+                    }
+                );
+                for (i, kid) in kids.iter().enumerate().rev() {
+                    stack.push((*kid, next_prefix.clone(), i + 1 == kids.len()));
+                }
             }
         }
     }

@@ -1,32 +1,7 @@
-//! `teamctl init [name] [--template <name>] [--project <id>] [--force] [--yes]`
-//!
-//! Scaffold a `.team/` directory. With `name`, creates `<cwd>/<name>/.team/`
-//! so a fresh `cd <name> && teamctl up` Just Works. Without `name`,
-//! scaffolds `.team/` directly in cwd (the legacy in-place flow).
-//!
-//! Four templates:
-//!
-//! - `ideate-and-build` — a four-agent team (an Executor, a Compass
-//!   ideation partner, and two engineers) that thinks an idea through,
-//!   then builds it. The flagship; the interactive picker defaults to it.
-//! - `guided`     — ships no files; execs `claude /teamctl:init` so the
-//!   LLM-led conversational setup takes over.
-//! - `essentials` — two projects: a blank `main` for the operator + an
-//!   `ops` project with an `ops` agent that helps evolve `main` over
-//!   time.
-//! - `blank`      — empty compose tree for operators who know exactly
-//!   what they want.
-//!
-//! Templates are baked into the binary via `include_dir!` (each template
-//! is an embedded folder) so `init` works offline; the `_common/` shared
-//! files are kept explicit per template so they stay single-source. When
-//! run interactively (no `--yes`), the user picks a
-//! template and confirms; the picker shows Ideate & Build / Guided /
-//! Blank and defaults to Ideate & Build. `essentials` is intentionally
-//! hidden from the picker but stays reachable via `--template essentials`
-//! and remains the `--yes` default — `guided` requires the interactive
-//! confirmation step and `--template guided --yes` errors clearly.
-//! `--force` overwrites an existing `.team/` at the target path.
+//! Scaffold a portable .team directory with an embedded personal-agent recipe.
+//! Personal is the default for interactive and --yes use. Older explicit
+//! templates remain compatibility paths. The browser workspace is the primary
+//! messaging and inspection surface for new teams.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -91,7 +66,7 @@ pub fn run(
             // interactive-only (rejected above); Essentials gives the
             // operator a useful starting team without forcing a Claude
             // Code session.
-            Choice::Template(TEMPLATES.iter().find(|t| t.key == "essentials").unwrap())
+            Choice::Template(TEMPLATES.iter().find(|t| t.key == "personal").unwrap())
         }
         None => choose_template_interactive()?,
     };
@@ -184,6 +159,7 @@ pub fn run(
     }
 
     fs::create_dir_all(&target)?;
+    fs::create_dir_all(parent.join("workspace"))?;
     for (relpath, contents) in &files {
         let dest = target.join(relpath);
         if let Some(parent) = dest.parent() {
@@ -200,7 +176,7 @@ pub fn run(
     // The agent the operator most likely wants to attach to first — see
     // `lead_attach_target`. `None` for an agentless template (e.g.
     // `blank`), which omits the bot/attach hints in the `Next:` block.
-    let attach_target = super::load(&target)
+    let _attach_target = super::load(&target)
         .ok()
         .and_then(|c| lead_attach_target(&c));
 
@@ -213,19 +189,8 @@ pub fn run(
         "  {:<30}# sanity-check the team structure",
         "teamctl validate"
     );
-    if attach_target.is_some() {
-        println!(
-            "  {:<30}# (optional) connect your agents to Telegram",
-            "teamctl bot setup"
-        );
-    }
-    println!("  {:<30}# start the team", "teamctl up");
-    if let Some(id) = attach_target {
-        println!(
-            "  {:<30}# drop into a live agent session",
-            format!("teamctl attach {id}")
-        );
-    }
+    println!("  {:<30}# start the agents", "teamctl up");
+    println!("  {:<30}# open chat and inspection", "teamctl serve");
     Ok(())
 }
 

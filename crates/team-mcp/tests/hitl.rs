@@ -92,7 +92,7 @@ fn seed(mailbox: &std::path::Path) {
 }
 
 #[test]
-fn org_chart_returns_managers_and_workers() {
+fn org_chart_returns_agents_and_optional_hierarchy() {
     let tmp = tempdir().unwrap();
     let mailbox = tmp.path().join("m.db");
     seed(&mailbox);
@@ -104,9 +104,9 @@ fn org_chart_returns_managers_and_workers() {
     );
     let sc = &r["result"]["structuredContent"];
     assert_eq!(sc["project"], "p");
-    assert_eq!(sc["managers"][0]["id"], "p:mgr");
-    assert_eq!(sc["workers"][0]["id"], "p:dev");
-    assert_eq!(sc["workers"][0]["reports_to"], "mgr");
+    assert_eq!(sc["agents"][1]["id"], "p:mgr");
+    assert_eq!(sc["agents"][0]["id"], "p:dev");
+    assert_eq!(sc["agents"][0]["reports_to"], "mgr");
     p.shutdown();
 }
 

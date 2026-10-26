@@ -7,19 +7,27 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{bail, Result};
-use team_core::supervisor::{AgentSpec, AgentState, Supervisor, TmuxSupervisor};
+use team_core::supervisor::{AgentSpec, AgentState, AgentSupervisor, Supervisor};
 
 pub fn run(root: &Path, target: &str, ro: bool) -> Result<()> {
     let compose = super::load(root)?;
     let Some(handle) = compose.agents().find(|h| h.id() == target) else {
         bail!("no such agent: {target}");
     };
+    if handle
+        .spec
+        .execution
+        .as_ref()
+        .is_some_and(|e| e.mode == team_core::compose::ExecutionMode::Native)
+    {
+        bail!("agent {target} uses native execution. Open `teamctl serve` to chat and connect to its workspace shell; use `teamctl logs {target}` to inspect output or `teamctl send {target} <message>` to send a message.");
+    }
     let spec = AgentSpec::from_handle(
         handle,
         &compose.root,
         &compose.global.supervisor.tmux_prefix,
     );
-    if TmuxSupervisor.state(&spec)? != AgentState::Running {
+    if AgentSupervisor.state(&spec)? != AgentState::Running {
         bail!(
             "agent {target} is not running (tmux session {} absent). Run `teamctl up`.",
             spec.tmux_session

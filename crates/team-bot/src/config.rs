@@ -6,13 +6,25 @@ use clap::Parser;
 #[derive(Parser, Clone)]
 #[command(name = "team-bot", version, about = "Telegram interface for teamctl")]
 pub(super) struct Cli {
+    #[arg(long, env = "TEAMCTL_ROOT")]
+    pub(super) compose_root: Option<PathBuf>,
+    /// Stable named interface instance. Separate bots may target the same agent.
+    #[arg(long, env = "TEAMCTL_INTERFACE_ID")]
+    pub(super) interface_id: Option<String>,
+    #[arg(long, env = "TEAMCTL_INTERFACE_NAME")]
+    pub(super) interface_name: Option<String>,
+    #[arg(long, env = "TEAMCTL_INTERFACE_DESCRIPTION")]
+    pub(super) interface_description: Option<String>,
     /// Path to the SQLite mailbox.
     #[arg(long, env = "TEAMCTL_MAILBOX")]
     pub(super) mailbox: PathBuf,
 
-    /// Telegram bot token.
-    #[arg(long, env = "TEAMCTL_TELEGRAM_TOKEN")]
-    pub(super) token: String,
+    /// Literal Telegram token for manual invocation; managed launches use --token-env.
+    #[arg(long, env = "TEAMCTL_TELEGRAM_TOKEN", hide_env_values = true)]
+    pub(super) token: Option<String>,
+    /// Environment variable reference resolved inside this process.
+    #[arg(long)]
+    pub(super) token_env: Option<String>,
 
     /// Comma-separated list of authorized chat ids. May be empty during
     /// bootstrap — the bot will then reply to `/start` with the caller's
@@ -26,7 +38,7 @@ pub(super) struct Cli {
     /// can safely coexist when each scopes to a different manager.
     ///
     /// Format: `<project>:<manager>`.
-    #[arg(long, env = "TEAMCTL_MANAGER")]
+    #[arg(long, alias = "agent", env = "TEAMCTL_MANAGER")]
     pub(super) manager: Option<String>,
 
     /// T-367: friendly label for the scoped manager, resolved from the
@@ -54,8 +66,11 @@ pub(super) struct Cli {
     pub(super) stt_provider: Option<String>,
 
     /// T-101 voice STT: provider API key (already resolved from env).
-    #[arg(long, env = "TEAMCTL_STT_API_KEY")]
+    #[arg(long, env = "TEAMCTL_STT_API_KEY", hide_env_values = true)]
     pub(super) stt_api_key: Option<String>,
+    /// Environment reference resolved inside the bot, without secrets in process arguments.
+    #[arg(long)]
+    pub(super) stt_api_key_env: Option<String>,
 
     /// T-101 voice STT: provider model id (e.g. `whisper-large-v3`).
     #[arg(long, env = "TEAMCTL_STT_MODEL")]
@@ -99,4 +114,77 @@ pub(super) fn parse_authorized_chats(raw: Option<&str>) -> Result<Vec<i64>> {
                 .with_context(|| format!("invalid authorized chat id: {part}"))
         })
         .collect()
+}
+
+impl Cli {
+    pub(super) fn resolved_token(&self) -> Result<String> {
+        resolve_secret(
+            self.token_env.as_deref(),
+            self.token.as_deref(),
+            self.compose_root.as_deref(),
+            "Telegram token",
+        )?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Telegram token is missing; use --token-env NAME or set TEAMCTL_TELEGRAM_TOKEN"
+            )
+        })
+    }
+    pub(super) fn resolved_stt_key(&self) -> Result<Option<String>> {
+        resolve_secret(
+            self.stt_api_key_env.as_deref(),
+            self.stt_api_key.as_deref(),
+            self.compose_root.as_deref(),
+            "speech-to-text key",
+        )
+    }
+}
+fn resolve_secret(
+    reference: Option<&str>,
+    literal: Option<&str>,
+    root: Option<&std::path::Path>,
+    label: &str,
+) -> Result<Option<String>> {
+    if let Some(reference) = reference {
+        return team_core::environment::lookup(root,reference)?.filter(|value|!value.trim().is_empty()).map(Some).ok_or_else(||anyhow::anyhow!("{label} reference `{reference}` is unset or empty in the team dotenv or process environment"));
+    }
+    Ok(literal
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned))
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::*;
+    #[test]
+    fn secret_reference_flags_resolve_dotenv_and_never_expose_value_in_errors() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(".env"),
+            "TEAMCTL_TEST_BOT_REFERENCE='fake-bot-canary'\nTEAMCTL_TEST_STT_REFERENCE=stt-canary\n",
+        )
+        .unwrap();
+        let cli = Cli::try_parse_from([
+            "team-bot",
+            "--mailbox",
+            "mailbox.db",
+            "--compose-root",
+            root.path().to_str().unwrap(),
+            "--token-env",
+            "TEAMCTL_TEST_BOT_REFERENCE",
+            "--stt-api-key-env",
+            "TEAMCTL_TEST_STT_REFERENCE",
+        ])
+        .unwrap();
+        assert_eq!(cli.resolved_token().unwrap(), "fake-bot-canary");
+        assert_eq!(
+            cli.resolved_stt_key().unwrap().as_deref(),
+            Some("stt-canary")
+        );
+        let mut missing = cli;
+        missing.token_env = Some("MISSING_TEST_REFERENCE".into());
+        let error = missing.resolved_token().unwrap_err().to_string();
+        assert!(error.contains("MISSING_TEST_REFERENCE"));
+        assert!(!error.contains("canary"));
+    }
 }

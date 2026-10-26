@@ -603,11 +603,11 @@ fn init_ideate_and_build_template_scaffolds_with_subagents() {
     // that matters. An agent-bearing template also offers `teamctl bot setup`.
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("teamctl attach studio:executor"),
+        stdout.contains("teamctl serve"),
         "Next: block must suggest attaching to the lead manager; got:\n{stdout}"
     );
     assert!(
-        stdout.contains("teamctl bot setup"),
+        stdout.contains("teamctl up"),
         "Next: block must offer bot setup for an agent-bearing template; got:\n{stdout}"
     );
 
@@ -770,7 +770,7 @@ fn ideate_and_build_template_renders_per_agent_subagents() {
 }
 
 #[test]
-fn init_yes_without_template_defaults_to_essentials() {
+fn init_yes_without_template_defaults_to_personal() {
     // T-206: the non-interactive default changed from `solo` to
     // `essentials`. Pin the contract — `--yes` with no `--template`
     // must land the operator on the `essentials` two-project shape,
@@ -792,12 +792,12 @@ fn init_yes_without_template_defaults_to_essentials() {
     // markers; their presence proves the default landed on
     // essentials, not blank.
     assert!(
-        team_dir.join("projects/ops.yaml").is_file(),
-        "--yes default must land essentials (projects/ops.yaml missing)"
+        team_dir.join("projects/personal.yaml").is_file(),
+        "--yes default must land personal (projects/personal.yaml missing)"
     );
     assert!(
-        team_dir.join("roles/ops.md").is_file(),
-        "--yes default must land essentials (roles/ops.md missing)"
+        team_dir.join("roles/companion.md").is_file(),
+        "--yes default must land personal (roles/companion.md missing)"
     );
 }
 
@@ -1426,9 +1426,8 @@ fn init_with_name_creates_team_folder_that_validates() {
     let team_dir = tmp.path().join("my-team/.team");
     for f in [
         "team-compose.yaml",
-        "projects/main.yaml",
-        "projects/ops.yaml",
-        "roles/ops.md",
+        "projects/personal.yaml",
+        "roles/companion.md",
         ".env.example",
         ".gitignore",
         "README.md",
@@ -1452,7 +1451,7 @@ fn init_with_name_creates_team_folder_that_validates() {
     // Essentials ships 2 projects (`main` + `ops`) and 1 agent
     // (`ops`). The validate summary surfaces both counts.
     assert!(
-        stdout.contains("ok") && stdout.contains("2 projects") && stdout.contains("1 agent"),
+        stdout.contains("ok") && stdout.contains("1 project") && stdout.contains("1 agent"),
         "unexpected validate output: {stdout}"
     );
 }

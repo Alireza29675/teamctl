@@ -22,6 +22,14 @@ pub(super) fn ensure_claude_trust_inner(compose: &Compose, project_id: Option<&s
         .agents()
         .filter(|h| project_id.is_none_or(|id| h.project == id))
         .filter(|h| h.spec.runtime == "claude-code")
+        // Print mode skips the interactive trust dialog and container agents
+        // cannot use the host's global Claude config.
+        .filter(|h| {
+            !h.spec
+                .execution
+                .as_ref()
+                .is_some_and(|e| e.mode == team_core::compose::ExecutionMode::Native)
+        })
         .filter_map(|h| {
             let project = compose
                 .projects

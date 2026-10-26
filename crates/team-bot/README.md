@@ -13,11 +13,12 @@ Delivery rules to preserve when adding transport features:
 - Outbound polling selects persisted unacknowledged messages and pending
   undelivered approvals, including work queued before restart. Successful
   transport delivery consumes a row; failure retains it for retry with
-  bounded backoff. Outbound delivery uses the first configured chat.
+  bounded backoff. Conversation replies retain their recorded interface and peer;
+  only legacy unaddressed rows use the first configured chat.
 - Delivery is at least once: a crash after Telegram accepts a send but
   before SQLite records success can cause a duplicate on restart.
 - Approval callbacks check expiry in the atomic decision update and enforce
-  manager routing. A delivered card is not repeatedly sent while awaiting
+  configured agent routing. A delivered card is not repeatedly sent while awaiting
   its decision. Delivery is recorded only while the approval remains live;
   cards accepted after expiry or resolution are removed.
 - Inbound routing confirmations follow successful persistence. Media uses
@@ -35,3 +36,18 @@ From the repository root, run `cargo test -p team-bot`. Legacy feature tests
 live under `src/tests/`; `src/regression_tests.rs` exercises persistence and
 the production sender against a local Telegram API substitute. These tests
 do not require Telegram credentials or a paid model session.
+
+Managed launches pass `--token-env NAME` and `--stt-api-key-env NAME`, so the
+long-lived tmux command and process arguments contain reference names only.
+The bot resolves those references from `<compose-root>/.env`, then the parent
+`.env`, then its inherited environment. A local empty value stays empty;
+old tmux server variables cannot override rotated team credentials. Dotenv
+values are read literally, without shell evaluation. Keep dotenv files private
+and out of version control. Manual literal token flags remain available;
+environment-backed help output hides their values.
+
+For a manual launch from a compose root, prefer:
+
+```bash
+team-bot --mailbox state/mailbox.db --compose-root . --token-env MY_BOT_TOKEN --agent personal:companion
+```

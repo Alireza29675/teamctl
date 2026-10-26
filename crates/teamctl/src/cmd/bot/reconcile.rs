@@ -55,11 +55,13 @@ pub(super) fn plan_from_saved(
 ) -> Result<BotPlan> {
     let inputs = load_inputs(&compose.root)?;
     let specs = bot_specs(compose);
-    let desired: BTreeSet<_> = specs.iter().map(|spec| spec.manager.clone()).collect();
+    let desired: BTreeSet<_> = specs.iter().map(|spec| spec.identity()).collect();
     let in_scope = |id: &str| {
         id.split_once(':').is_some_and(|(p, agent)| {
             project.is_none_or(|scope| p == scope)
-                && targets.is_none_or(|selected| selected.contains(agent))
+                && targets.is_none_or(|selected| {
+                    selected.contains(agent.split('@').next().unwrap_or(agent))
+                })
         })
     };
     let mut plan = BotPlan {
@@ -84,7 +86,7 @@ pub(super) fn plan_from_saved(
     }
     for spec in specs.into_iter().filter(|spec| in_scope(&spec.manager)) {
         let observed = saved
-            .get(&spec.manager)
+            .get(&spec.identity())
             .cloned()
             .unwrap_or_else(|| super::supervisor::legacy_session(&spec, &compose.root));
         let mut old = super::supervisor::session_spec(&spec, &compose.root, &observed);
@@ -95,10 +97,10 @@ pub(super) fn plan_from_saved(
         }
         if force
             || !running
-            || inputs.get(&spec.manager) != Some(&fingerprint(&spec, &compose.root)?)
+            || inputs.get(&spec.identity()) != Some(&fingerprint(&spec, &compose.root)?)
         {
             if running {
-                plan.stop.push((spec.manager.clone(), old));
+                plan.stop.push((spec.identity(), old));
             }
             plan.launch.push(spec);
         }
@@ -138,7 +140,7 @@ fn start_bots_with(
     for spec in &plan.launch {
         if launch(spec)? {
             let mut saved = super::supervisor::load_sessions(root)?;
-            saved.insert(spec.manager.clone(), spec.session.clone());
+            saved.insert(spec.identity(), spec.session.clone());
             super::supervisor::save_sessions(root, &saved)?;
             record_input(root, spec)?;
             println!("up · bot {} → {}", spec.session, spec.manager);
@@ -149,7 +151,7 @@ fn start_bots_with(
 
 pub(super) fn record_input(root: &Path, spec: &BotSpec) -> Result<()> {
     let mut inputs = load_inputs(root)?;
-    inputs.insert(spec.manager.clone(), fingerprint(spec, root)?);
+    inputs.insert(spec.identity(), fingerprint(spec, root)?);
     save_inputs(root, &inputs)
 }
 
@@ -181,30 +183,9 @@ fn fingerprint(spec: &BotSpec, root: &Path) -> Result<String> {
 }
 
 fn env_value(root: &Path, variable: &str) -> Option<String> {
-    if let Ok(value) = std::env::var(variable) {
-        return Some(value);
-    }
-    for path in [
-        root.join(".env"),
-        root.parent().unwrap_or(root).join(".env"),
-    ] {
-        let Ok(raw) = fs::read_to_string(path) else {
-            continue;
-        };
-        for line in raw
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.starts_with('#'))
-        {
-            let line = line.strip_prefix("export ").unwrap_or(line);
-            if let Some((key, value)) = line.split_once('=') {
-                if key == variable {
-                    return Some(value.trim().trim_matches('"').trim_matches('\'').into());
-                }
-            }
-        }
-    }
-    None
+    team_core::environment::lookup(Some(root), variable)
+        .ok()
+        .flatten()
 }
 
 fn load_inputs(root: &Path) -> Result<BTreeMap<String, String>> {
@@ -241,7 +222,7 @@ mod tests {
         let specs = bot_specs(compose);
         let sessions = specs
             .iter()
-            .map(|spec| (spec.manager.clone(), spec.session.clone()))
+            .map(|spec| (spec.identity(), spec.session.clone()))
             .collect();
         super::super::supervisor::save_sessions(&compose.root, &sessions).unwrap();
         for spec in specs {

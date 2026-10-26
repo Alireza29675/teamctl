@@ -213,8 +213,13 @@ pub(super) fn edit_manager_yaml(
     let root = doc
         .as_mapping()
         .ok_or_else(|| anyhow!("root of {} is not a mapping", path.display()))?;
+    let block = if root.get_mapping("agents").is_some() {
+        "agents"
+    } else {
+        "managers"
+    };
     let managers = root
-        .get_mapping("managers")
+        .get_mapping(block)
         .ok_or_else(|| anyhow!("`managers:` block missing in {}", path.display()))?;
     if managers.get_mapping(role).is_none() {
         return Err(anyhow!("manager `{role}` missing in {}", path.display()));
@@ -222,7 +227,7 @@ pub(super) fn edit_manager_yaml(
 
     let doc = team_core::yaml_edit::set_nested_mapping(
         doc,
-        &["managers", role, "interfaces", "telegram"],
+        &[block, role, "interfaces", "telegram"],
         &[("bot_token_env", token_env), ("chat_ids_env", chats_env)],
     )?;
     team_core::yaml_edit::save(&doc, path)?;

@@ -206,6 +206,14 @@ pub fn ensure(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // binary decisions and for Cancel (status carries those).
         "ALTER TABLE approvals ADD COLUMN options_json TEXT",
         "ALTER TABLE approvals ADD COLUMN decision_value TEXT",
+        // Provider-neutral routes. Nullable on legacy inbox rows; no guessed
+        // destination is attached when a historical provider peer is unknown.
+        "ALTER TABLE messages ADD COLUMN conversation_id TEXT",
+        "ALTER TABLE messages ADD COLUMN chat_message_id INTEGER",
+        "ALTER TABLE messages ADD COLUMN adapter_id TEXT",
+        "ALTER TABLE messages ADD COLUMN external_id TEXT",
+        "ALTER TABLE messages ADD COLUMN peer_id TEXT",
+        "ALTER TABLE messages ADD COLUMN interface_json TEXT",
     ];
     for stmt in migrations {
         if let Err(e) = conn.execute(stmt, []) {
@@ -215,7 +223,8 @@ pub fn ensure(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             }
         }
     }
-    Ok(())
+    crate::chat::ensure(conn)?;
+    conn.execute_batch(crate::interfaces::SCHEMA)
 }
 
 #[cfg(test)]

@@ -1,0 +1,10 @@
+# A local agent workspace. No bot or hosted service is needed.
+version: "3.0.0"
+broker:
+  path: state/mailbox.db
+web:
+  port: 8787
+  cache_retention_days: 30 # null keeps assets indefinitely
+  max_upload_bytes: 26214400
+projects:
+  - file: projects/personal.yaml

@@ -7,8 +7,12 @@
 //! schema used by `team-mcp`.
 
 pub mod attachments;
+pub mod chat;
 pub mod compose;
+pub mod environment;
+pub mod interfaces;
 pub mod mailbox;
+pub mod mcp;
 pub mod persistence;
 pub mod preview;
 pub mod registry;
@@ -18,6 +22,7 @@ pub mod schemas;
 pub mod session;
 pub mod supervisor;
 pub mod validate;
+pub mod web_assets;
 pub mod yaml_edit;
 
 /// Semantic version of the teamctl workspace.

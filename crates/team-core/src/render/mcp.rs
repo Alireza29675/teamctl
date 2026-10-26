@@ -39,6 +39,7 @@ pub(super) fn runtime_supports_mcp(compose: &Compose, h: AgentHandle<'_>) -> boo
 }
 
 pub(super) fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &str) -> String {
+    let team_mcp_bin = container_mcp_bin(h, team_mcp_bin);
     let mut v = serde_json::json!({
         "mcpServers": {
             "team": {
@@ -69,10 +70,7 @@ pub(super) fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &s
                 if name == "team" {
                     continue; // non-clobberable bus; validate rejects this too
                 }
-                servers.insert(
-                    name.clone(),
-                    serde_json::to_value(server).expect("serialize McpServer"),
-                );
+                servers.insert(name.clone(), claude_mcp_server(server));
             }
         } else {
             tracing::warn!(
@@ -87,4 +85,38 @@ pub(super) fn render_mcp(compose: &Compose, h: AgentHandle<'_>, team_mcp_bin: &s
     }
 
     serde_json::to_string_pretty(&v).expect("json")
+}
+
+pub(super) fn container_mcp_bin<'a>(h: AgentHandle<'_>, host: &'a str) -> &'a str {
+    if h.spec
+        .execution
+        .as_ref()
+        .is_some_and(|e| e.sandbox.r#type == crate::compose::SandboxType::Docker)
+    {
+        "/usr/local/bin/team-mcp"
+    } else {
+        host
+    }
+}
+
+fn claude_mcp_server(server: &crate::compose::McpServer) -> serde_json::Value {
+    if let Some(url) = &server.url {
+        let mut headers = serde_json::Map::new();
+        for (name, variable) in &server.env_http_headers {
+            headers.insert(name.clone(), serde_json::json!(format!("${{{variable}}}")));
+        }
+        if let Some(variable) = &server.bearer_token_env_var {
+            headers.insert(
+                "Authorization".into(),
+                serde_json::json!(format!("Bearer ${{{variable}}}")),
+            );
+        }
+        serde_json::json!({"type":"http","url":url,"headers":headers})
+    } else {
+        let mut env = server.env.clone();
+        for variable in &server.env_vars {
+            env.insert(variable.clone(), format!("${{{variable}}}"));
+        }
+        serde_json::json!({"command":server.command,"args":server.args,"env":env})
+    }
 }
