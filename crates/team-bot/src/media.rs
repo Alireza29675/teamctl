@@ -5,6 +5,7 @@ use rusqlite::{params, Connection};
 use teloxide::{net::Download, prelude::*};
 
 use crate::{
+    chat::{inbound_message, register_capabilities, source_recorded},
     download::{media_size_pre_reject, BoundedWriter, MAX_DOWNLOAD_BYTES},
     inbound::confirm_inbound,
     State,
@@ -236,6 +237,40 @@ pub(super) async fn handle_inbound_media(
         return Ok(());
     };
     let caption = msg.caption().unwrap_or("").to_string();
+    let inbound = match inbound_message(state, msg, manager, &caption, "media", None) {
+        Ok(inbound) => inbound,
+        Err(error) => {
+            return confirm_inbound(
+                bot,
+                msg.chat.id,
+                Err::<usize, _>(error),
+                format!("→ {manager}"),
+            )
+            .await;
+        }
+    };
+    {
+        let conn = state.conn.lock().await;
+        match source_recorded(&conn, &inbound) {
+            Ok(true) => {
+                drop(conn);
+                bot.send_message(msg.chat.id, format!("→ {manager}"))
+                    .await?;
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(error) => {
+                drop(conn);
+                return confirm_inbound(
+                    bot,
+                    msg.chat.id,
+                    Err::<usize, _>(error),
+                    format!("→ {manager}"),
+                )
+                .await;
+            }
+        }
+    }
 
     // Reserve a stable file name while downloading. Pending rows are hidden
     // from inboxes; completion publishes a fresh id so a watcher that already
@@ -276,7 +311,7 @@ pub(super) async fn handle_inbound_media(
                 MediaKind::File => "file",
             };
             let c = state.conn.lock().await;
-            let finalized = finalize_media(&c, row_id, kind, &payload);
+            let finalized = finalize_media(&c, row_id, kind, &payload, inbound);
             drop(c);
             confirm_inbound(
                 bot,
@@ -292,7 +327,7 @@ pub(super) async fn handle_inbound_media(
         Err(err) => {
             let payload = media_error_payload(&caption, &err);
             let c = state.conn.lock().await;
-            if let Err(e) = finalize_media(&c, row_id, "media_error", &payload) {
+            if let Err(e) = finalize_media(&c, row_id, "media_error", &payload, inbound) {
                 tracing::error!(
                     "inbound media: failed to record media_error on message {row_id}: {e}"
                 );
@@ -310,8 +345,10 @@ pub(super) fn finalize_media(
     staged_id: i64,
     kind: &str,
     payload: &str,
+    mut inbound: team_core::chat::InboundMessage,
 ) -> Result<i64> {
     let tx = conn.unchecked_transaction()?;
+    register_capabilities(&tx, &inbound.adapter_id)?;
     let pending: bool = tx.query_row(
         "SELECT kind='media_pending' FROM messages WHERE id=?1",
         params![staged_id],
@@ -330,6 +367,12 @@ pub(super) fn finalize_media(
         params![staged_id],
     )?;
     let published_id = tx.last_insert_rowid();
+    inbound.kind = kind.to_string();
+    inbound.payload = Some(serde_json::from_str(payload)?);
+    let published_id = team_core::chat::Repository::new(&tx)
+        .record_existing_inbound(published_id, inbound)?
+        .mailbox_id
+        .context("published media has no mailbox ID")?;
     tx.execute("DELETE FROM messages WHERE id=?1", params![staged_id])?;
     tx.commit()?;
     Ok(published_id)

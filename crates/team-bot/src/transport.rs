@@ -195,7 +195,7 @@ pub(super) async fn forward_rich_row(
     chat: ChatId,
     markdown: &str,
     row_id: i64,
-) -> Result<(), String> {
+) -> Result<Option<MessageId>, String> {
     // The token lives in the URL path (Bot API has no header auth). `api_url()`
     // ends in `/` for the default base, so this concat yields the correct
     // `.../bot<token>/sendRichMessage`. (teamctl never sets a custom api_url; a
@@ -220,11 +220,15 @@ pub(super) async fn forward_rich_row(
         .text()
         .await
         .map_err(|error| error.without_url().to_string())?;
-    let accepted = serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
+    let response = serde_json::from_str::<serde_json::Value>(&text).ok();
+    let accepted = response
+        .as_ref()
         .and_then(|body| body.get("ok").and_then(serde_json::Value::as_bool));
     if status.is_success() && accepted == Some(true) {
-        Ok(())
+        Ok(response
+            .and_then(|body| body.get("result")?.get("message_id")?.as_i64())
+            .and_then(|id| i32::try_from(id).ok())
+            .map(MessageId))
     } else {
         Err(format!(
             "row {row_id}: sendRichMessage HTTP {status}: {text}"
@@ -240,12 +244,14 @@ pub(super) async fn send_text_html(
     body: String,
     reply: Option<ReplyParameters>,
     _row_id: i64,
-) -> Result<(), String> {
+) -> Result<Option<MessageId>, String> {
     let mut req = bot.send_message(chat, body).parse_mode(ParseMode::Html);
     if let Some(rp) = reply {
         req = req.reply_parameters(rp);
     }
-    req.await.map(|_| ()).map_err(|error| error.to_string())
+    req.await
+        .map(|message| Some(message.id))
+        .map_err(|error| error.to_string())
 }
 
 /// Decide whether an outbound Text row takes the rich (`sendRichMessage`) path.
@@ -307,20 +313,24 @@ async fn send_text_row(
     reply: Option<ReplyParameters>,
     row_id: i64,
     rich: bool,
-) -> Result<(), String> {
+) -> Result<Option<MessageId>, String> {
+    let mut sent = None;
     for chunk in text_chunks(text) {
         let html_body = attributed_html(chunk, sender, TEXT_MAX_UTF16);
         if use_rich_path(rich, reply.is_some()) {
             let markdown = attributed_markdown(chunk, sender);
-            if let Err(error) = forward_rich_row(bot, chat, &markdown, row_id).await {
-                tracing::warn!(%error, "rich send failed; falling back to HTML");
-                send_text_html(bot, chat, html_body, reply.clone(), row_id).await?;
-            }
+            sent = match forward_rich_row(bot, chat, &markdown, row_id).await {
+                Ok(id) => id,
+                Err(error) => {
+                    tracing::warn!(%error, "rich send failed; falling back to HTML");
+                    send_text_html(bot, chat, html_body, reply.clone(), row_id).await?
+                }
+            };
         } else {
-            send_text_html(bot, chat, html_body, reply.clone(), row_id).await?;
+            sent = send_text_html(bot, chat, html_body, reply.clone(), row_id).await?;
         }
     }
-    Ok(())
+    Ok(sent)
 }
 
 pub(super) async fn forward_row(
@@ -328,13 +338,13 @@ pub(super) async fn forward_row(
     chat: ChatId,
     row: &MailboxRow,
     rich: bool,
-) -> Result<(), String> {
+) -> Result<Option<MessageId>, String> {
     let kind = classify_kind(row.kind.as_deref());
     let attribution = format!("\n\n— replied by {}", html_escape_str(&row.sender));
     let reply = reply_parameters_for(row.telegram_msg_id);
     match kind {
         DispatchKind::Text => {
-            send_text_row(bot, chat, &row.text, &row.sender, reply, row.id, rich).await?;
+            return send_text_row(bot, chat, &row.text, &row.sender, reply, row.id, rich).await;
         }
         DispatchKind::Image | DispatchKind::File => {
             let Some(payload) = row.payload.as_deref().and_then(parse_payload) else {
@@ -392,7 +402,9 @@ pub(super) async fn forward_row(
                 }
                 request.await
             };
-            result.map_err(|error| error.to_string())?;
+            return result
+                .map(|message| Some(message.id))
+                .map_err(|error| error.to_string());
         }
         DispatchKind::Reaction => {
             let reaction = row
@@ -409,8 +421,8 @@ pub(super) async fn forward_row(
         }
         DispatchKind::Typing => {}
         DispatchKind::UnknownFallback => {
-            send_text_row(bot, chat, &row.text, &row.sender, reply, row.id, false).await?;
+            return send_text_row(bot, chat, &row.text, &row.sender, reply, row.id, false).await;
         }
     }
-    Ok(())
+    Ok(None)
 }

@@ -27,3 +27,4 @@ include!("tests/tmux.rs");
 include!("tests/threading.rs");
 include!("tests/attachments.rs");
 include!("tests/approvals.rs");
+mod chat;

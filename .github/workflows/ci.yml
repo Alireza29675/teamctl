@@ -73,6 +73,10 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        if: matrix.rust == 'stable'
+        with:
+          node-version: '22'
       - name: Install tmux for isolated lifecycle contracts
         if: matrix.rust == 'stable'
         run: |
@@ -153,3 +157,31 @@ jobs:
         if: matrix.rust == 'stable'
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
         if: matrix.rust == 'stable'
+
+  adapters:
+    name: offline adapters / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    defaults:
+      run:
+        working-directory: adapters
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: adapters/package-lock.json
+      # Normal tests use fake providers and disposable processes. Downloading
+      # or launching a browser belongs to explicit local smoke checks.
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run check
+      - run: npm audit --audit-level=high

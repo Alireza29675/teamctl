@@ -34,6 +34,8 @@ pub enum MainLayout {
     Triptych,
     Wall,
     MailboxFirst,
+    /// Durable human conversations, separate from the agent mailbox.
+    Chat,
 }
 
 impl MainLayout {

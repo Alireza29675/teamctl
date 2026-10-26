@@ -215,6 +215,13 @@ enum Command {
     /// Broadcast as `sender=cli` to a channel (`<project>:<channel>`).
     /// A bare `#<channel>` is accepted when it identifies one project.
     Broadcast { target: String, text: String },
+    /// Persistent human chat shared with the UI and messaging adapters.
+    Chat(cmd::chat::Args),
+    /// Configure, pair and run external messaging adapters.
+    Adapter {
+        #[command(subcommand)]
+        action: cmd::adapters::Action,
+    },
 
     // ── Approvals ────────────────────────────────────────────────────
     /// Show pending HITL approval requests.
@@ -533,6 +540,8 @@ fn main() -> Result<()> {
         Command::Inspect { target } => cmd::inspect::run(&root, &target),
         Command::Send { target, text } => cmd::send::run(&root, &target, &text),
         Command::Broadcast { target, text } => cmd::broadcast::run(&root, &target, &text),
+        Command::Chat(args) => cmd::chat::run(&root, args),
+        Command::Adapter { action } => cmd::adapters::run(&root, action),
         Command::Budget { project } => cmd::budget::run(&root, project.as_deref()),
         Command::Gc => cmd::gc::run(&root),
         Command::RlWatch {

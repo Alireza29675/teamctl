@@ -11,6 +11,7 @@ use serde::Serialize;
 mod access;
 mod agents;
 mod approvals;
+pub(crate) mod chat;
 mod inbox;
 mod messaging;
 
@@ -63,6 +64,16 @@ pub struct Message {
     /// operator prefixes a message with `/readnow `.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_message_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_id: Option<String>,
 }
 
 /// One approval row's decision-relevant fields. `value` is the chosen
@@ -124,3 +135,5 @@ impl Store {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_chat;

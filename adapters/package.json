@@ -1,0 +1,13 @@
+{
+  "name": "teamctl-adapters",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["sdk", "whatsapp"],
+  "engines": { "node": ">=22.12.0" },
+  "overrides": { "whatsapp-web.js": { "puppeteer": "25.13.0" } },
+  "scripts": {
+    "test": "node --test sdk/test/*.test.js whatsapp/test/*.test.js",
+    "check": "node scripts/check.js"
+  }
+}

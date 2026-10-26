@@ -11,6 +11,7 @@ pub fn run(root: &Path) -> Result<()> {
         eprintln!("warning: {w}");
     }
     if errs.is_empty() {
+        super::adapters::config::specs(&compose)?;
         println!(
             "ok · {} project{} · {} agent session{}",
             compose.projects.len(),

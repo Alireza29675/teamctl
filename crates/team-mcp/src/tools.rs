@@ -15,6 +15,7 @@ pub use schema::schema;
 mod messaging;
 use messaging::*;
 mod human;
+pub(crate) use human::is_allowed_reaction;
 use human::*;
 mod attachments;
 use attachments::*;
@@ -111,7 +112,7 @@ pub async fn call(ctx: &Ctx, params: Value) -> Result<Value, String> {
         "request_approval" => request_approval(ctx, p.arguments).await,
         "reply_to_user" => reply_to_user(ctx, p.arguments).await,
         "react_to_user" => react_to_user(ctx, p.arguments).await,
-        "show_typing" => show_typing(ctx).await,
+        "show_typing" => show_typing(ctx, p.arguments).await,
         "read_attachment" => read_attachment(ctx, p.arguments).await,
         "compact_self" => compact_self(ctx).await,
         other => Err(format!("unknown tool: {other}")),

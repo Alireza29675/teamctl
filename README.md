@@ -47,7 +47,7 @@ Because teamctl runs your sessions, it can hand them tools they would not have o
 2. ⚙️ **[Per-agent settings](https://teamctl.run/reference/team-compose-yaml/):** give each agent its own runtime, model, role, and tools.
 3. 🧬 **[Cascading role prompts](https://teamctl.run/reference/team-compose-yaml/):** layer a shared `_base.md` and group files like `_engineer.md` under each agent's own role, so the rules they share live in one place.
 4. 🖥️ **[One terminal UI for the whole team](https://teamctl.run/reference/teamctl/):** watch every agent in one place with `teamctl ui`.
-5. 📱 **[Easy Telegram hookup](https://teamctl.run/guides/telegram-bot/):** steer your team from your phone (more interfaces on the way).
+5. 📱 **[Easy Telegram hookup](https://teamctl.run/guides/telegram-bot/):** steer your team from your phone. [Local CLI/UI chat and executable adapters](docs/src/content/docs/guides/chat-and-adapters.md) include opt-in personal WhatsApp QR pairing.
 6. ⏳ **(soon) Auto-recovery from rate limits:** teamctl can let your session know when its rate limit has cleared so it picks the work back up.
 
 > *These extras are optional. They are here to help fill the gaps as you design different agent setups.*

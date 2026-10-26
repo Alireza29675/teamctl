@@ -121,7 +121,7 @@ workers:
 | `budget.message_ttl_hours` | int | 24 | `teamctl gc` horizon. |
 | `hitl.globally_sensitive_actions` | list | (see default) | Actions that always gate through approval. |
 | `hitl.auto_approve_windows` | list | `[]` | Pre-authorization windows. |
-| `interfaces` | list | `[]` | Reserved for non-Telegram adapters (discord, imessage, cli, webhook, email). Telegram now lives on the manager. |
+| `interfaces` | list | `[]` | Process/WhatsApp adapter declarations; see [chat and adapters](/guides/chat-and-adapters/). Telegram lives on the manager; local chat needs no declaration. |
 | `projects` | list | `[]` | Each entry: `{ file: <path> }`. |
 
 ### Per-project

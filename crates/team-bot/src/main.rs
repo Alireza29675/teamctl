@@ -5,9 +5,8 @@
 //! surfaces both to the authorized Telegram chat. Inbound user
 //! messages (DMs + callback button taps) write back into the mailbox.
 //!
-//! Later interface adapters (`team-interface-discord`, `-imessage`, `-cli`)
-//! mirror this crate's shape: an async loop against the same SQLite mailbox
-//! plus an adapter-specific transport.
+//! Ordinary conversations share `team_core::chat` with local clients and
+//! executable adapters. Telegram's native controls and media remain here.
 
 use std::collections::HashMap;
 #[cfg(test)]
@@ -30,6 +29,9 @@ use teloxide::types::ChatId;
 use teloxide::types::{InlineKeyboardMarkup, MessageId};
 use tokio::sync::Mutex;
 
+mod chat;
+#[cfg(test)]
+use chat::lookup_replied_row;
 mod config;
 #[cfg(test)]
 use config::*;

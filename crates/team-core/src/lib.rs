@@ -7,6 +7,7 @@
 //! schema used by `team-mcp`.
 
 pub mod attachments;
+pub mod chat;
 pub mod compose;
 pub mod mailbox;
 pub mod persistence;

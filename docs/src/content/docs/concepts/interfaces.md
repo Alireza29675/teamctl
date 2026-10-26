@@ -2,65 +2,47 @@
 title: Interfaces
 ---
 
-An **interface** is a pluggable human-facing channel. Telegram is the shipping adapter; Discord, iMessage, CLI, and webhook are planned.
+An **interface** connects a human conversation to an agent. The CLI and UI Chat
+view use the built-in local interface. Telegram and personal WhatsApp are supplied
+messenger transports; community adapters can be executables written in any language.
+All use the shared conversation repository and scoped reply routing.
 
-Telegram lives directly on the manager and is set up by `teamctl bot setup` (one bot per user-facing manager — DM the bot, the message goes to the matching manager). Other adapters use the top-level `interfaces:` array shape.
+Each conversation binds an adapter instance, a provider peer and one canonical
+agent. Inbound events preserve source and participant IDs. Agent replies address
+that conversation or its inbound mailbox message; ambiguous destinations reject
+instead of choosing a chat. History is retained separately from disposable agent
+inboxes, so `teamctl gc` does not erase chat transcripts.
 
-```yaml
-# projects/news.yaml — Telegram on the manager itself
-managers:
-  head_editor:
-    runtime: claude-code
-    role_prompt: roles/head_editor.md
-    interfaces:
-      telegram:
-        bot_token_env: TEAMCTL_TG_HEAD_EDITOR_TOKEN
-        chat_ids_env: TEAMCTL_TG_HEAD_EDITOR_CHATS
-```
+| Interface | Chat | Media | Typing/reactions | Approvals |
+|---|---|---|---|---|
+| Local CLI/UI | Text | Unsupported | Unsupported | Existing CLI/UI approval commands |
+| Telegram | Text | Existing image/file/voice behavior | Supported | Existing Telegram buttons |
+| Personal WhatsApp | Text and quoted replies | Unsupported | Unsupported | Use existing CLI/UI commands |
+| Community process | Declared capabilities | Declared capabilities | Declared capabilities | Not part of protocol v1 |
 
-```yaml
-# team-compose.yaml — non-Telegram adapters
-interfaces:
-  - type: discord
-    name: discord-home-lab
-    config:
-      bot_token_env: TEAMCTL_DISCORD_TOKEN
-      server_id: "…"
+Local clients share `local` / `operator` conversations. They can read external
+transcripts; replies to those threads are sent from their messenger. Telegram keeps
+its per-manager configuration and `teamctl bot setup` workflow. WhatsApp uses
+explicit foreground QR pairing and separate private login state.
 
-  - type: imessage
-    name: imsg
-    config:
-      my_number: "+31…"
+## Community adapters
 
-  - type: cli
-    name: local
-    # No config. Reachable via `teamctl chat <project>:<manager>`.
-```
+Declare `type: process` in the top-level `interfaces` array, with an executable,
+literal args, known canonical target and exact sender/peer allowlists. Empty lists
+deny all inbound messages. The host supplies a private state directory, supervises
+the process and owns authorization, persistence and delivery leases.
 
-Approvals are routed to every attached interface until one of them decides.
+Adapters exchange versioned JSON lines over stdin/stdout and never open the
+mailbox database. An optional Node SDK provides durable inbound spooling and
+outgoing receipts. A provider-success/local-persistence crash can still duplicate a
+send; reconnect recovery depends on the provider.
 
-## What interfaces do
-
-| Interface | Inbound DMs | Approval buttons | Notes |
-|---|---|---|---|
-| telegram | ✓ | ✓ | Shipping adapter. |
-| discord | ✓ | ✓ | Slash commands + buttons. |
-| imessage | ✓ | ✗ (reply "approve 3") | macOS host only. |
-| cli | ✓ | ✓ | `teamctl chat` / `teamctl pending`. |
-| webhook | ✓ | ✓ | For web dashboards or IFTTT-style. |
-
-## Adapter contract
-
-An adapter is a process that:
-
-1. Reads new messages for subscribed managers (`inbox_peek` / `inbox_watch`, scoped via `--manager` for the Telegram adapter).
-2. Surfaces them to the human.
-3. Writes human replies back as `sender=user:<handle>` via SQL insert or team-mcp.
-4. Listens for approval notifications and renders inline decision UI.
-
-Adapters ship as small standalone binaries next to `teamctl` — `team-interface-telegram`, `team-interface-discord`, etc.
+See the [chat and messaging guide](/guides/chat-and-adapters/) for configuration,
+CLI/UI usage, pairing, lifecycle and the executable contract. Other declarations
+without an implemented process transport remain inert.
 
 ## Related
 
 - [HITL](/concepts/hitl/)
-- [Guide: Telegram bot](/guides/telegram-bot/)
+- [Telegram setup](/guides/telegram-bot/)
+- [Chat and messaging adapters](/guides/chat-and-adapters/)

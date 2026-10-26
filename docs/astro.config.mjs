@@ -58,6 +58,7 @@ export default defineConfig({
             { label: 'Multi-runtime teams', link: '/guides/multi-runtime/' },
             { label: 'Existing MCP servers', link: '/guides/existing-mcps/' },
             { label: 'Telegram bot setup', link: '/guides/telegram-bot/' },
+            { label: 'Chat and messaging adapters', link: '/guides/chat-and-adapters/' },
             { label: 'Updating teamctl', link: '/guides/updating/' },
             { label: 'Bridges and HITL', link: '/guides/bridges-and-hitl/' },
             { label: 'Operating in production', link: '/guides/operating-in-production/' },

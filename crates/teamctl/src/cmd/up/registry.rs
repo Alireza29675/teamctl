@@ -124,8 +124,22 @@ pub(super) fn guard_no_name_collision_in(
                 })
                 .map(|(_, session)| session.replace('.', "_")),
         );
+        reserved.extend(
+            super::super::adapters::lifecycle::load(&team.root)?
+                .into_values()
+                .filter(|row| {
+                    row.agent
+                        .split_once(':')
+                        .is_some_and(|(project, _)| project == team.project_id)
+                })
+                .map(|row| row.session.replace('.', "_")),
+        );
         // Legacy registry rows predate explicit bot reservations.
         if let Ok(other) = Compose::load_read_only(&team.root) {
+            reserved.extend(super::super::adapters::lifecycle::session_names(
+                &other,
+                Some(&team.project_id),
+            )?);
             reserved.extend(
                 super::super::bot::bot_specs(&other)
                     .into_iter()
@@ -183,6 +197,9 @@ fn session_names(compose: &Compose, scoped: Option<&str>) -> Result<BTreeSet<Str
             .filter(|(id, _)| in_scope(id))
             .map(|(_, name)| name.replace('.', "_")),
     );
+    names.extend(super::super::adapters::lifecycle::session_names(
+        compose, scoped,
+    )?);
     Ok(names)
 }
 

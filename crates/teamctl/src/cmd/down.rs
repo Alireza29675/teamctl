@@ -41,6 +41,9 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector) -> Result<()
         &compose.root.join("state/lifecycle.lock.sqlite"),
     )?;
     let prior = super::snapshot::read(&compose.root);
+    // Exact applied identities remain available after declarations or targets
+    // are removed. Stop ingress before stopping its recipient runtimes.
+    super::adapters::lifecycle::down(&compose, scoped.as_deref(), targets.as_ref())?;
     let roster = team_core::registry::config_dir()
         .and_then(|dir| team_core::registry::load(&dir).ok())
         .map(|reg| reg.roster_for_root(&compose.root))

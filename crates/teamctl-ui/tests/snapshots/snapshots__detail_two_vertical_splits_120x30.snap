@@ -1,6 +1,5 @@
 ---
 source: crates/teamctl-ui/tests/snapshots.rs
-assertion_line: 427
 expression: s
 ---
 ┌AGENTS────────────────────┐┌DETAIL · writing:manager──────────────────────────────────────────────────────────────────┐
@@ -31,5 +30,5 @@ expression: s
 │                          ││                                                                                          │
 │                          ││                                                                                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
-Tab cycle panes  ·  / search · ⏎ open · @ send · q quit                                              ? help · t tutorial
+Tab cycle panes  ·  / search · ⏎ open · @ send · q quit                                     c chat · ? help · t tutorial
 /fixture                                                                                           CPU 0% · RAM 0.0/0 GB

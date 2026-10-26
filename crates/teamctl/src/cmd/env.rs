@@ -37,6 +37,17 @@ pub fn run(root: &Path, doctor: bool) -> Result<()> {
             }
         }
     }
+    // Process adapters map destination keys to operator variable names.
+    // Report the references through the existing doctor surface, without
+    // reading credentials from the declaration itself.
+    for adapter in super::adapters::config::specs(&compose)? {
+        for (destination, source) in adapter.config.env {
+            required.insert(
+                source,
+                format!("interfaces[{}].config.env.{destination}", adapter.name),
+            );
+        }
+    }
 
     // 2. Rate-limit hooks of `webhook` action with `url_env`.
     for hook in &compose.global.rate_limits.hooks {

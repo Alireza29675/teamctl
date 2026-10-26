@@ -67,6 +67,25 @@ It is **not** a file wipe: durable on-disk state (`task.md`, `memory/`, `ways-of
 |---|---|
 | `teamctl send <project>:<agent> "<text>"` | Inject a message into an agent's inbox as `sender=cli`. |
 
+## Human chat and adapters
+
+| Command | Effect |
+|---|---|
+| `teamctl chat <agent-or-conversation>` | Interactive local chat; external history is read-only. |
+| `teamctl chat send <target> "<text>" [--request-id <id>] [--json]` | Enqueue durable local input; same request ID and body retries safely. |
+| `teamctl chat history <target> [--before <id> / --after <id>] [--limit <n>] [--json]` | Page durable transcripts, independent of inbox GC. |
+| `teamctl chat list [--json]` | List up to 200 conversations. |
+| `teamctl chat follow <target> [--json]` | Stream additions and latest-window delivery revisions. |
+| `teamctl adapter list` | List configured and built-in transports. |
+| `teamctl adapter setup <name>` | Install pinned optional WhatsApp dependencies. |
+| `teamctl adapter pair <name>` | Foreground interactive QR pairing. |
+| `teamctl adapter identify <name>` | Print incoming peer/sender IDs without forwarding or sending. |
+| `teamctl adapter start / stop / run <name>` | Manage one transport or run it in the foreground. |
+
+The dashboard's `c` Chat view shares local transcripts with the CLI. See
+[chat and messaging adapters](/guides/chat-and-adapters/) for the extension contract,
+capabilities, allowlists and personal WhatsApp setup.
+
 ## Approvals (HITL)
 
 | Command | Effect |

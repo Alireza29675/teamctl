@@ -56,7 +56,8 @@ impl Store {
         let conn = self.connection()?;
         let mut stmt = conn.prepare(
             "SELECT m.id, m.project_id, m.sender, m.recipient, m.text, m.thread_id, m.sent_at,
-                    m.telegram_msg_id, m.kind, m.structured_payload, m.delivery_mode
+                    m.telegram_msg_id, m.kind, m.structured_payload, m.delivery_mode,
+                    m.conversation_id, m.chat_message_id, m.adapter_id, m.external_id, m.peer_id
              FROM messages m
              WHERE m.acked_at IS NULL
                AND m.id > ?3
@@ -91,6 +92,11 @@ impl Store {
                     kind: r.get(8)?,
                     structured_payload: r.get(9)?,
                     delivery_mode: r.get(10)?,
+                    conversation_id: r.get(11)?,
+                    chat_message_id: r.get(12)?,
+                    adapter_id: r.get(13)?,
+                    external_id: r.get(14)?,
+                    peer_id: r.get(15)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -113,7 +119,8 @@ impl Store {
         // Pull rows the caller is allowed to read AND that are still unacked.
         let select_sql = format!(
             "SELECT m.id, m.project_id, m.sender, m.recipient, m.text, m.thread_id, m.sent_at,
-                    m.telegram_msg_id, m.kind, m.structured_payload, m.delivery_mode
+                    m.telegram_msg_id, m.kind, m.structured_payload, m.delivery_mode,
+                    m.conversation_id, m.chat_message_id, m.adapter_id, m.external_id, m.peer_id
              FROM messages m
              WHERE m.id IN ({placeholders})
                AND m.acked_at IS NULL
@@ -157,6 +164,11 @@ impl Store {
                         kind: r.get(8)?,
                         structured_payload: r.get(9)?,
                         delivery_mode: r.get(10)?,
+                        conversation_id: r.get(11)?,
+                        chat_message_id: r.get(12)?,
+                        adapter_id: r.get(13)?,
+                        external_id: r.get(14)?,
+                        peer_id: r.get(15)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?;

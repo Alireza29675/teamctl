@@ -19,6 +19,7 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
         }
         bail!("{} validation error(s) — fix before up", errs.len());
     }
+    super::adapters::config::specs(&compose)?;
     let scoped = project
         .map(|name| super::project_filter::resolve(&compose, name))
         .transpose()?;
@@ -30,6 +31,7 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
         Some(id) => super::agent_filter::resolve(&compose, id, sel)?,
         None => None,
     };
+    super::adapters::lifecycle::validate_scope(&compose, scoped.as_deref(), targets.as_ref())?;
 
     // T-469: refuse a same-name-different-folder launch before any side
     // effects. Two teams sharing a `project_id` in different folders alias
@@ -42,6 +44,7 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
         &compose.root.join("state/lifecycle.lock.sqlite"),
     )?;
     source_dotenv_into_process(&compose.root);
+    super::adapters::lifecycle::preflight(&compose, scoped.as_deref(), targets.as_ref())?;
     let mut applied = super::snapshot::read(&compose.root);
     let bin = super::team_mcp_bin().display().to_string();
     let mut next = super::snapshot::compute(&compose, &bin);
@@ -119,6 +122,13 @@ pub fn run(root: &Path, project: Option<&str>, sel: &AgentSelector, fresh: bool)
     if let (Some(id), 0) = (scoped.as_deref(), touched) {
         println!("no agents in scope for project {id}.");
     }
+    super::adapters::lifecycle::reconcile(
+        &compose,
+        scoped.as_deref(),
+        targets.as_ref(),
+        false,
+        false,
+    )?;
     record_in_registry(&compose, scoped.as_deref());
     if touched > 0 {
         super::caffeinate::ensure_running();

@@ -167,6 +167,11 @@ pub struct App {
     /// Active main-view layout (PR-UI-6). Triptych is the default;
     /// `Ctrl+W` toggles Wall, `Ctrl+M` toggles MailboxFirst.
     pub layout: MainLayout,
+    pub chat: crate::chat::ChatState,
+    /// Returning from chat restores the operator's dashboard layout/selection.
+    pub chat_dashboard_layout: MainLayout,
+    /// Last rendered transcript width/height, used for anchored page navigation.
+    pub chat_viewport: (u16, u16),
     /// Top-of-window agent index for the Wall view's vertical
     /// scroll. SPEC §3 caps visible tiles at 4; this offsets which
     /// 4-agent window is shown when the team has more.
@@ -287,6 +292,9 @@ impl App {
             compose_editor: Editor::default(),
             compose_error: None,
             layout: MainLayout::Triptych,
+            chat: crate::chat::ChatState::default(),
+            chat_dashboard_layout: MainLayout::Triptych,
+            chat_viewport: (80, 12),
             wall_scroll: 0,
             selected_channel: None,
             detail_splits: Vec::new(),

@@ -6,8 +6,20 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
 fn state_at(path: &Path) -> State {
+    let conn = open_mailbox(path).unwrap();
+    conn.execute(
+        "INSERT OR IGNORE INTO projects(id,name) VALUES ('p','P')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT OR IGNORE INTO agents(id,project_id,role,runtime,is_manager)
+                  VALUES ('p:manager','p','manager','claude-code',1)",
+        [],
+    )
+    .unwrap();
     State {
-        conn: Mutex::new(open_mailbox(path).unwrap()),
+        conn: Mutex::new(conn),
         allow: vec![7],
         manager: Some("p:manager".into()),
         manager_display_name: None,
@@ -70,7 +82,8 @@ async fn fake_bot_with_gate(
                 }
             }
             let body = if success {
-                if lower_headers.contains("/deletemessage ") {
+                if ["/deletemessage ", "/sendchataction ", "/setmessagereaction "]
+                    .iter().any(|method| lower_headers.contains(method)) {
                     json!({"ok":true,"result":true})
                 } else {
                     json!({"ok":true,"result":{"message_id":1,"date":0,"chat":{"id":7,"type":"private"},"text":"delivered"}})
@@ -125,7 +138,8 @@ fn request_body(bytes: &[u8], headers: &str) -> Value {
 
 fn inbound(text: &str) -> Message {
     serde_json::from_value(
-        json!({"message_id":21,"date":0,"chat":{"id":7,"type":"private"},"text":text}),
+        json!({"message_id":21,"date":0,"chat":{"id":7,"type":"private"},
+               "from":{"id":17,"is_bot":false,"first_name":"Operator"},"text":text}),
     )
     .unwrap()
 }
@@ -390,15 +404,28 @@ fn expired_approval_cannot_be_decided_between_expiry_sweeps() {
 
 #[test]
 fn media_completion_publishes_a_fresh_id_and_preserves_telegram_threading() {
-    let conn = Connection::open_in_memory().unwrap();
-    team_core::mailbox::ensure(&conn).unwrap();
+    let dir = TempDir::new().unwrap();
+    let state = state_at(&dir.path().join("mailbox.sqlite"));
+    let conn = state.conn.blocking_lock();
     conn.execute("INSERT INTO messages (project_id,sender,recipient,text,sent_at,kind,telegram_msg_id) VALUES ('p','user:telegram','p:manager','caption',0,'media_pending',777)", []).unwrap();
     let staged = conn.last_insert_rowid();
-    assert!(lookup_replied_row(&conn, 777).is_none());
+    assert!(lookup_replied_row(&conn, &state.adapter_id(), "7", 777)
+        .unwrap()
+        .is_none());
     conn.execute("INSERT INTO messages (project_id,sender,recipient,text,sent_at) VALUES ('p','user:telegram','p:manager','later',0)", []).unwrap();
     let high_water = conn.last_insert_rowid();
-    let published =
-        finalize_media(&conn, staged, "image", "{\"path\":\"/tmp/image.png\"}").unwrap();
+    let mut msg = inbound("caption");
+    msg.id = MessageId(777);
+    let source =
+        crate::chat::inbound_message(&state, &msg, "p:manager", "caption", "image", None).unwrap();
+    let published = finalize_media(
+        &conn,
+        staged,
+        "image",
+        "{\"path\":\"/tmp/image.png\"}",
+        source,
+    )
+    .unwrap();
     assert!(published > high_water);
     let telegram_id: i64 = conn
         .query_row(
@@ -408,7 +435,13 @@ fn media_completion_publishes_a_fresh_id_and_preserves_telegram_threading() {
         )
         .unwrap();
     assert_eq!(telegram_id, 777);
-    assert_eq!(lookup_replied_row(&conn, 777).unwrap().0, published);
+    assert_eq!(
+        lookup_replied_row(&conn, &state.adapter_id(), "7", 777)
+            .unwrap()
+            .unwrap()
+            .0,
+        Some(published)
+    );
     assert!(conn
         .query_row(
             "SELECT id FROM messages WHERE id=?1",
@@ -417,3 +450,6 @@ fn media_completion_publishes_a_fresh_id_and_preserves_telegram_threading() {
         )
         .is_err());
 }
+
+#[path = "tests/chat.rs"]
+mod chat_tests;

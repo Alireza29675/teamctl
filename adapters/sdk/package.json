@@ -1,0 +1,10 @@
+{
+  "name": "@teamctl/adapter-sdk",
+  "version": "0.1.0",
+  "description": "Durable JSON-lines transport SDK for teamctl messaging adapters",
+  "type": "module",
+  "exports": "./src/index.js",
+  "files": ["src", "README.md", "LICENSE"],
+  "engines": { "node": ">=22.12.0" },
+  "license": "MIT"
+}

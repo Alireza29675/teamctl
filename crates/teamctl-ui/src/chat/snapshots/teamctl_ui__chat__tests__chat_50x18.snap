@@ -1,0 +1,22 @@
+---
+source: crates/teamctl-ui/src/chat/tests.rs
+expression: "rendered(&app, 50, 18)"
+---
+┌CHAT · conversations────────────────────────────┐
+│p:a · local                                     │
+│  operator                                      │
+└────────────────────────────────────────────────┘
+┌p:a · local · operator──────────────────────────┐
+│سلام é 📎  — replies remain in this conversation │
+│after mailbox cleanup.                          │
+│                                                │
+│End follows replies                             │
+└────────────────────────────────────────────────┘
+┌MESSAGE · local/operator────────────────────────┐
+│Draft q c @ !▏                                  │
+│                                                │
+│                                                │
+│Enter newline · Esc Enter / Alt+Enter send      │
+└────────────────────────────────────────────────┘
+Tab panes · PageUp/Down history · Ctrl+D dashboard
+/tmp/chat-fixture/.team      CPU 0% · RAM 0.0/0 GB

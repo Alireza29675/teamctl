@@ -323,3 +323,40 @@ fn different_roots_cannot_reserve_colliding_concrete_agent_or_bot_names() {
         assert!(error.to_string().contains("tmux session"), "{error}");
     }
 }
+
+#[test]
+fn registry_reserves_removed_adapter_sessions_and_rejects_cross_root_collisions() {
+    let (_first_dir, first) = fixture();
+    fs::create_dir_all(first.root.join("state")).unwrap();
+    fs::write(
+        first.root.join("state/adapters.json"),
+        r#"{
+        "removed": {"session":"t-p-a","agent":"p:a","fingerprint":"old"},
+        "sibling": {"session":"private-q-adapter","agent":"q:b","fingerprint":"old"}
+    }"#,
+    )
+    .unwrap();
+    let registry_dir = tempfile::tempdir().unwrap();
+    record_in_registry_in(registry_dir.path(), &first, Some("p"));
+    let registry = team_core::registry::load(registry_dir.path()).unwrap();
+    assert!(registry.teams[0].sessions.iter().any(|s| s == "t-p-a"));
+    assert!(!registry.teams[0]
+        .sessions
+        .iter()
+        .any(|s| s == "private-q-adapter"));
+
+    let (_second_dir, mut second) = fixture();
+    second.projects[0].project.id = "different".into();
+    second.projects.remove(1);
+    fs::write(
+        first.root.join("state/adapters.json"),
+        r#"{
+        "removed": {"session":"a-different-a","agent":"p:a","fingerprint":"old"}
+    }"#,
+    )
+    .unwrap();
+    // Even a legacy registry entry with no stored adapter names must recover
+    // exact ownership from the other root's persisted transport identities.
+    let error = guard_no_name_collision_in(&registry, &second, None, &Path::exists).unwrap_err();
+    assert!(error.to_string().contains("a-different-a"), "{error}");
+}

@@ -1,3 +1,4 @@
+pub mod adapters;
 pub mod adjust;
 pub mod agent_filter;
 pub mod approval;
@@ -8,6 +9,7 @@ pub mod broadcast;
 pub mod budget;
 pub mod budget_record;
 pub mod caffeinate;
+pub mod chat;
 pub mod context;
 pub mod down;
 pub mod env;

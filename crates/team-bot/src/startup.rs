@@ -57,6 +57,10 @@ pub(super) async fn run() -> Result<()> {
         typing: Mutex::new(HashMap::new()),
         rich: !cli.no_rich_messages,
     });
+    {
+        let conn = state.conn.lock().await;
+        crate::chat::register_capabilities(&conn, &state.adapter_id())?;
+    }
 
     // T-086-H: register the manager's runtime-appropriate slash commands
     // with Telegram so the operator gets autocomplete on `/`. Manager-scoped
@@ -81,7 +85,8 @@ pub(super) async fn run() -> Result<()> {
         }
     }
 
-    // Outbound: poll approvals + mailbox, surface to primary chat.
+    // Conversation replies use their recorded peer; approvals and legacy
+    // mailbox rows retain the primary-chat compatibility fallback.
     {
         let bot = bot.clone();
         let state = state.clone();

@@ -16,6 +16,10 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
     mailbox_source: &M,
     key_sender: &K,
 ) {
+    if app.stage == Stage::Triptych && app.layout == MainLayout::Chat {
+        app.handle_chat_event(ev);
+        return;
+    }
     use crossterm::event::KeyModifiers;
     if let Event::Key(key) = &ev {
         if key.kind == KeyEventKind::Press {
@@ -73,6 +77,7 @@ pub fn handle_event<D: ApprovalDecider, S: MessageSender, M: MailboxSource, K: K
                     app.close_other_splits();
                 }
                 KeyCode::Char('q') if k.modifiers.is_empty() => app.enter_quit_confirm(),
+                KeyCode::Char('c') if k.modifiers.is_empty() => app.enter_chat(),
                 // PR-UI-4: `a` opens the approvals modal when there's
                 // at least one pending row. No-op otherwise so the
                 // chord doesn't surprise anyone hammering keys.

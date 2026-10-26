@@ -30,7 +30,10 @@ pub fn refresh<P: PaneSource, M: MailboxSource, A: ApprovalSource>(
     if let Ok(Some(snapshot)) = current_snapshot(app) {
         app.replace_team(snapshot);
     }
-    if let Some(session) = app.stream_target_session() {
+    if let Some(session) = app
+        .stream_target_session()
+        .filter(|_| app.layout != MainLayout::Chat)
+    {
         if let Ok(lines) = pane_source.capture(&session) {
             app.set_detail_buffer(lines);
         }
@@ -121,7 +124,9 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
         .unwrap_or(std::path::Path::new("."))
         .to_path_buf();
     let mut watch = Watch::try_new(&watched_dir);
+    let mut chat_worker: Option<(std::path::PathBuf, crate::chat::ChatWorker)> = None;
     while app.running {
+        tick_chat(&mut app, &mut chat_worker);
         // T-131 PR-4: refresh the render-tick clock so the mailbox
         // relative-time indicator reads a fresh `now_secs` each
         // draw. Keeping this on App (not in render) makes render a
@@ -141,6 +146,11 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
             .size()
             .map_err(|error| anyhow::anyhow!("read terminal size: {error}"))?;
         let term_area = ratatui::layout::Rect::new(0, 0, term_sz.width, term_sz.height);
+        let chat_areas = crate::chat::geometry(crate::pane_resize::main_areas(term_area)[0]);
+        app.chat_viewport = (
+            chat_areas[1].width.saturating_sub(2),
+            chat_areas[1].height.saturating_sub(3),
+        );
         sync_focused_pane_size_to(&mut app, term_area, &pane_resizer);
         if event::poll(POLL_INTERVAL)? {
             // The mailbox source for handle_event mirrors the
@@ -195,7 +205,13 @@ pub fn run<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
 /// refreshes. A single `capture-pane` subprocess — no team / mailbox /
 /// approval / sysinfo work. No-op when no agent is focused.
 pub(super) fn recapture_focused_pane<P: PaneSource>(app: &mut App, pane_source: &P) {
-    if let Some(session) = app.stream_target_session() {
+    if app.layout == MainLayout::Chat {
+        return;
+    }
+    if let Some(session) = app
+        .stream_target_session()
+        .filter(|_| app.layout != MainLayout::Chat)
+    {
         // #277: skip the 3000-line capture when `detail_buffer` already
         // holds THIS session's content at the pane's current activity ts
         // (this runs up to 10x/s on an idle pane). A focus switch
@@ -237,6 +253,45 @@ pub(super) fn recapture_focused_pane<P: PaneSource>(app: &mut App, pane_source: 
         }
     }
     app.last_pane_refresh = Instant::now();
+}
+
+fn tick_chat(app: &mut App, worker: &mut Option<(std::path::PathBuf, crate::chat::ChatWorker)>) {
+    let active = app.layout == MainLayout::Chat;
+    if worker
+        .as_ref()
+        .is_some_and(|(path, _)| path != &app.mailbox_db_path)
+    {
+        // Old responses are dropped with their receiver; they cannot cross roots.
+        *worker = None;
+        app.chat = crate::chat::ChatState::default();
+    }
+    if worker.is_none() && active {
+        *worker = Some((
+            app.mailbox_db_path.clone(),
+            crate::chat::ChatWorker::new(app.mailbox_db_path.clone()),
+        ));
+    }
+    let Some((_, worker)) = worker else {
+        return;
+    };
+    for _ in 0..crate::chat::QUEUE_CAP {
+        let Some(response) = worker.try_receive() else {
+            break;
+        };
+        app.chat.apply(response);
+    }
+    if active && app.chat.last_refresh.elapsed() >= REFRESH_INTERVAL {
+        app.chat.refresh();
+    }
+    for _ in 0..crate::chat::QUEUE_CAP {
+        let Some(request) = app.chat.outbox.pop_front() else {
+            break;
+        };
+        if let Err(request) = worker.try_submit(request) {
+            app.chat.outbox.push_front(request);
+            break;
+        }
+    }
 }
 
 /// T-199: push the focused agent's inner tmux pane to match the
@@ -322,7 +377,10 @@ fn refresh_with_default_sources<P: PaneSource>(app: &mut App, pane_source: &P) {
     let db_path = app.mailbox_db_path.clone();
     let mailbox_source = BrokerMailboxSource::new(db_path.clone());
     let approval_source = BrokerApprovalSource::new(db_path);
-    if let Some(session) = app.stream_target_session() {
+    if let Some(session) = app
+        .stream_target_session()
+        .filter(|_| app.layout != MainLayout::Chat)
+    {
         if let Ok(lines) = pane_source.capture(&session) {
             app.set_detail_buffer(lines);
         }

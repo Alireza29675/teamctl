@@ -64,9 +64,20 @@ pub fn run(
         }
         anyhow::bail!("{} validation error(s) — fix before reload", errs.len());
     }
+    super::adapters::config::specs(&compose)?;
     let scoped = project
         .map(|name| super::project_filter::resolve(&compose, name))
         .transpose()?;
+    let adapter_targets = scoped
+        .as_deref()
+        .map(|id| super::agent_filter::resolve(&compose, id, sel))
+        .transpose()?
+        .flatten();
+    super::adapters::lifecycle::validate_scope(
+        &compose,
+        scoped.as_deref(),
+        adapter_targets.as_ref(),
+    )?;
 
     // T-469: `reload` spawns agents too (both the force and diff paths
     // below), so it's a second front door to the same-name-different-folder
@@ -86,6 +97,11 @@ pub fn run(
     };
     if !dry_run {
         super::up::source_dotenv_into_process(&compose.root);
+        super::adapters::lifecycle::preflight(
+            &compose,
+            scoped.as_deref(),
+            adapter_targets.as_ref(),
+        )?;
     }
 
     // T-305: a per-agent scope force-restarts exactly the selected
@@ -144,6 +160,10 @@ pub fn run(
             .map(|s| s.compose_digest == next.compose_digest && s.global == next.global)
             .unwrap_or(false);
     if no_changes {
+        if !dry_run {
+            super::up::reserve_in_registry(&compose, scoped.as_deref())?;
+        }
+        super::adapters::lifecycle::reconcile(&compose, scoped.as_deref(), None, dry_run, force)?;
         if dry_run {
             println!("no changes (dry run)");
         } else {
@@ -158,6 +178,7 @@ pub fn run(
         for id in stopped {
             println!("started · {id}{} (dry run)", super::up::fresh_suffix(fresh));
         }
+        super::adapters::lifecycle::reconcile(&compose, scoped.as_deref(), None, true, force)?;
         return Ok(());
     }
 
@@ -199,6 +220,7 @@ pub fn run(
     let final_snapshot = snapshot::merge_applied(applied.as_ref(), &next, [], []);
     snapshot::write(&compose.root, &final_snapshot)?;
     super::bot::start_bots(&bot_plan, &compose.root)?;
+    super::adapters::lifecycle::reconcile(&compose, scoped.as_deref(), None, false, force)?;
     // T-468: refresh the durable registry to the post-reload roster so
     // `teamctl ps` and orphan reaping reflect what's now up. This is the
     // #466 registry-write deferred from up-only into the reload path; the
@@ -252,6 +274,13 @@ fn force_restart_scoped(
                 super::up::fresh_suffix(fresh)
             );
         }
+        super::adapters::lifecycle::reconcile(
+            compose,
+            Some(project_id),
+            Some(targets),
+            true,
+            true,
+        )?;
         return Ok(());
     }
 
@@ -315,6 +344,7 @@ fn force_restart_scoped(
     // If a forced agent's config also changed, the restart already
     // applied the new spec and the merged `next` records it.
     super::bot::start_bots(&bot_plan, &compose.root)?;
+    super::adapters::lifecycle::reconcile(compose, Some(project_id), Some(targets), false, true)?;
     super::up::record_in_registry(compose, Some(project_id));
     Ok(())
 }

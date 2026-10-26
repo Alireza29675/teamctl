@@ -43,6 +43,14 @@ pub const NAVIGATION: &[Binding] = &[
 
 pub const LAYOUTS: &[Binding] = &[
     Binding {
+        chord: "c / Ctrl+D",
+        description: "open chat / return to dashboard",
+    },
+    Binding {
+        chord: "Tab / PageUp/Down",
+        description: "chat pane focus / conversation history",
+    },
+    Binding {
         chord: "Ctrl+W",
         description: "toggle Wall layout",
     },
@@ -102,6 +110,50 @@ pub const COMPOSE: &[Binding] = &[
         description: "line ops in normal mode",
     },
 ];
+
+pub const CHAT: &[Binding] = &[
+    Binding {
+        chord: "Tab / Shift+Tab",
+        description: "cycle conversations, history, composer",
+    },
+    Binding {
+        chord: "Enter (conversations)",
+        description: "open or resume the selected local chat",
+    },
+    Binding {
+        chord: "Enter (composer)",
+        description: "insert a newline; q/c/@/! are literal text",
+    },
+    Binding {
+        chord: "Esc Enter / Alt+Enter",
+        description: "send; retry an unchanged failed draft with the same ID",
+    },
+    Binding {
+        chord: "Esc Esc",
+        description: "focus conversations without discarding the draft",
+    },
+    Binding {
+        chord: "PageUp/Down / wheel",
+        description: "browse durable history; PageUp loads older messages",
+    },
+    Binding {
+        chord: "End",
+        description: "follow new replies",
+    },
+    Binding {
+        chord: "Ctrl+D",
+        description: "return to the previous dashboard layout",
+    },
+    Binding {
+        chord: "Ctrl+Q",
+        description: "quit with confirmation",
+    },
+];
+
+pub const CHAT_GROUPS: &[BindingGroup] = &[BindingGroup {
+    title: "Chat",
+    bindings: CHAT,
+}];
 
 pub const STREAM_KEYS: &[Binding] = &[
     Binding {

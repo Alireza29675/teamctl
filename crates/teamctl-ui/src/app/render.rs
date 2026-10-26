@@ -27,7 +27,12 @@ fn render_help_overlay(area: Rect, buf: &mut Buffer, app: &App) {
     let muted = Style::default().fg(app.capabilities.muted());
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let mut lines: Vec<ratatui::text::Line<'_>> = Vec::new();
-    for group in crate::help::ALL_GROUPS {
+    let groups = if app.layout == crate::triptych::MainLayout::Chat {
+        crate::help::CHAT_GROUPS
+    } else {
+        crate::help::ALL_GROUPS
+    };
+    for group in groups {
         lines.push(ratatui::text::Line::styled(group.title, bold));
         for b in group.bindings {
             lines.push(ratatui::text::Line::raw(format!(
@@ -447,6 +452,9 @@ fn render_main(app: &App, area: Rect, buf: &mut Buffer) {
         }
         crate::triptych::MainLayout::MailboxFirst => {
             layouts::MailboxFirst { app }.render(chunks[0], buf);
+        }
+        crate::triptych::MainLayout::Chat => {
+            crate::chat::ChatView { app }.render(chunks[0], buf);
         }
     }
     statusline::Statusline { app }.render(chunks[1], buf);

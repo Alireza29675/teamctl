@@ -23,6 +23,12 @@ pub struct Statusline<'a> {
 impl Widget for Statusline<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let muted = Style::default().fg(self.app.capabilities.muted());
+        if self.app.layout == crate::triptych::MainLayout::Chat {
+            Paragraph::new("Tab panes · PageUp/Down history · Ctrl+D dashboard · Ctrl+Q quit")
+                .style(muted)
+                .render(area, buf);
+            return;
+        }
         // T-108 stream-keys: when stream-mode is active the
         // statusline becomes the load-bearing visual indicator —
         // bright reversed banner across the whole row, "STREAM-KEYS
@@ -81,7 +87,7 @@ impl Widget for Statusline<'_> {
         let left = Line::from(vec![tab_hint, sep, Span::styled(contextual, muted)]);
 
         // Always-visible right-anchor hint per SPEC §4.
-        let right = "? help · t tutorial";
+        let right = "c chat · ? help · t tutorial";
 
         let cols = Layout::default()
             .direction(Direction::Horizontal)
