@@ -7,8 +7,20 @@ export default defineConfig({
   integrations: [
     react(),
     starlight({
-      title: 'teamctl',
-      description: 'docker-compose for persistent AI agent teams.',
+      title: 'TeamCTL',
+      description: 'An open-source platform for autonomous teams of agents. Define their roles, structure and conversations. Run your team in the background and share its setup.',
+      logo: {
+        src: './public/brand/teamctl-head.svg',
+        alt: '',
+      },
+      favicon: '/favicon.svg',
+      head: [
+        { tag: 'link', attrs: { rel: 'icon', href: '/favicon.ico', sizes: '16x16 32x32 48x48' } },
+        { tag: 'meta', attrs: { property: 'og:image', content: 'https://teamctl.run/brand/social-cover.png' } },
+        { tag: 'meta', attrs: { property: 'og:image:alt', content: 'TeamCTL — Create autonomous teams of agents.' } },
+        { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
+        { tag: 'meta', attrs: { name: 'twitter:image', content: 'https://teamctl.run/brand/social-cover.png' } },
+      ],
       social: {
         github: 'https://github.com/Alireza29675/teamctl',
       },
@@ -27,7 +39,7 @@ export default defineConfig({
         {
           label: 'Concepts',
           items: [
-            { label: 'How to think about agent teams', link: '/concepts/teams/' },
+            { label: 'Designing an agent team', link: '/concepts/teams/' },
             { label: 'Projects', link: '/concepts/projects/' },
             { label: 'Channels', link: '/concepts/channels/' },
             { label: 'Runtimes', link: '/concepts/runtimes/' },
@@ -53,6 +65,7 @@ export default defineConfig({
           ],
         },
         { label: 'Changelog', link: '/changelog/' },
+        { label: 'Brand assets', link: '/brand/' },
         {
           label: 'Guides',
           items: [
@@ -80,7 +93,7 @@ export default defineConfig({
           autogenerate: { directory: 'adrs' },
         },
       ],
-      customCss: [],
+      customCss: ['./src/styles/brand.css'],
     }),
   ],
 });

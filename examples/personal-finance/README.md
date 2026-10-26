@@ -1,6 +1,8 @@
 # Example: personal-finance
 
-An agentic setup that holds the picture of your money so you don't have to — built around a real financial-data feed. Three agents, each with its own stack: the **tracker** pulls live account data through Plaid's official MCP and flags anomalies, the **analyst** builds the long-arc patterns, and **books** decides what's worth your attention and tells you on Telegram. Read-only by design: nothing moves money without your tap.
+One possible TeamCTL team definition for reviewing financial information. A **tracker** reads data through a Plaid MCP server, an **analyst** looks for patterns, and **books** brings a short briefing to Telegram. The shipped feed uses sandbox data.
+
+The roles instruct the team to observe and explain. Review the data access and runtime permissions before connecting real accounts; a policy field alone does not enforce read-only access.
 
 ```
 books · Claude Opus  ── Telegram (books bot)
@@ -28,7 +30,7 @@ This is the point of the setup: every agent has a real stack, not just a prompt.
 
 ## The loop, and your surface
 
-You give books your priorities once. *"I care about my savings rate, my emergency-fund weeks-of-runway, and not silently overspending on subscriptions."* The team starts watching: tracker refreshes and scans, analyst synthesises, books filters everything against what you actually care about. When something matters — an anomaly, a developing pattern, a milestone — books DMs you the specific facts and offers depth. The team is **read-only**: `payment` is HITL-gated, so nothing moves money, and even proposing a specific trade is out of scope. You get the picture; you decide the action.
+Tell books which information you want to follow. The intended workflow is for tracker to gather data, analyst to examine patterns, and books to bring relevant findings to Telegram. The roles leave financial actions to you. Configure read-only data access and runtime permissions; `payment` in the sensitive-action list does not itself block a tool call.
 
 ## Install
 
@@ -81,7 +83,7 @@ The team starts watching. Anomalies surface from tracker; patterns develop in an
 
 > *Anomaly worth a look: $487 at Hardware Store Z on Tuesday. Your average transaction in that account is $40; this is 12x. No previous transactions there in 6 months. Was this you?*
 
-> *October digest: savings rate held at 22%, just below your 20% floor. Dining-out spent 40% above last month, mostly from one week. Holdings: tech allocation now 47%, drifting from your 40% target. Want a deeper look at any of these?*
+> *October digest: savings rate held at 22%, above your 20% floor. Dining-out spent 40% above last month, mostly from one week. Holdings: tech allocation now 47%, drifting from your 40% target. Want a deeper look at any of these?*
 
 > *Subscriptions watch: three new recurring charges added this quarter (Service A $12/mo, Service B $9/mo, Service C $24/mo). Cumulative monthly subscription spend is up $45 since July.*
 
@@ -89,7 +91,7 @@ The team starts watching. Anomalies surface from tracker; patterns develop in an
 
 - **A real financial-data MCP, wired onto the agent that owns the data.** tracker's `mcps:` block is Plaid's official server, runnable today against the free sandbox — a concrete example of a per-agent MCP, shipped honest about being sandbox-by-default rather than pretending a fabricated server reads your real bank.
 - **The signal/noise problem is a stack of filters.** The anomaly-scanner filters transactions against your baseline; the trend-analyzer separates patterns from outliers; books filters everything against *what's worth a Telegram*. Three filters land far less noise than one, and each lives on the agent that owns that judgment.
-- **Read-only by design.** `payment` is on the globally-sensitive list, so the team can see your money but never move it. You get an informed read — built from a real feed and compounding history — and you make every call.
+- **Observation as the scope.** The roles ask for analysis rather than financial actions. Enforce read-only access in the connected tools and runtime permissions; review the evidence and make the decisions yourself.
 
 ## Teardown
 
@@ -103,4 +105,4 @@ rm -rf .team/state/
 - [team-compose.yaml reference](https://teamctl.run/reference/team-compose-yaml/) — the `mcps:` and `subagents:` fields this example leans on.
 - [job-finder](../job-finder/) — a three-agent setup that runs your job search: a scout on the boards, a matcher on your CV, an operator-facing lead.
 - [personal-research](../personal-research/) — a two-agent personal-information loop: a reading buddy that holds your interests and a curator that follows the news.
-- [How to think about agent teams](https://teamctl.run/concepts/teams/) — the methodology behind team design.
+- [Designing an agent team](https://teamctl.run/concepts/teams/) — the methodology behind team design.

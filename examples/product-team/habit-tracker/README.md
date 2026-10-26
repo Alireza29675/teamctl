@@ -1,11 +1,9 @@
 # Habit Tracker (seed app)
 
-A tiny personal habit / streak tracker — the product this team grows.
+A static habit and streak tracker used as the seed project for the [TeamCTL product-team example](../README.md).
 
-This directory ships as a **seed**: a wired-up skeleton (a titled page, an
-empty habit list, a stub `app.js`), not a finished app. The whole point of
-the `product-team` example is to watch the team grow it from here toward the
-product contract in [`.team/requirements.md`](../.team/requirements.md):
+This directory is a skeleton: a titled page, an empty habit list and a stub `app.js`. The example's roles ask agents to build toward
+the product contract in [`.team/requirements.md`](../.team/requirements.md):
 define a habit, mark it done each day, see your current streak — all
 persisted locally, with no backend.
 

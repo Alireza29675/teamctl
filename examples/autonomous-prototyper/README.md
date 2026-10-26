@@ -1,13 +1,8 @@
 # Example: autonomous-prototyper
 
-An idea hunt that never sleeps. You settle a direction once, with one
-agent on Telegram — then it goes autonomous: it researches the market for
-startup-shaped gaps, drafts ideas, and runs each past a **pessimist whose
-entire job is to kill it**. Only the ideas the pessimist *can't* kill
-reach you, each with the case that was already made against it. Approve
-one and a **Codex prototyper** builds a throwaway proof of the bet. You
-touch exactly one agent, twice: to set the direction, and to approve or
-reject what survives.
+One possible TeamCTL team definition for researching ideas and building prototypes. An **ideator** develops proposals, a **pessimist** challenges their evidence, and a **Codex prototyper** builds an approved experiment.
+
+You define the direction and review the proposals on Telegram. A host scheduler sends the messages that start each research cycle; active sessions, an awake host and provider access are required. The roles describe the intended behavior and do not guarantee a useful idea or working product.
 
 ```
   OS cron ──"run a cycle"──▶  ┌─ ideator  (Claude Opus)  ← Telegram: settle the direction, then approve / reject ideas
@@ -38,7 +33,7 @@ exists, the hunt doesn't run. You write it *with* the ideator, once.
 2. When you settle, the ideator writes **`direction.md`** — the hunt
    charter — and tells you it's going autonomous. **This is the gate.**
 
-### Phase (ii) — the autonomous hunt (cron-driven, never sleeps)
+### Phase (ii) — background research (cron-driven)
 
 3. **ideator** (on each cron poke): researches its `direction.md` domain
    for a real gap → drafts one startup idea → posts it to the pessimist on
@@ -59,12 +54,11 @@ exists, the hunt doesn't run. You write it *with* the ideator, once.
    what worked and what's faked. Anything that would reach outside
    (`publish`/`deploy`) stops for your approval.
 
-You set the direction once; after that you're a curator, not a
-bottleneck.
+You can adjust the direction, inspect the research and decide which experiments to build.
 
 ## What this demonstrates
 
-Three properties make this a working team, not a brainstorm toy:
+Three configuration patterns:
 
 1. **The adversarial gate is real research, not vibes.** The pessimist
    doesn't just *say* "this won't work" — it runs `prior-art-checker`,
@@ -79,14 +73,11 @@ Three properties make this a working team, not a brainstorm toy:
 3. **Autonomy with an honest clock.** Once the direction is settled, the
    ideator runs a generate → vet → queue loop on a cadence, so you walk up
    to a curated shortlist instead of a blank prompt. The clock that drives
-   it is an **OS scheduler**, not a timer inside teamctl — see below.
+   it is an **OS scheduler**, not a timer inside TeamCTL — see below.
 
-## The "never sleeps" mechanism — honestly
+## Schedule the research cycles
 
-teamctl is **event-driven**: an agent does work when a message arrives,
-then idles. It owns **no scheduler and no timer**. So "never sleeps" is
-true only because an **external clock pokes the ideator** — and this
-example is built to say that plainly rather than imply a magic loop.
+TeamCTL delivers messages to agent sessions. This example uses an external scheduler to send the messages that trigger research cycles; TeamCTL does not provide that clock.
 
 The heartbeat is a host **cron** (Linux/macOS) or **launchd** (macOS) job
 that runs, on a cadence:
@@ -97,7 +88,7 @@ teamctl send autonomous-prototyper:ideator "run a cycle"
 
 `teamctl send` inserts an ordinary mailbox message; the team's MCP channel
 watcher sees it and wakes the ideator exactly as a teammate's message
-would. No teamctl process runs "on a schedule" — only the team
+would. No TeamCTL process runs "on a schedule" — only the team
 (`teamctl up`) and the cron entry. Ready-to-edit samples ship in
 [`cron/`](cron/): a [`crontab.example`](cron/crontab.example) and a
 [launchd plist](cron/com.example.autonomous-prototyper.plist).
@@ -110,15 +101,10 @@ before you've settled the direction is a harmless no-op.
 **Two things to know before you run it 24/7** (both have knobs in
 [`team-compose.yaml`](.team/team-compose.yaml)):
 
-- **Cost.** A round-the-clock generate→vet loop spends tokens. Keep the
-  cadence modest (hours, not minutes) and cap spend with
-  `budget.daily_usd_limit` (set to `15.0` here).
-- **Pile-up.** `teamctl send` inserts a row with no liveness check, so
-  pokes that land while the team is down queue up. `budget.message_ttl_hours`
-  (set to `12` here) expires a stale backlog instead of replaying it all at
-  once when the team wakes.
+- **Cost.** Research cycles use provider tokens. Keep the cadence modest and use provider-side spending controls. `budget.daily_usd_limit` (set to `15.0` here) records an intended limit; TeamCTL does not enforce that USD ceiling today.
+- **Pile-up.** `teamctl send` queues messages while the team is down. Garbage collection removes old acknowledged mail, not an unread backlog. Stop the scheduler when the team is stopped, and inspect queued messages before restarting it.
 
-> **What teamctl does *not* do here:** there is no in-product scheduler,
+> **What TeamCTL does *not* do here:** there is no in-product scheduler,
 > no self-rescheduling timer, no cadence field in the compose schema. The
 > OS scheduler is the heartbeat. If you read the config expecting to find
 > a built-in clock, this note is why you won't.

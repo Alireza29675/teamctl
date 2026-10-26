@@ -1,9 +1,9 @@
 ---
-title: Two projects, one teamctl, with bridges
+title: Two projects, one TeamCTL, with bridges
 description: Isolated-by-default projects sharing one mailbox; bridges open a time-boxed cross-project channel between two managers.
 ---
 
-A pattern for running unrelated teams under a single teamctl instance. Projects are **isolated by default** — nothing in `product` can reach `blog` without an explicit bridge. When the two managers need to talk about a specific topic for a bounded time, you open a bridge:
+A pattern for running unrelated teams under a single TeamCTL instance. Projects are **isolated by default** — nothing in `product` can reach `blog` without an explicit bridge. When the two managers need to talk about a specific topic for a bounded time, you open a bridge:
 
 ```bash
 teamctl bridge open \
@@ -38,7 +38,7 @@ projects:
 
 ```yaml
 # .team/projects/product.yaml
-version: "2.0.0"
+version: 2
 
 project:
   id: product
@@ -53,7 +53,7 @@ managers:
   manager:
     runtime: claude-code
     model: claude-opus-4-8
-    can_dm: [dev]
+    can_dm: []
     can_broadcast: [all]
 
 workers:
@@ -66,7 +66,7 @@ workers:
 
 ```yaml
 # .team/projects/blog.yaml
-version: "2.0.0"
+version: 2
 
 project:
   id: blog
@@ -81,7 +81,7 @@ managers:
   editor:
     runtime: claude-code
     model: claude-opus-4-8
-    can_dm: [writer]
+    can_dm: []
     can_broadcast: [all]
 
 workers:
@@ -93,4 +93,6 @@ workers:
     can_broadcast: [all]
 ```
 
-See `concepts/bridges/` for how bridges integrate with HITL — every bridge open / close is auditable, and the `--ttl` is a hard timeout (no implicit re-opening).
+The two managers use empty `can_dm` lists. In this example that allows outbound direct messages within the project, while a live bridge is still required to reach the other manager across projects. A narrow same-project allowlist would reject the bridged counterpart; project-qualified names are not accepted in these lists. The workers keep their explicit manager-only lists.
+
+See [Bridges](/concepts/bridges/) for the lifecycle. Bridge events and messages are recorded, and `--ttl` sets a hard timeout. Role instructions should require an explicit approval request if opening a bridge needs your decision.

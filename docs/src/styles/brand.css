@@ -1,0 +1,74 @@
+@font-face {
+  font-family: Manrope;
+  src: url('/fonts/manrope-regular.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Manrope;
+  src: url('/fonts/manrope-bold.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --teamctl-signal: #2f5eff;
+  --teamctl-chalk: #f7f7f2;
+  --teamctl-graphite: #191b1a;
+  --teamctl-mist: #e6e7e1;
+  --sl-font: Manrope, ui-sans-serif, system-ui, sans-serif;
+  --sl-font-mono: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  --sl-color-white: #f7f7f2;
+  --sl-color-gray-1: #e6e7e1;
+  --sl-color-gray-2: #c9cdc6;
+  --sl-color-gray-3: #a0a69e;
+  --sl-color-gray-4: #757b73;
+  --sl-color-gray-5: #3e443d;
+  --sl-color-gray-6: #272c26;
+  --sl-color-black: #191b1a;
+  --sl-color-bg: #191b1a;
+  --sl-color-bg-nav: #191b1a;
+  --sl-color-bg-sidebar: #191b1a;
+  --sl-color-accent-low: #1e2b55;
+  --sl-color-accent: #91a9ff;
+  --sl-color-accent-high: #c9d5ff;
+  --sl-color-text-accent: #91a9ff;
+  --sl-content-width: 47rem;
+  --sl-line-height: 1.8;
+}
+
+:root[data-theme='light'] {
+  --sl-color-white: #191b1a;
+  --sl-color-gray-1: #30352f;
+  --sl-color-gray-2: #454b43;
+  --sl-color-gray-3: #626660;
+  --sl-color-gray-4: #8b9086;
+  --sl-color-gray-5: #cbd0c6;
+  --sl-color-gray-6: #e6e7e1;
+  --sl-color-gray-7: #eeefe9;
+  --sl-color-black: #f7f7f2;
+  --sl-color-bg: #f7f7f2;
+  --sl-color-bg-nav: #f7f7f2;
+  --sl-color-bg-sidebar: #f7f7f2;
+  --sl-color-accent-low: #e5ebff;
+  --sl-color-accent: #2f5eff;
+  --sl-color-accent-high: #233e99;
+  --sl-color-text-accent: #2f5eff;
+}
+
+body { -webkit-font-smoothing: antialiased; }
+h1, h2, h3, h4 { font-weight: 700; letter-spacing: -0.035em; }
+.site-title.site-title { gap: 0.65rem; color: var(--sl-color-white); font-weight: 700; letter-spacing: -0.04em; }
+.site-title img { width: 2.5rem; height: 2.5rem; object-fit: contain; }
+.sl-markdown-content :is(h2, h3) { margin-top: 2.75rem; }
+.sl-markdown-content :is(p, ul, ol, table, details) { margin-top: 1.25rem; }
+.sl-markdown-content a { text-underline-offset: 0.2em; }
+.sl-markdown-content details { padding: 1.1rem 1.25rem; border: 1px solid var(--sl-color-gray-5); border-radius: 0.75rem; }
+.sl-markdown-content summary { cursor: pointer; font-weight: 700; }
+.sl-markdown-content pre { font-family: var(--sl-font-mono); }
+.expressive-code { margin-top: 1.5rem; }
+.sl-markdown-content table { font-size: 0.9rem; }
+:focus-visible { outline: 2px solid var(--sl-color-accent); outline-offset: 4px; }

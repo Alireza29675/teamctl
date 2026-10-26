@@ -1,198 +1,148 @@
-<p align="center"><img src="docs/assets/logo.png" alt="teamctl" width="960"/></p>
+<p align="center"><img src="docs/public/brand/teamwork.png" alt="Two TeamCTL agents building a shared structure together" width="400" /></p>
 
-<br/>
+# TeamCTL
 
-<p align="center">
-  You configure the perfect Claude Code or Codex session setup, then it dies with the session.<br/>
-  You can't run it again, can't hand it to a teammate, can't pass it on...<br/><br/>
-  <strong>teamctl lets you bottle it: your whole agent setup as something you</strong><br/>
-  <strong>can run, share, and remix like a recipe.</strong>
-</p>
+**Create autonomous teams of agents.**
 
-<br/>
+TeamCTL is an open-source platform for defining how agents work together. Choose the roles, structure and communication. Run the team in the background, and share its definition so others can use it or make it their own.
 
-<p align="center">
-  <a href="https://github.com/Alireza29675/teamctl/actions/workflows/ci.yml"><img src="https://github.com/Alireza29675/teamctl/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
-  <a href="https://github.com/Alireza29675/teamctl/releases"><img src="https://img.shields.io/github/v/release/Alireza29675/teamctl" alt="Latest release"/></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"/></a>
-  <img src="https://img.shields.io/badge/MSRV-1.86-orange" alt="MSRV 1.86"/>
-  <a href="https://teamctl.run"><img src="https://img.shields.io/badge/docs-teamctl.run-1f6feb" alt="Docs"/></a>
-</p>
+Start with two agents exploring a question, or define an organization with leads, specialists and project teams.
 
-<br/>
+Supports **Claude Code, Codex, OpenCode and Gemini CLI**. Mix tools or run several agents with the same one.
 
-You describe your team in YAML: who the agents are, what each one owns, and how they talk to each other. Each agent is a real Claude Code, Codex, or Gemini session with its own memory. `teamctl up` brings them up. Hand it to a teammate and they get the same team, not a screenshot of yours.
+[Docs](https://teamctl.run/getting-started/) · [Examples](https://github.com/Alireza29675/teamctl/tree/main/examples) · [Releases](https://github.com/Alireza29675/teamctl/releases) · [MIT license](https://github.com/Alireza29675/teamctl/blob/main/LICENSE)
 
-I built this for myself. Experiments worth sharing, so here we are :)
+## Define the team around your idea
 
-## 🚀 Get started
+- **Research partners.** Two agents ask each other questions, compare evidence and review their conclusions. Neither needs to manage the other.
+- **A project team.** A lead coordinates builders and reviewers. Fixing a bug could be one task for this team.
+- **An organization.** Define shared roles, reporting relationships and separate project rosters with their own channels.
 
-```bash
+These are possible team designs. You write the roles and configure tools, relationships and communication. TeamCTL provides the sessions and messaging that let the agents act on that setup.
+
+## Run it in the background
+
+Once the team is running, agents can exchange questions, delegate work and report results according to their roles. Close the dashboard and their sessions continue. Check back to follow the conversation, give direction or inspect the work.
+
+Background work requires a running host, active agent sessions and provider access. The roles and permissions you configure shape what the agents can do.
+
+## Set up your first team
+
+You'll need macOS or Linux, `tmux`, `git`, and the agent runtimes you want to use, installed and signed in.
+
+```sh
 curl -fsSL https://teamctl.run/install | sh
 ```
 
-Installs `teamctl` in your command line. Then, inside your project directory:
+Make sure `~/.local/bin` is on your PATH. Inside your project:
 
-```bash
+```sh
 teamctl init
+teamctl validate
+teamctl up
+teamctl ui
 ```
 
-`init` opens a short conversation that surfaces the domains in your work and proposes a team shape. You can let it design the team with you (guided), start from a small essentials scaffold, or take an empty tree and hand-wire it yourself. By the time you're done, `.team/team-compose.yaml` is on disk and the team is running in `tmux`.
+Choose a starter, review its roles and runtimes, and configure any interfaces it needs. `init` creates the team files; `up` starts the agents. The picker defaults to Ideate & Build, a Claude Code starter. Choose Guided for conversational setup with Claude Code and the TeamCTL plugin. Edit the roster to mix runtimes.
 
-## 🍒 Extras on top
+Agent usage follows your providers' plans and limits. TeamCTL is open source; model usage may still cost money.
 
-Because teamctl runs your sessions, it can hand them tools they would not have on their own. A session can call `compact_self` to compact its own context and keep going, and that is just the start:
+## What you configure
 
-1. 🔀 **[Orchestration and a shared mailbox](https://teamctl.run/concepts/channels/):** agents coordinate and message each other through durable channels you can audit.
-2. ⚙️ **[Per-agent settings](https://teamctl.run/reference/team-compose-yaml/):** give each agent its own runtime, model, role, and tools.
-3. 🧬 **[Cascading role prompts](https://teamctl.run/reference/team-compose-yaml/):** layer a shared `_base.md` and group files like `_engineer.md` under each agent's own role, so the rules they share live in one place.
-4. 🖥️ **[One terminal UI for the whole team](https://teamctl.run/reference/teamctl/):** watch every agent in one place with `teamctl ui`.
-5. 📱 **[Easy Telegram hookup](https://teamctl.run/guides/telegram-bot/):** steer your team from your phone (more interfaces on the way).
-6. ⏳ **(soon) Auto-recovery from rate limits:** teamctl can let your session know when its rate limit has cleared so it picks the work back up.
+- **Agent tools and models.** Choose Claude Code, Codex, OpenCode or Gemini CLI for each named session, then select its model.
+- **Roles and relationships.** Write what each agent should do, who it reports to and who it can message.
+- **Direct messages and channels.** Let agents exchange instructions, questions and results.
+- **How you follow the work.** Inspect sessions, messages and approval requests in the terminal UI. Configure Telegram to interact from your phone.
 
-> *These extras are optional. They are here to help fill the gaps as you design different agent setups.*
+Your team definition lives in `.team/`. Roles are Markdown files; team structure and configuration use YAML. You can define peers without reporting links, or leads and specialists with explicit relationships. Separate project rosters have their own communication scope.
 
-## 🧩 Examples
+## Explore example teams
 
-Real teams running on teamctl. Copy any of them as a starting point.
+Each example is a team definition you can inspect and adapt.
 
-| Example | What it does |
-|---|---|
-| 🏗️ **[product-team](examples/product-team/)** | A product squad: a Product Manager and engineers coordinating around what to build and ship. |
-| 🛰️ **[oss-maintainer](examples/oss-maintainer/)** | Runs a one-person open-source project: triage, bug-fix PRs, docs, and release proposals you approve. |
-| 🧪 **[autonomous-prototyper](examples/autonomous-prototyper/)** | Hunts startup ideas, kills the weak ones, and builds throwaway prototypes of the survivors. |
-| 🌱 **[personal-research](examples/personal-research/)** | A reading buddy that holds your interests, plus a curator that follows the news and surfaces what matters. |
-| 💼 **[job-finder](examples/job-finder/)** | Runs your job search: watches boards, aligns your CV to postings, and drafts cover letters you approve. |
+| Team | Roles and work |
+| --- | --- |
+| [Personal research](examples/personal-research/) | A researcher and curator share questions and findings. |
+| [Product team](examples/product-team/) | Leads coordinate builders and cross-model reviewers. |
+| [Open-source maintainer](examples/oss-maintainer/) | Specialists triage issues, propose changes and prepare releases for review. |
+| [Autonomous prototyper](examples/autonomous-prototyper/) | Researchers and builders investigate ideas and develop prototypes. |
 
-More under [`examples/`](examples/).
+[Explore all examples](examples/).
 
-## 🧱 What a team looks like
+## One possible structure: a lead and builder
 
-A project YAML with two managers you talk to and two engineers who build — the shape of the [`product-team`](examples/product-team/) example (illustrative, not a full config):
+A lead using Claude Code and a builder using Codex, connected through one channel. This is a project-roster excerpt for `.team/projects/my-team.yaml`; use a generated starter for the complete folder and role files.
 
 ```yaml
 version: 2
-
 project:
-  id: product-team
+  id: my-team
 
-# 📡 Slack-like channels: agents in a channel can post messages and receive notifications
 channels:
-  - name: product             # 🧭 the Product Manager hands requirements.md to the Engineering Manager here
-    members: [pm, em]
-
-  - name: eng                 # 🛠️ the Engineering Manager routes build work to the engineers
-    members: [em, eng-claude, eng-codex]
-
-  - name: code_review         # 🔀 the two engineers review each other's PRs (cross-model)
-    members: [eng-claude, eng-codex]
+  - name: work
+    members: [lead, builder]
 
 managers:
-  # 🧭 you talk to the Product Manager about *what* to build — it owns requirements.md
-  pm:
-    display_name: "Product Manager"
+  lead:
     runtime: claude-code
-    model: claude-opus-4-8
-    role_prompt:               # 🧬 cascading roles: _base.md layers into every agent
-      - roles/_base.md
-      - roles/pm.md
-    subagents:                # 🧩 give an agent its own sub-agents (claude-code)
-      - subagents/product-researcher.md
-      - subagents/prd-drafter.md
-    interfaces:
-      telegram:               # 📱 tap to talk to your team from your phone
-        bot_token_env: TEAMCTL_TG_PM_TOKEN
-        chat_ids_env: TEAMCTL_TG_PM_CHATS
-
-  # 🛠️ you talk to the Engineering Manager about *how* it ships — it routes work and gates merges
-  em:
-    display_name: "Engineering Manager"
-    runtime: claude-code
-    model: claude-opus-4-8
-    role_prompt:
-      - roles/_base.md
-      - roles/em.md
-    interfaces:
-      telegram:               # 📱 a separate bot: two conversations, product & delivery
-        bot_token_env: TEAMCTL_TG_EM_TOKEN
-        chat_ids_env: TEAMCTL_TG_EM_CHATS
+    role_prompt: roles/lead.md
 
 workers:
-  # 🤖 a Claude engineer: builds, and reviews the Codex engineer's PRs
-  eng-claude:
-    display_name: "Engineer (Claude)"
-    runtime: claude-code
-    model: claude-sonnet-4-6
-    role_prompt:
-      - roles/_base.md
-      - roles/_engineer.md     # 🧬 group layer shared by both engineers
-      - roles/eng.md
-    reports_to: em
-    subagents:
-      - subagents/implementer.md
-      - subagents/test-author.md
-    hooks:                    # 🪝 fmt+lint gate on every Edit/Write (claude-code)
-      - event: PreToolUse
-        matcher: "Edit|Write"
-        command: hooks/fmt-lint.sh
-
-  # 🤖 a Codex engineer: the other half of the cross-model review loop
-  eng-codex:
-    display_name: "Engineer (Codex)"
+  builder:
     runtime: codex
-    model: gpt-5-codex
-    role_prompt:
-      - roles/_base.md
-      - roles/_engineer.md
-      - roles/eng.md
-    reports_to: em
+    role_prompt: roles/builder.md
+    reports_to: lead
 ```
 
-> *All of this lives in a .team/ folder in your project, so you can read it, version it, and share it.*
+The role files tell the lead how to delegate and the builder how to respond. The reporting relationship records the structure; the instructions guide how the agents act.
 
-Then:
+For a peer research pair, define two agents with research roles, allow them to communicate and omit `reports_to`. A manager is optional. Start from a complete team configuration and validate any changes.
 
-```bash
-teamctl validate    # check the YAML
-teamctl up          # bring the team up
-teamctl ui          # watch them work
-teamctl status      # is everyone alive?
+## Share a team definition
+
+Share the intended configuration and role files in a repository or as an example. Others can change the roles, tools and structure to fit their work.
+
+Document the required tools and any local paths. Each person supplies their own accounts and permissions. Keep credentials, private messages and runtime state out of the shared files.
+
+## How it works
+
+TeamCTL supervises real agent CLI processes in `tmux`. A SQLite-backed MCP mailbox carries their messages. Closing the dashboard leaves the sessions running in the background while your host and provider access remain available.
+
+Each agent has its own session and conversation history. Messages connect the sessions; they do not automatically merge their context. Roles can cover coding, research or review, depending on the tools and access you configure.
+
+Agents can explicitly request your approval. Their instructions and runtime permissions define action boundaries; the mailbox is not a universal action gate or sandbox. Local supervision can still use cloud models.
+
+```sh
+teamctl status     # inspect the team
+teamctl down       # stop it
 ```
 
-## 🔍 Inspect your setup (`teamctl ui`)
+## Follow the work
 
-A super lightweight UI, built in Rust, for inspecting your agents and their *actual* Claude Code sessions. See which agents you have, the messages they have exchanged, and work with a live session right from the UI. Each agent runs in a tmux session in the background, so when you close the UI the sessions keep working.
+`teamctl ui` shows the agents, their messages and live terminal sessions. You can inspect the conversation, give direction or connect to a session.
 
-<p align="center">
-  <img src="docs/assets/ui/splash.png" width="780"/><br/>
-  <em>Splash screen</em>
-</p>
+<p><img src="docs/assets/ui/control-room.png" alt="TeamCTL terminal dashboard showing agent sessions and messages" width="780" /></p>
 
-<p align="center">
-  <img src="docs/assets/ui/control-room.png" width="780"/><br/>
-  <em>You can view all your teams, their actual sessions, their mailbox</em>
-</p>
+[Terminal UI guide](https://teamctl.run/reference/teamctl/) · [Telegram setup](https://teamctl.run/guides/telegram-bot/) · [Cost and rate limits](https://teamctl.run/cost/)
 
-<p align="center">
-  <img src="docs/assets/ui/agent-detail.png" width="780"/><br/>
-  <em>You can inspect each message exchanged between agents</em>
-</p>
+## Why I built it
 
-<p align="center">
-  <img src="docs/assets/ui/type-into-pane.png" width="780"/><br/>
-  <em>You can also connect to the actual tmux sessions by pressing Ctrl+E and take control of the session</em>
-</p>
+I wanted to create different kinds of agent teams and let them work together in the background. TeamCTL provides the platform; the team definition captures how I want the agents to work.
 
-## 📚 Learn more
+I started TeamCTL on [April 24, 2026](https://github.com/Alireza29675/teamctl/commit/601528b0c1ae759bbeed3873d8407ff1993040e8), five months before [Dots was announced](https://openai.com/index/introducing-dots/).
 
-- 📖 [How to think about agent teams](https://teamctl.run/concepts/teams/) for the methodology behind team design.
-- 📚 [Documentation](https://teamctl.run) for full docs, concepts, and reference.
-- 🧪 [How teamctl compares](https://teamctl.run/compare/) for the feature matrix against neighboring tools.
+TeamCTL is for people who want to define their own way for agents to collaborate, then run and share that setup.
 
-## 🤝 Contributing
+## Build on it
 
-If anything feels missing or off, please open an issue or a PR. This is an experiment and there is plenty left to build, so help is genuinely welcome.
+[Read the docs](https://teamctl.run), explore the [example teams](https://github.com/Alireza29675/teamctl/tree/main/examples), or [open an issue](https://github.com/Alireza29675/teamctl/issues).
 
-## ⚖️ License
+Small teams, reproducible workflows and clear improvements are welcome.
 
-[MIT](./LICENSE)
+## Brand assets
+
+Use the [head logo](docs/public/brand/teamctl-head.svg) for compact branding and the [teamwork illustration](docs/public/brand/teamwork.png) for larger placements. The [brand guide](https://teamctl.run/brand/) covers colours, typography and spacing.
+
+## License
+
+[MIT](LICENSE).

@@ -17,7 +17,7 @@ Each project file declares:
 - `managers:` — agents that can DM the human and emit `reply_to_user`
 - `workers:` — everyone else
 
-Why isolation matters: running one fleet across many unrelated projects is the whole point of teamctl, and you do not want a marketing agent on project A accidentally DM-ing an engineering agent on project B. Isolation is enforced by `team-mcp` on every tool call — it is not a convention, it is a check.
+Use separate project rosters for work that needs distinct channels and communication boundaries. `team-mcp` checks the project boundary when routing messages. Other shared resources, such as filesystem paths and external tools, need their own permissions.
 
 ## Related
 

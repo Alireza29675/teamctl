@@ -7,9 +7,11 @@ A pattern for fitting more than one worker (and a read-only critic) under a sing
 
 The patterns here also show up organically in `examples/newsletter-office/` (layered managers + workers) and `examples/oss-maintainer/` (channel-isolated pipeline). The compose file below stays preserved as a reference recipe.
 
+This excerpt shows the roster and communication. Add role files that explain the work and handoffs, or adapt a complete [example team](https://github.com/Alireza29675/teamctl/tree/main/examples).
+
 ```yaml
 # .team/projects/swarm.yaml
-version: "2.0.0"
+version: 2
 
 project:
   id: swarm

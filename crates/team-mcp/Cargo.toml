@@ -5,7 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "MCP server providing the shared agent mailbox for teamctl."
+description = "Persistent agent messaging and coordination for TeamCTL."
+readme = "README.md"
+homepage.workspace = true
+documentation = "https://teamctl.run/getting-started/"
 
 [[bin]]
 name = "team-mcp"

@@ -2,7 +2,7 @@
 title: Rate limits
 ---
 
-Every runtime hits limits eventually — Claude Max sessions reset every 5h, Codex usage caps reset on a rolling window, Gemini quota fires on the hour. teamctl detects these hits, runs whatever you tell it to do about them, and **waits until the limit clears** before respawning the runtime — instead of hammering the API in a tight retry loop.
+TeamCTL watches runtime output for configured rate-limit patterns. When a match occurs, it records the hit and runs the configured hook chain. A wait hook delays restart until the detected reset time or a fallback duration.
 
 ## How it works
 
@@ -78,7 +78,7 @@ workers:
 | Action | What it does |
 |---|---|
 | `wait` | Sleep until `resets_at` (+ 5 s jitter) or `fallback_wait_seconds`. |
-| `send` | Insert a message into the mailbox. The interface adapter (Telegram, etc.) forwards it. Needs `to:` and `template:`. |
+| `send` | Insert a message into the mailbox. A configured Telegram bot can forward it to the operator. Needs `to:` and `template:`. |
 | `webhook` | `curl -X <method> --data <event-json> <url>`. `url:` literal or `url_env:` env-var. |
 | `run` | `Command::new(command[0]).args(&command[1..])` with placeholders substituted. |
 

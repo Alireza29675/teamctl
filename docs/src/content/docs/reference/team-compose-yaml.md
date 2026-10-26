@@ -53,6 +53,8 @@ projects:
 > which writes both the env vars and the `telegram:` block. The
 > top-level `interfaces:` array is no longer needed for Telegram.
 
+The example uses the implemented `tmux` backend. Schema fields can also describe planned backends and policy metadata; the field table below distinguishes those from enforced behavior.
+
 ## Per-project
 
 ```yaml
@@ -114,13 +116,13 @@ workers:
 | `version` | string | — | Schema version, the semver string `"2.0.0"`. A legacy integer `2` is also accepted and self-heals (rewritten to `"2.0.0"` on the next save). |
 | `broker.type` | string | `sqlite` | Only `sqlite` is shipping. |
 | `broker.path` | string | `state/mailbox.db` | Resolved relative to the compose root. |
-| `supervisor.type` | string | `tmux` | `tmux` · `systemd` · `launchd`. |
+| `supervisor.type` | string | `tmux` | Only `tmux` is implemented. `systemd` and `launchd` are planned. |
 | `supervisor.tmux_prefix` | string | `a-` | Tmux session name = `<prefix><project>-<agent>`. |
-| `budget.daily_usd_limit` | float | — | Overall ceiling. |
-| `budget.per_project_usd_limit` | map | `{}` | Per-project overrides. |
+| `budget.daily_usd_limit` | float | — | Intended overall limit; not an enforced provider-spend ceiling today. |
+| `budget.per_project_usd_limit` | map | `{}` | Intended per-project limits; no runtime cost parser or spend enforcement today. |
 | `budget.message_ttl_hours` | int | 24 | `teamctl gc` horizon. |
-| `hitl.globally_sensitive_actions` | list | (see default) | Actions that always gate through approval. |
-| `hitl.auto_approve_windows` | list | `[]` | Pre-authorization windows. |
+| `hitl.globally_sensitive_actions` | list | (see default) | Policy metadata for role instructions; does not intercept arbitrary runtime tools. |
+| `hitl.auto_approve_windows` | list | `[]` | Declared policy windows; automatic approval is not implemented. |
 | `interfaces` | list | `[]` | Reserved for non-Telegram adapters (discord, imessage, cli, webhook, email). Telegram now lives on the manager. |
 | `projects` | list | `[]` | Each entry: `{ file: <path> }`. |
 
@@ -145,10 +147,10 @@ workers:
 | `role_prompt` | path or list of paths | — | System prompt source. A single string keeps the current behavior — the file is passed straight to the runtime. A list concatenates the files in declared order (separated by an em-dash) into `state/role_prompts/<project>-<agent>.md` and points the runtime at that file. Re-materialized on every render, so editing any source file flows into the agent's prompt at the next `up` / `reload`. |
 | `permission_mode` | string | `auto` (headless) | Claude Code permission mode. Headless agents default to `auto`: a classifier lets routine work run without prompts and blocks risky actions outright, so an unattended pane never freezes on a permission dialog. `attended` is teamctl-specific — it marks a human-at-keyboard agent, so `teamctl` passes no `--permission-mode` and skips the `PreToolUse` deny hook that blocks synchronous-prompt tools (`AskUserQuestion`, plan mode) on headless agents. Set `bypassPermissions` for the old bypass-everything behavior (disposable sandboxes only); other Claude modes (`plan`, `acceptEdits`, `dontAsk`) pass through. Note: `auto` requires Claude Opus 4.6+ / Sonnet 4.6 on the Anthropic API (not Bedrock/Vertex); on other models/providers it is unavailable and Claude Code falls back. |
 | `interfaces.telegram` | map | — | Manager-only. 1:1 Telegram bot for this manager (presence implies it receives Telegram forwards and may call `reply_to_user`). |
-| `autonomy` | string | `low_risk_only` | `full` · `low_risk_only` · `proposal_only`. |
+| `autonomy` | string | `low_risk_only` | `full` · `low_risk_only` · `proposal_only`. Policy metadata; runtime permissions and role instructions determine action boundaries. |
 | `can_dm` | list | `[]` = unrestricted | Short-names this agent may DM. |
 | `can_broadcast` | list | `[]` = unrestricted | Channel names this agent may post to. |
-| `reports_to` | string | — | Worker-only. The manager this worker answers to. |
+| `reports_to` | string | — | Optional reporting relationship; omit it for peers. Does not itself implement delegation or restrict DMs. |
 | `effort` | string (enum) | wrapper default | Per-agent reasoning effort: `low` · `medium` · `high` · `xhigh` · `max`. Renders as `EFFORT=<value>` and is passed to the runtime (e.g. `claude --effort <value>`). Strict: an unknown value fails validation rather than silently falling back. |
 | `ultracode` | bool | `false` | Per-agent [ultracode](https://code.claude.com/docs/en/model-config) opt-in. When `true`, emits `"ultracode": true` into the agent's rendered Claude Code settings (the file passed via `--settings`); the resulting session behavior is Claude Code's. A Claude Code setting, distinct from the `effort:` row above. Claude Code agents only; on other runtimes it renders nothing and logs a warning. |
 | `on_rate_limit` | list | global default | Overrides the global rate-limit hook chain for this agent. Each entry is the `name` of a hook defined under the global `rate_limits.hooks`. Unset falls back to the global `rate_limits.default_on_hit` chain (which is `[wait]` when empty). |

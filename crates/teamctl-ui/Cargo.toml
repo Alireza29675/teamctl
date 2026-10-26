@@ -9,7 +9,10 @@ edition.workspace = true
 rust-version = "1.88"
 license.workspace = true
 repository.workspace = true
-description = "Interactive TUI for teamctl — Triptych view, approvals modal, send-mail compose."
+description = "Terminal dashboard for TeamCTL agents, messages and live sessions."
+readme = "README.md"
+homepage.workspace = true
+documentation = "https://teamctl.run/getting-started/"
 
 [dependencies]
 anyhow.workspace = true

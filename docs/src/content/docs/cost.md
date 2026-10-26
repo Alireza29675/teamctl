@@ -1,30 +1,26 @@
 ---
-title: Cost & rate limits
+title: Cost and rate limits
 ---
-
-
-
-
-If you're running multiple agents at once, *cost per agent* and *cost per team* are the questions that matter most. teamctl is built around the fact that **each agent is a real CLI session calling a real provider API** — so the cost model maps cleanly onto what your provider already invoices.
+Each TeamCTL agent uses its configured runtime and provider account. Agent usage follows that provider's plan, prices and limits. TeamCTL is open source; model usage can still cost money.
 
 This page covers:
 
 - How agents incur cost.
-- What teamctl shows you today.
+- What TeamCTL shows you today.
 - What's planned.
 - How to keep the bill predictable.
 
 ## How agents incur cost
 
-Every agent in a teamctl team is a separate process running `claude`, `codex`, or `gemini`. Each one makes its own API calls under its own credentials. There is no shared LLM and no central proxy — token spend is whatever the provider records for that session.
+Every agent is a separate process running Claude Code, Codex, OpenCode or Gemini CLI. TeamCTL does not proxy model calls or pool the agents into one model session. Check provider usage records for actual spend.
 
 This means:
 
-- **Cost-per-agent = cost-per-session of the underlying CLI.** If you can read your Anthropic / OpenAI / Google invoice today, you already know what an agent cost.
+- **Per-agent usage follows the runtime's billing.** Depending on the account, that may mean a subscription allowance or metered API usage.
 - **Cost-per-team** is the sum of its agents over the same window.
-- **Different runtimes can use different keys.** A Claude Code worker, a Codex worker, and a Gemini worker in the same team can each be billed to a different provider account — useful for rate-limit headroom and provider-level budget controls.
+- **Runtimes can use different provider accounts.** Configure the credentials and spending controls appropriate to each runtime. Several agents may share account-level limits.
 
-## What teamctl shows you today
+## What TeamCTL shows you today
 
 ### `teamctl inspect <agent>`
 
@@ -59,7 +55,7 @@ budget:
 
 ### Rate-limit detection
 
-Each runtime declares `rate_limit_patterns` in its descriptor (bundled into the binary; sources live at `crates/team-core/runtimes/<name>.yaml`). When teamctl sees a rate-limit signal in an agent's output, it triggers the configured `rate_limit_hooks` (wait, send a message, hit a webhook, run a command). Default hook chain: wait until the rate-limit window resets.
+Each runtime declares `rate_limit_patterns` in its descriptor (bundled into the binary; sources live at `crates/team-core/runtimes/<name>.yaml`). When TeamCTL sees a rate-limit signal in an agent's output, it triggers the configured `rate_limit_hooks` (wait, send a message, hit a webhook, run a command). Default hook chain: wait until the rate-limit window resets.
 
 Rate-limit detection is per-runtime and **today** matches Claude Code's, Codex's, and Gemini's textual rate-limit messages. Recent Claude Code releases moved to an interactive dialog; the wrapper handles dialog dismissal but the textual pattern may need a refresh as the upstream UX evolves.
 
@@ -76,14 +72,14 @@ Practical things you can do today to stay in control:
 
 - **Use cheaper models for workers, premium models for managers.** `model: claude-opus-4-8` on a manager + `model: claude-sonnet-4-6` on workers is a common pattern. Set per-agent in `team-compose.yaml`.
 - **Set a `daily_usd_limit` in your compose file.** Today this is documentary: the limit shows up in `teamctl budget` next to the (currently always-zero) USD column and anchors operator expectations. Real enforcement lands when cost parsers do.
-- **Set `message_ttl_hours`.** Old messages get garbage-collected by `teamctl gc`. Smaller mailbox → smaller per-call context → fewer tokens per turn.
+- **Set `message_ttl_hours`.** `teamctl gc` removes old acknowledged messages. Unread mail is retained, so inspect inbox growth as well as the TTL. Context use still depends on what agents read.
 - **Cap the team size.** Three or four agents is plenty for most workflows. If you find yourself wanting eight, ask whether two of them are doing the same job.
-- **Use `permission_mode: confirm` for new role prompts.** Forces the manager to approve each tool call until you trust the role. Reduces runaway loops.
-- **Tag your most expensive tool calls in `hitl.globally_sensitive_actions`.** They'll block on `request_approval` — you can deny at the moment of cost.
+- **Review runtime permissions for new roles.** Permission modes differ by runtime; match tool access to the intended scope and inspect early work.
+- **Ask agents to request approval for expensive actions.** The role should call `request_approval` before proceeding. The sensitive-action list alone does not intercept tools or enforce a spending cap.
 
 ## When agents stop on their own
 
-teamctl does not silently keep retrying when an agent hits its limit. The `rl-watch` wrapper detects rate-limit signals, runs the configured hook chain (default: wait until reset), and only then re-spawns. You won't get a runaway respawn loop burning tokens against a closed door.
+TeamCTL does not silently keep retrying when an agent hits its limit. The `rl-watch` wrapper detects rate-limit signals, runs the configured hook chain (default: wait until reset), and only then re-spawns. You won't get a runaway respawn loop burning tokens against a closed door.
 
 ## Common patterns
 
@@ -105,8 +101,8 @@ workers:
   gamma: { runtime: gemini,      reports_to: lead }
 ```
 
-Three runtimes mean three independent rate-limit windows. The Sonnet workers carry the bulk of the work; Opus only when the manager needs to think.
+This is one possible mix of roles and runtimes. Provider accounts determine billing and rate-limit windows; different agents or CLIs can still share limits. The declared USD cap is policy metadata until cost tracking and enforcement are implemented.
 
 ---
 
-**See also:** [Coordination policy](/coordination-policy/) for how teamctl bounds mailbox volume (which directly affects per-turn cost).
+**See also:** [Coordination policy](/coordination-policy/) for how TeamCTL bounds mailbox volume (which directly affects per-turn cost).

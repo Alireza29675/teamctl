@@ -1,6 +1,8 @@
 # Example: market-analysis
 
-A four-agent research desk that watches the markets you care about and tells you when something's worth your attention. Read-only by design; the desk gives you the *read*, not the trade.
+One possible TeamCTL team definition: a four-agent research desk with separate roles for data, interpretation, dissent and synthesis. Their channels support discussion before the chief brings findings to Telegram.
+
+The roles direct agents to observe rather than trade. Review data access, sources and runtime permissions before running it; the setup does not guarantee correct analysis or enforce read-only access through a policy label alone.
 
 ```
 chief (Claude Opus)              ← Telegram: chief bot
@@ -14,15 +16,15 @@ collector       interpreter       risk
  feeds          read & narrative  cross-asset stress
 ```
 
-The desk is **read-only by design**. Nothing here trades or moves money. `trade`, `payment`, and `external_email` are all globally-sensitive; the desk never even proposes a position. Your job is to read what the desk surfaces and decide whether to act on it; their job is to be a sharper analyst than any single thinker.
+The role instructions exclude trading and moving money. The `trade`, `payment` and `external_email` policy labels do not intercept arbitrary tool calls. Use appropriate tool credentials and runtime permissions, and independently check any findings.
 
-## Why four agents earns more than three
+## Why this definition separates four roles
 
-The market-analysis desk passes both gates with multiple triggers; that's what makes a four-agent team better than collapsing two of them:
+This structure separates ongoing responsibilities and independent perspectives:
 
 - **Entry conditions**; each agent owns a real domain end-to-end. Data feeds, narrative read, dissent, synthesis. All four have rhythms, compounding state, and reasons to keep going.
 - **Work-shape triggers**; *domain separation* and *focus separation* both fire. The data domain is a different surface from the read; the read is a different surface from the dissent; the synthesis is a different surface still.
-- **Team-shape triggers**; *multiple opinions* is the entire point. Interpreter's read and risk's dissent are *supposed* to push against each other; the chief's synthesis is only valuable because it integrates the friction. A single agent doing all three jobs would always agree with itself, and the desk would be worse for it.
+- **Separate perspectives.** Interpreter and risk are instructed to challenge each other's reasoning; chief synthesizes their evidence and disagreements. Check whether that discussion adds value before keeping four sessions running.
 
 ## Install
 
@@ -68,17 +70,13 @@ Three patterns, all through the chief bot on Telegram:
 
 Every message you get ends with **"Not advice; observation only."** The desk reads the market; you decide what to do with the read.
 
-[Screenshot of a Telegram conversation: user asks "overnight read on 2y yields?"; chief responds with the synthesis paragraph integrating interpreter's read and risk's dissent]
-
-[Screenshot of a proactive alert: chief surfaces a notable move with the desk's view and what would flip it]
-
 ## What this teaches
 
 Three patterns layer:
 
 1. **Dissent as a domain.** Risk runs in `permission_mode: plan` and exists to disagree. The desk is stronger because someone is paid to push back on the working thesis. Try collapsing risk into interpreter and you lose the *multiple opinions* trigger that makes the team valuable.
 2. **Channel insulation by purpose.** `#desk` is where the analysts argue; `#alerts` is where the operator-shaped output goes. Collector posts data prints to `#desk` only; that conversation doesn't need to flood `#alerts`. Channel design is the team's information architecture.
-3. **HITL on anything that moves money.** `trade`, `payment`, and `external_email` are all gated. The desk can't even *propose* a trade without your tap. The read-only-by-design pattern is what makes the desk safe to leave running.
+3. **An observational scope.** The roles exclude financial actions and identify decisions that need your input. Runtime and tool permissions provide the actual action boundary.
 
 ## Teardown
 
@@ -89,6 +87,6 @@ rm -rf state/
 
 ## Related
 
-- [How to think about agent teams](https://teamctl.run/concepts/teams/); the methodology this example is built on, including the four Gate (b) triggers.
-- [Newsletter team](../newsletter-team/); small 2-agent team where multi-opinions is the main team-shape trigger.
-- [SaaS product team](../saas-product/); large team where domain-cut survives at scale.
+- [Designing an agent team](https://teamctl.run/concepts/teams/); peer perspectives, responsibility boundaries and other possible team shapes.
+- [Newsletter office](../newsletter-office/); separate newsroom and website rosters connected through a bridge.
+- [Product team](../product-team/); product and engineering roles with cross-model review.

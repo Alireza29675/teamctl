@@ -12,7 +12,7 @@ You can expect an acknowledgement within 72 hours and a fix plan within 7 days. 
 
 ## Scope
 
-teamctl spawns third-party runtimes (Claude Code, Codex CLI, Gemini CLI). Vulnerabilities in those binaries are out of scope — report them upstream. In-scope:
+TeamCTL spawns third-party runtimes (Claude Code, Codex CLI, Gemini CLI). Vulnerabilities in those binaries are out of scope — report them upstream. In-scope:
 
 - Bugs that let an agent in project A read or write to project B without a live bridge
 - Bypasses of the HITL gate on actions listed in `hitl.globally_sensitive_actions`

@@ -1,6 +1,6 @@
 # {{project_name}}
 
-This `.team/` was scaffolded by `teamctl init --template essentials`. You get two projects out of the box:
+This is one possible TeamCTL starter, scaffolded by `teamctl init --template essentials`. TeamCTL is an open-source platform for autonomous teams of agents; you define the roles and relationships. This starter has two projects:
 
 - **`main`** — your project. It starts blank, with zero agents. This is where the team you're building lives.
 - **`ops`** — the helper project. It ships with a single `ops` agent whose job is to populate `main` for you. Think of it as the team that helps build your team.
@@ -19,6 +19,8 @@ This `.team/` was scaffolded by `teamctl init --template essentials`. You get tw
 3. **Message the ops agent on Telegram.** Say what you want — *"I want a team that helps me triage GitHub issues for my OSS project"* or *"I want a research buddy that summarizes papers."* The ops agent will draft a roster, run it past you, then scaffold it under `projects/main.yaml`.
 
 ## Day-to-day
+
+Keep the host awake, with `tmux` sessions running and provider access available. The role instructions, tools and runtime permissions shape the ops agent's behavior.
 
 - Talk to the ops agent when you want to add, retire, or reshape an agent. It edits `projects/main.yaml`, role files under `roles/`, and documents env vars in `.env.example` directly — then reloads so the change is live.
 - Edit `projects/main.yaml` and `roles/*.md` by hand any time you prefer — both you and the ops agent share write access.
@@ -39,3 +41,5 @@ rm -rf state/           # full reset
 - Edit `team-compose.yaml` to wire additional interfaces or change broker / supervisor.
 
 After any edit, `teamctl reload` picks up the change.
+
+Share the intended configuration and role files so others can adapt the team. Document prerequisites and local paths; keep `.env` and private runtime state out of shared files. [Read the TeamCTL documentation](https://teamctl.run/getting-started/).

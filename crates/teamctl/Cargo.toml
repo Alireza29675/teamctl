@@ -5,7 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Declarative CLI for running persistent AI agent teams."
+description = "Define, run and share autonomous teams of agents."
+readme = "README.md"
+homepage.workspace = true
+documentation = "https://teamctl.run/getting-started/"
 default-run = "teamctl"
 
 [[bin]]

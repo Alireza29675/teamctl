@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking. teamctl is early — the fastest path to a useful contribution is a bug report or a small, focused PR.
+Thanks for looking. TeamCTL is early — the fastest path to a useful contribution is a bug report or a small, focused PR.
 
 ## Development
 
@@ -48,4 +48,4 @@ Subject line only — no body, no trailers.
 
 ## Proposing design changes
 
-Open an issue first. If the change is load-bearing (new runtime adapter, a break in the compose schema, a change to HITL semantics), submit an ADR under `docs/adrs/`.
+Open an issue first. If the change is load-bearing (new runtime adapter, a break in the compose schema, a change to HITL semantics), submit an ADR under `docs/src/content/docs/adrs/`.

@@ -6,7 +6,7 @@ title: "Reference: `teamctl` CLI"
 
 | Flag | Env | Default | Notes |
 |---|---|---|---|
-| `-C <path>` / `--root <path>` | `TEAMCTL_ROOT` | (auto) | Compose root (the directory holding `team-compose.yaml`). When unset, teamctl walks up from CWD looking for `.team/team-compose.yaml`. |
+| `-C <path>` / `--root <path>` | `TEAMCTL_ROOT` | (auto) | Compose root (the directory holding `team-compose.yaml`). When unset, TeamCTL walks up from CWD looking for `.team/team-compose.yaml`. |
 
 Resolution order for the root: `--root` > `TEAMCTL_ROOT` > current context (`teamctl context current`) > walk up from CWD.
 
@@ -25,8 +25,9 @@ Set `TEAMCTL_LOG=debug` for verbose tracing.
 
 | Key          | Label      | What you get |
 |--------------|------------|--------------|
-| `guided`     | Guided     | Ships no files. Confirms intent, then execs `claude /teamctl:init` so the LLM-led conversational setup takes over. Default when you run `teamctl init` interactively. Incompatible with `--yes` (the confirm step is interactive); the CLI errors clearly if you combine the two. |
-| `essentials` | Essentials | Two projects out of the box: a blank `main` for the operator + an `ops` project with a single `builder` agent whose job is to scaffold and evolve `main` for you on Telegram. Ships a `README.md` walking through the bot setup. Default when you pass `--yes` without `--template`. |
+| `ideate-and-build` | Ideate & Build | The interactive picker's default: an Executor, a Compass and two engineers. Writes a complete starter under `.team/`; review its roles and configure Telegram before starting it. |
+| `guided`     | Guided     | Confirms intent, then opens `claude /teamctl:init`. Requires Claude Code and the TeamCTL plugin. Select it in the picker or pass `--template guided`. Incompatible with `--yes`. |
+| `essentials` | Essentials | Two projects out of the box: a blank `main` for the operator + an `ops` project with a single `ops` agent whose job is to scaffold and evolve `main` for you on Telegram. Ships a `README.md` walking through the bot setup. Default when you pass `--yes` without `--template`. |
 | `blank`      | Blank      | Minimal `team-compose.yaml` + an empty `projects/main.yaml`. No agents seeded. For users who want to wire everything by hand. |
 
 `--project <id>` overrides the auto-derived project id (the repo directory name). Re-running `init` in a directory that already has a `.team/` aborts to avoid clobbering work — delete or move it first.
@@ -44,7 +45,7 @@ Set `TEAMCTL_LOG=debug` for verbose tracing.
 
 `--fresh` (on both `up` and `reload`) brings the affected agents up in a **brand-new conversation** that re-runs their bootstrap prompt, instead of resuming the prior session. It is the escape hatch from always-on session resume — for a wedged context, a bad self-compact, or token bloat from a very long session.
 
-It is **not** a file wipe: durable on-disk state (`task.md`, `memory/`, `ways-of-working.md`) is kept, so the agent re-grounds itself on restart. Under the hood teamctl moves the agent's Claude session log aside (preserved as a `.bak` recovery copy) so the next spawn starts fresh at the same deterministic session id. For `codex` agents it moves the per-agent `CODEX_HOME` sessions directory aside (preserved as a `sessions.bak` recovery copy, replacing any earlier one), so the wrapper's resume probe falls through to a fresh spawn; config and credentials at the codex-home root are untouched. For `opencode` agents it moves the per-agent session db (plus its `-shm`/`-wal` sidecars) into a `db.bak/` recovery copy, replacing any earlier one; the rendered `opencode.json` at the home root is untouched.
+It is **not** a file wipe: durable on-disk state (`task.md`, `memory/`, `ways-of-working.md`) is kept, so the agent re-grounds itself on restart. Under the hood TeamCTL moves the agent's Claude session log aside (preserved as a `.bak` recovery copy) so the next spawn starts fresh at the same deterministic session id. For `codex` agents it moves the per-agent `CODEX_HOME` sessions directory aside (preserved as a `sessions.bak` recovery copy, replacing any earlier one), so the wrapper's resume probe falls through to a fresh spawn; config and credentials at the codex-home root are untouched. For `opencode` agents it moves the per-agent session db (plus its `-shm`/`-wal` sidecars) into a `db.bak/` recovery copy, replacing any earlier one; the rendered `opencode.json` at the home root is untouched.
 
 - **Scope.** `--fresh` only affects agents that are actually (re)started by the command. `up --fresh` freshens the agents it spawns; an already-running agent is left untouched (use `reload --fresh` to refresh one that's running). An unscoped `reload --fresh` with no config changes restarts nothing, so it is a no-op — use the scoped form `teamctl reload <PROJECT> <AGENT> --fresh` to fresh-restart specific agents whose config is unchanged.
 - **Composition.** `--fresh` is orthogonal to the scoped force-restart and composes with it.
@@ -59,7 +60,7 @@ It is **not** a file wipe: durable on-disk state (`task.md`, `memory/`, `ways-of
 | `teamctl logs <project>:<agent>` | Capture the tmux pane's scrollback (last ~3000 lines). |
 | `teamctl tail <project>:<agent> [-f/--follow]` | Live message stream for an agent. |
 | `teamctl mail [<project>:<agent>] [--all]` | Inbox snapshot for an agent (or `--all` across the team). |
-| `teamctl inspect <project>:<agent>` | Full snapshot of an agent: env, mcp config, prompt, recent messages, today's costs. |
+| `teamctl inspect <project>:<agent>` | Snapshot of an agent's configuration, runtime state, recent messages and recorded rate-limit hits. Does not measure provider spend. |
 
 ## Mailbox
 

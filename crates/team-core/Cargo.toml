@@ -5,7 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shared library for teamctl: YAML schema, validation, and artifact rendering."
+description = "Configuration, validation and supervision for TeamCTL agent teams."
+readme = "README.md"
+homepage.workspace = true
+documentation = "https://teamctl.run/getting-started/"
 
 [dependencies]
 anyhow.workspace = true

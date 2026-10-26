@@ -1,20 +1,17 @@
 ---
 title: Human-in-the-loop (HITL)
+description: Ask for a human decision through the team's mailbox.
 ---
 
-teamctl agents can act autonomously on low-risk work. Anything **brand-sensitive** pauses and asks you first — over any configured interface (Telegram, Discord, iMessage, CLI, webhook).
+Agents can call `request_approval` when they need your decision. TeamCTL records the request, surfaces it through Telegram or the host's approval commands, and returns the decision to the agent.
 
-## Three layers of safety, outside-in
+The agent's instructions and runtime permissions determine when it asks. The mailbox does not intercept arbitrary tool calls or act as a universal sandbox.
 
-1. **Per-agent `autonomy`** — `full`, `low_risk_only` (default), or `proposal_only`.
-2. **Globally sensitive actions** — a list in global `team-compose.yaml`. Any tool call tagged with one of these is routed through `request_approval`.
-3. **Auto-approve windows** — pre-authorize specific actions in a scope for a bounded time.
+## Define the approval policy
 
-## Default sensitive actions
+Write the actions that require approval into your role instructions. The compose schema includes `autonomy`, `hitl.globally_sensitive_actions` and `hitl.auto_approve_windows` as policy fields. Declaring them does not automatically block runtime actions or automatically approve mailbox requests in the current implementation.
 
-`publish`, `release`, `payment`, `external_email`, `external_api_post`, `merge_to_main`, `dns_change`, `deploy`.
-
-Configure in global compose:
+The default sensitive-action list is `publish`, `release`, `payment`, `external_email`, `external_api_post`, `merge_to_main`, `dns_change` and `deploy`.
 
 ```yaml
 hitl:
@@ -29,25 +26,27 @@ hitl:
       until: "2026-04-25T18:00:00Z"
 ```
 
-## Agent flow
+This is policy metadata. For an enforced action boundary, configure the runtime's permissions and any appropriate tool or hook controls. See [Multi-runtime teams](/guides/multi-runtime/) for capability differences.
 
-```
+## Request and decide
+
+```text
 agent    → request_approval(action, summary, payload?, ttl_seconds?)
-team-mcp → insert row in `approvals` (status: pending), block caller on long-poll
-interface adapter → surface to you on Telegram/Discord/iMessage/CLI
-you      → Approve / Deny / Why?
-team-mcp → update status, caller unblocks, returns { id, status, note }
+team-mcp → insert a pending approval; wait for a decision by default
+Telegram or terminal UI → show the request to you
+you      → approve or deny
+team-mcp → return the outcome to the agent
 ```
 
-The default is **deny until explicitly approved**. Requests expire after the agent-supplied `ttl_seconds` (30s–3600s, default 900s).
+A pending request is not permission to act. Agents should proceed only when the returned outcome permits the action. Requests have a bounded lifetime; delivered requests expire without a decision, while requests that never reached a human surface become `undeliverable`.
 
-## Deciding
+Decide through:
 
-From any of:
+- Telegram's inline approval buttons on a configured manager bot.
+- The terminal UI's approval surface.
+- `teamctl pending`, `teamctl approve <id>` or `teamctl deny <id>` on the host.
 
-- Inline buttons on the interface that notified you (Telegram/Discord/iMessage).
-- `teamctl pending` / `teamctl approve <id>` / `teamctl deny <id>` on the host.
-- The `approvals` table directly (scripts, audit tools).
+Other interface adapters are planned. See [Interfaces](/concepts/interfaces/) for what ships today.
 
 ## Related
 

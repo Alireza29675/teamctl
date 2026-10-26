@@ -1,8 +1,8 @@
 ---
-title: Updating teamctl
+title: Updating TeamCTL
 ---
 
-`teamctl update` re-runs whichever installer brought teamctl in. It detects the install method automatically, checks GitHub for the latest release, and either no-ops (already on latest) or executes the matching update command.
+`teamctl update` re-runs whichever installer brought TeamCTL in. It detects the install method automatically, checks GitHub for the latest release, and either no-ops (already on latest) or executes the matching update command.
 
 ```bash
 teamctl update                # detect, prompt, update

@@ -2,7 +2,7 @@
 title: The `.team/` folder
 ---
 
-A repo with a teamctl team carries a `.team/` directory at its root, the same way a git repo carries `.git/`. teamctl walks up from the current working directory looking for the nearest `.team/team-compose.yaml`, so every subcommand "just works" wherever you are inside the tree.
+A repo with a TeamCTL team carries a `.team/` directory at its root, the same way a git repo carries `.git/`. TeamCTL walks up from the current working directory looking for the nearest `.team/team-compose.yaml`, so every subcommand "just works" wherever you are inside the tree.
 
 ## Layout
 
@@ -57,12 +57,12 @@ $ teamctl status              # now shows the startup team
 ## Bootstrapping a new team
 
 ```
-teamctl init                          # interactive (default: Guided)
+teamctl init                          # interactive template picker
 teamctl init --template essentials --yes
 teamctl init --template blank --yes --project my-thing
 ```
 
-Templates are baked into the binary — `init` works offline.
+File-scaffolding templates are baked into the binary. Guided setup opens Claude Code and requires the plugin and provider access; choose it explicitly with `teamctl init --template guided`.
 
 ## Env / secrets
 
