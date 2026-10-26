@@ -1,6 +1,8 @@
 # Example: job-finder
 
-An agentic job-search setup that runs your search while you get on with your life. Three agents, each carrying a real per-agent stack: the **scout** sweeps job boards on your criteria, the **matcher** scores fit against your CV and drafts cover letters, and the **lead** holds the application picture and talks to you on Telegram. Nothing goes out without your tap.
+One possible TeamCTL team definition for a job search: a **scout** finds postings, a **matcher** compares them with your CV, and a **lead** tracks applications and talks to you on Telegram. You choose the criteria and review drafts.
+
+Adapt the roles and tools to your search. The instructions leave sending applications to you; configure runtime permissions to match that boundary. Background work needs an awake host and active, authenticated sessions.
 
 ```
 lead · Claude Opus  ── Telegram (lead bot)
@@ -28,7 +30,7 @@ This is the point of the setup: every agent has a real stack, not just a prompt.
 
 ## The loop, and your surface
 
-You give the lead your criteria once. *"Senior platform engineering. Remote. Salary listed. Comfortable with Rust or Go. Not interested in fintech."* Scout starts sweeping; matcher reads your CV and builds the fit model. When something interesting surfaces, the lead DMs you the honest match and the reasoning behind it. You decide whether to apply — and the *send* is always yours, since `external_email` is HITL.
+Give the lead your search criteria. Scout's role covers finding postings; matcher compares them with your CV. The lead brings the fit reasoning for your review. The instructions leave sending applications to you; the sensitive-action list records that policy rather than intercepting tools.
 
 ## Install
 
@@ -71,15 +73,15 @@ First message to the lead bot: tell it about you and what you're looking for.
 
 > *"Senior platform engineer, 8 years experience. Remote-first, US/EU timezones OK. Strong in distributed systems and observability. Comfortable with Rust, Go, Python. Not interested in fintech or crypto. Salary band 200k+ USD. My resume is in workspace/resume.pdf."*
 
-The lead briefs scout and matcher. Scout starts pulling from job boards on those criteria; matcher reads your resume and builds the canonical fit model. Within a day, the surfacings start: the lead DMs you a posting with an honest fit (say 7.5/10) and the reasoning, and asks whether you want a cover letter.
+The intended workflow is for the lead to brief scout and matcher, compare sourced postings with your resume, and bring you the fit reasoning before drafting a cover letter. Check the evidence behind any score.
 
-When you say *"draft me a cover letter for that one"*, the matcher drafts in your voice — anchored on past drafts you've approved — and the lead summarises it for your review. You approve and save; then you send it yourself, since the *send* is gated behind `external_email`.
+When you say *"draft me a cover letter for that one"*, the matcher drafts and the lead summarizes it for review. You check, save and send the application yourself.
 
 ## What this demonstrates
 
 - **Per-agent stacks are the setup.** Each agent carries the sub-agents (and, for scout, the MCP) its job actually needs — sourcing, scoring, drafting, and the weekly digest are real capabilities wired onto the agents that own them, not one do-everything prompt.
 - **A real MCP, honestly wired.** scout's optional jobs feed shows what a per-agent `mcps:` block looks like — and, because no official job-board MCP exists yet, how to wire a community one without dressing a fabricated package up as real. Its board-sweeper sub-agent keeps scout useful from the first `teamctl up`, with or without the MCP.
-- **HITL where it counts.** No application goes out without your tap. Cover letters are drafted, reviewed, and saved by the team; the actual send is yours, because `external_email` is on the globally-sensitive list.
+- **A clear sending boundary.** The role instructions ask the team to draft, review and save cover letters while leaving submission to you. Runtime permissions and connected tools should match that scope.
 
 ## Teardown
 
@@ -92,4 +94,4 @@ rm -rf .team/state/
 
 - [team-compose.yaml reference](https://teamctl.run/reference/team-compose-yaml/) — the `subagents:` and `mcps:` fields this example leans on.
 - [personal-finance](../personal-finance/) — a three-agent setup that holds the picture of your money: live tracking, anomaly flags, and read-only digests on Telegram.
-- [How to think about agent teams](https://teamctl.run/concepts/teams/) — the methodology behind team design.
+- [Designing an agent team](https://teamctl.run/concepts/teams/) — the methodology behind team design.

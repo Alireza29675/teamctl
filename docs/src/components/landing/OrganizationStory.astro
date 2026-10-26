@@ -1,0 +1,457 @@
+---
+import { Image } from 'astro:assets';
+// Replace this source with the UI recording when it is ready.
+import controlRoom from '../../../assets/ui/control-room.png';
+
+const agents = [
+  { id: 'lead', role: 'Lead', harness: 'Claude Code', icon: 'claude-code' },
+  { id: 'builder', role: 'Builder', harness: 'Codex', icon: 'codex' },
+  { id: 'researcher', role: 'Researcher', harness: 'OpenCode', icon: 'opencode' },
+  { id: 'reviewer', role: 'Reviewer', harness: 'Gemini CLI', icon: 'gemini-cli' },
+];
+const steps = [
+  { id: 'config', label: 'Define the team in YAML', heading: 'Define the team.', detail: 'Four agents. Their roles, tools and connections.' },
+  { id: 'up', label: 'Boot up the team', heading: 'teamctl up', detail: 'Start separate sessions. The agents work together in the background.' },
+  { id: 'message', label: 'Message them', heading: 'Message the team.', detail: 'Connect Telegram to talk to your agents.' },
+  { id: 'ui', label: 'Inspect them', heading: 'Inspect', detail: 'Follow the sessions and conversations from your terminal.' },
+];
+const yamlLines = [
+  ['key', 'version:', ' 2'],
+  ['key', 'project:', ' { id: demo, name: Demo team, cwd: . }'],
+  ['space', '', ''],
+  ['key', 'channels:', ''],
+  ['key', '  - name:', ' work'],
+  ['key', '    members:', ' [lead, builder, researcher, reviewer]'],
+  ['space', '', ''],
+  ['key', 'managers:', ''],
+  ['key', '  lead:', ''],
+  ['key', '    runtime:', ' claude-code'],
+  ['key', '    role_prompt:', ' roles/lead.md'],
+  ['space', '', ''],
+  ['key', 'workers:', ''],
+  ['key', '  builder:', ' { runtime: codex,'],
+  ['key', '    role_prompt:', ' roles/builder.md, reports_to: lead }'],
+  ['key', '  researcher:', ' { runtime: opencode,'],
+  ['key', '    role_prompt:', ' roles/researcher.md, reports_to: lead }'],
+  ['key', '  reviewer:', ' { runtime: gemini,'],
+  ['key', '    role_prompt:', ' roles/reviewer.md, reports_to: lead }'],
+];
+const yamlText = yamlLines.map(([, key, value]) => key + value).join('\n');
+---
+
+<section id="how-it-works" class="organization-story" aria-labelledby="organization-heading" data-organization-story data-stage="config">
+  <div class="story-pin">
+    <div class="story-heading">
+      <div>
+        <h2 id="organization-heading" data-stage-heading>Define the team.</h2>
+      </div>
+      <p class="stage-description" data-stage-description>Four agents. Their roles, tools and connections.</p>
+    </div>
+
+    <nav class="story-controls" aria-label="Team lifecycle illustration" style={`grid-template-columns: repeat(${steps.length}, minmax(0, 1fr));`}>
+      {steps.map((step, index) => (
+        <button type="button" data-story-step={step.id} aria-label={step.label} aria-pressed={index === 0} aria-controls="organization-scene">
+          <span class="step-number" aria-hidden="true">0{index + 1}</span><span class="step-label">{step.label}</span>
+        </button>
+      ))}
+    </nav>
+
+    <div class="story-scene" id="organization-scene">
+      <figure class="organization-panel" aria-labelledby="organization-caption">
+        <svg class="configuration-server" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="10" y="8" width="44" height="14" rx="3" />
+          <rect x="10" y="25" width="44" height="14" rx="3" />
+          <rect x="10" y="42" width="44" height="14" rx="3" />
+          <path d="M19 15h.01M19 32h.01M19 49h.01M36 15h9M36 32h9M36 49h9" />
+        </svg>
+        <div class="graph-meta"><span>demo</span><span class="graph-state" data-graph-state>Team configuration</span></div>
+        <div class="organization-visual"><div class="organization-canvas">
+          <svg class="connections" viewBox="0 0 560 430" fill="none" aria-hidden="true">
+            <defs>
+              <g id="teamctl-message-symbol" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M-6 -5 H6 A2 2 0 0 1 8 -3 V3 A2 2 0 0 1 6 5 H0 L-4 8 V5 H-6 A2 2 0 0 1 -8 3 V-3 A2 2 0 0 1 -6 -5 Z" fill="var(--paper, #f7f7f2)" />
+                <path d="M-4 -1 H4 M-4 2 H1" />
+              </g>
+            </defs>
+            <g class="connection-lines">
+              <path d="M280 176 V218 Q280 228 270 228 H105 Q95 228 95 238 V280" />
+              <path d="M280 176 V280" />
+              <path d="M280 176 V218 Q280 228 290 228 H455 Q465 228 465 238 V280" />
+            </g>
+            <g class="human-connections">
+              <path d="M95 76 C135 76 167 99 207 117" />
+              <path d="M95 76 C37 126 47 225 95 280" />
+              <path d="M95 76 C63 166 130 253 280 280" />
+              <path d="M95 76 C180 19 510 83 465 280" />
+            </g>
+            <g class="message-packets">
+              <use class="message-packet packet-1" href="#teamctl-message-symbol" />
+              <use class="message-packet packet-2" href="#teamctl-message-symbol" />
+              <use class="message-packet packet-3" href="#teamctl-message-symbol" />
+              <use class="message-packet packet-4" href="#teamctl-message-symbol" />
+              <use class="message-packet packet-5" href="#teamctl-message-symbol" />
+              <use class="message-packet packet-6" href="#teamctl-message-symbol" />
+            </g>
+            <g class="human-message-packets">
+              <use class="message-packet packet-human-1" href="#teamctl-message-symbol" />
+              <use class="message-packet packet-human-2" href="#teamctl-message-symbol" />
+              <use class="message-packet packet-human-3" href="#teamctl-message-symbol" />
+              <use class="message-packet packet-human-4" href="#teamctl-message-symbol" />
+            </g>
+          </svg>
+          <div class="person-node" aria-hidden="true">
+            <svg viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="20" fill="var(--paper, #f7f7f2)" stroke="currentColor" stroke-width="1.6" /><path d="M17 20v2m14-2v2m-13 6c2.5 4.2 9.5 4.2 12 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+            <span class="person-telegram" title="Telegram"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="12" fill="#2AABEE" /><path d="m5.1 11.7 13.1-5.05c.6-.22 1.12.14.93 1.02l-2.23 10.5c-.16.75-.61.93-1.23.58l-3.4-2.5-1.65 1.59c-.18.18-.33.33-.68.33l.24-3.45 6.28-5.68c.27-.24-.06-.38-.41-.14l-7.76 4.89-3.35-1.05c-.73-.23-.74-.73.16-1.08Z" fill="white" /></svg></span>
+            <span>You</span>
+          </div>
+          <ol class="agent-cards" aria-label="Claude Code lead, with a Codex builder, OpenCode researcher and Gemini CLI reviewer reporting to the lead">
+            {agents.map((agent) => (
+              <li class={`agent-card agent-${agent.id}`}>
+                <img class="agent-character" src="/brand/teamctl-head.svg" width="48" height="48" alt="" />
+                <span class="agent-role">{agent.role}</span>
+                <span class="agent-harness"><img src={`/harness/${agent.icon}.svg`} width="23" height="23" alt="" />{agent.harness}</span>
+              </li>
+            ))}
+          </ol>
+        </div></div>
+        <figcaption id="organization-caption">
+          <span class="organization-caption-text">Agents can communicate via DMs or channels (similar to Slack).</span>
+          <div class="cli-strip boot-terminal">
+            <p class="cli-command"><span aria-hidden="true">$</span><code>teamctl up</code></p>
+            <pre class="cli-output" aria-label="Example teamctl up output"><code>{agents.map((agent) => `up · demo:${agent.id}`).join('\n')}</code></pre>
+          </div>
+        </figcaption>
+      </figure>
+
+      <div class="configuration-panel">
+        <div class="file-heading"><span class="file-symbol" aria-hidden="true">{'{ }'}</span><span>.team/projects/<strong>demo.yaml</strong></span><span class="file-type">YAML</span></div>
+        <pre aria-label="TeamCTL project roster excerpt"><code>{yamlText}</code></pre>
+        <div class="file-footer"><span>4 agents</span><span>1 channel</span><span>3 reporting lines</span></div>
+      </div>
+
+      <figure class="control-room-panel">
+        <div class="control-room-image"><Image src={controlRoom} alt="TeamCTL terminal UI showing an agent roster, session output and messages. This existing screenshot uses a different team from the illustrated configuration." width={1500} widths={[640, 1000, 1500]} sizes="(max-width: 760px) calc(100vw - 3rem), min(37rem, calc((100vw - 7rem) / 2))" format="webp" quality={80} loading="eager" /></div>
+        <figcaption class="cli-strip inspect-terminal">
+          <p class="cli-command"><span aria-hidden="true">$</span><code>teamctl ui</code></p>
+          <p class="cli-context">Interactive terminal UI · preview above</p>
+        </figcaption>
+      </figure>
+    </div>
+
+    <div class="story-footnote"><span class="scroll-cue" aria-hidden="true">Scroll to continue <span>↓</span></span></div>
+    <p class="story-sr-only" role="status" aria-live="polite" data-stage-announcement></p>
+
+    <div class="static-instructions">
+      <ol>
+        <li>Define agents and their role files in your <code>.team/</code> configuration.</li>
+        <li><code>teamctl up</code> starts the agents in background sessions.</li>
+        <li>Connect Telegram to message your agents. Other messengers need an integration.</li>
+        <li><code>teamctl ui</code> opens the terminal control room.</li>
+      </ol>
+      <details><summary>Preview the TeamCTL terminal UI</summary><Image src={controlRoom} alt="TeamCTL terminal UI with an agent roster, session output and mailbox." width={1200} format="webp" quality={80} loading="lazy" /></details>
+    </div>
+  </div>
+</section>
+
+<style>
+  .organization-story { position: relative; margin-top: 2rem; scroll-margin-top: 1rem; }
+  .story-pin { padding-block: 4rem; }
+  .story-heading { display: flex; justify-content: space-between; align-items: end; gap: 2rem; margin-bottom: 1.7rem; }
+  .story-heading h2 { margin: 0; font-size: clamp(1.8rem, 2.8vw, 2.5rem); line-height: 1.15; letter-spacing: -.05em; font-weight: 650; }
+  .stage-description { width: 22rem; max-width: 42%; min-height: 3.6em; margin: 0 0 .1rem; font-size: .8rem; line-height: 1.8; color: var(--muted, #626660); }
+  .story-controls { position: relative; z-index: 3; display: none; gap: .35rem; padding: .35rem; margin-bottom: 1.1rem; border: 1px solid var(--line, #daddd3); border-radius: .7rem; background: #eeefe920; }
+  .story-controls button { appearance: none; display: flex; align-items: center; justify-content: center; gap: .7rem; min-height: 2.8rem; padding: .55rem .7rem; border: 0; border-radius: .4rem; color: var(--muted, #626660); background: transparent; font: inherit; cursor: pointer; transition: color .2s, background-color .2s; }
+  .story-controls button:hover { background: #e6e7e180; color: var(--ink, #191b1a); }
+  .story-controls button[aria-pressed='true'] { color: var(--paper, #f7f7f2); background: var(--ink, #191b1a); }
+  .step-label { font-size: .82rem; line-height: 1.4; font-weight: 650; text-wrap: balance; }
+  .step-number { font-size: .58rem; opacity: .6; }
+  .story-scene { position: relative; display: grid; grid-template-columns: 1fr 1.04fr; gap: 1.5rem; min-width: 0; }
+  .organization-panel, .configuration-panel { min-width: 0; border: 1px solid var(--line, #daddd3); border-radius: .8rem; overflow: hidden; }
+  .organization-panel { grid-area: 1 / 1; position: relative; display: flex; flex-direction: column; justify-content: space-between; margin: 0; background: radial-gradient(circle, #191b1a12 .7px, transparent .9px) 50% 50% / 18px 18px; }
+  .configuration-server { position: absolute; top: 50%; left: 50%; display: none; width: 5rem; height: 5rem; color: #b5bbb3; opacity: .55; transform: translate(-50%, -50%); pointer-events: none; }
+  .graph-meta { display: flex; flex: none; justify-content: space-between; gap: 1rem; padding: 1rem 1.1rem; font-size: .62rem; line-height: 1.5; color: var(--muted, #626660); }
+  .graph-meta > span:first-child { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--ink, #191b1a); }
+  .graph-state::before { content: ''; display: inline-block; width: .3rem; height: .3rem; margin-right: .4rem; border: 1px solid currentColor; border-radius: 50%; vertical-align: .07em; }
+  .organization-visual { display: flex; align-items: center; justify-content: center; }
+  .organization-canvas { position: relative; width: 100%; aspect-ratio: 560 / 430; margin-block: auto; }
+  .connections { position: absolute; inset: 0; display: block; width: 100%; height: 100%; overflow: visible; }
+  .connection-lines { stroke: #9eaaa0; stroke-width: 1.4; }
+  .human-connections { opacity: 0; stroke: #2f5eff55; stroke-width: 1.2; stroke-dasharray: 3 5; transition: opacity .5s; }
+  .person-node { position: absolute; left: 17%; top: 5%; display: flex; flex-direction: column; align-items: center; width: 9%; gap: .25rem; color: var(--ink, #191b1a); opacity: 0; transform: translate(-50%, -1rem) scale(.85); transition: opacity .5s, transform .6s cubic-bezier(.2,.7,.2,1); }
+  .person-node svg { display: block; width: 100%; height: auto; }
+  .person-node span { font-size: .6rem; font-weight: 700; }
+  .person-telegram { position: absolute; left: calc(100% - .2rem); top: .55rem; width: 1.4rem; height: 1.4rem; border-radius: 50%; box-shadow: 0 0 0 3px var(--paper, #f7f7f2); }
+  .agent-cards { position: absolute; inset: 0; list-style: none; margin: 0; padding: 0; }
+  .agent-card { position: absolute; width: 26%; height: 21%; padding: 1rem .4rem .7rem; display: flex; flex-direction: column; justify-content: center; gap: .5rem; border: 1px solid #cbd0c6; border-radius: .6rem; background: #fdfdf9; box-shadow: 0 3px 0 #191b1a04, 0 8px 22px #191b1a04; text-align: center; transform: translateX(-50%); }
+  .agent-lead { left: 50%; top: 20%; }
+  .agent-builder { left: 17%; top: 65%; }
+  .agent-researcher { left: 50%; top: 65%; }
+  .agent-reviewer { left: 83%; top: 65%; }
+  .agent-character { position: absolute; left: 50%; top: -2.1rem; transform: translateX(-50%); width: 2.7rem; height: 2.7rem; object-fit: contain; }
+  .agent-role { font-size: .63rem; font-weight: 700; color: var(--muted, #626660); }
+  .agent-harness { display: flex; justify-content: center; align-items: center; gap: .4rem; font-size: clamp(.58rem, .85vw, .72rem); font-weight: 700; white-space: nowrap; }
+  .agent-harness img { flex: none; width: 1.25rem; height: 1.25rem; object-fit: contain; }
+  .organization-panel > figcaption { flex: none; padding: .85rem 1.1rem; color: var(--muted, #626660); font-size: .66rem; line-height: 1.6; }
+  .configuration-panel { grid-area: 1 / 2; position: relative; background: #191d1b; color: #e5e9e0; box-shadow: 0 12px 40px #191b1a08; }
+  .file-heading { display: flex; align-items: center; gap: .65rem; padding: 1rem 1.1rem; border-bottom: 1px solid #ffffff12; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .6rem; color: #a7b0a6; white-space: nowrap; }
+  .file-heading strong { color: #e8ecdf; font-weight: 400; }
+  .file-symbol { color: #8da8ff; }
+  .file-type { margin-left: auto; font-size: .5rem; letter-spacing: .08em; }
+  .configuration-panel pre { margin: 0; padding: 1rem 1.1rem; overflow-x: auto; scrollbar-width: thin; scrollbar-color: #6b756c #191d1b; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: clamp(.56rem, .75vw, .68rem); line-height: 1.6; tab-size: 2; }
+  .configuration-panel pre code { font: inherit; }
+  .file-footer { display: flex; gap: 1rem; padding: .85rem 1.1rem; border-top: 1px solid #ffffff12; font-size: .55rem; line-height: 1.5; color: #a7b0a6; }
+  .message-packet { opacity: 0; color: var(--signal, #2f5eff); offset-rotate: 0deg; animation: message-travel 6.25s linear infinite; animation-play-state: paused; }
+  .message-packets, .human-message-packets { opacity: 0; transition: opacity .3s; }
+  .packet-1, .packet-4 { offset-path: path('M280 176 V218 Q280 228 270 228 H105 Q95 228 95 238 V280'); }
+  .packet-2, .packet-5 { offset-path: path('M280 176 V280'); }
+  .packet-3, .packet-6 { offset-path: path('M280 176 V218 Q280 228 290 228 H455 Q465 228 465 238 V280'); }
+  .packet-1 { animation-delay: -1.25s; }
+  .packet-2 { animation-delay: -4.375s; animation-duration: 5s; }
+  .packet-3 { animation-delay: -2.5s; animation-duration: 6.875s; }
+  .packet-4 { animation-delay: -4.75s; animation-direction: reverse; }
+  .packet-5 { animation-delay: -.5s; animation-duration: 5s; animation-direction: reverse; }
+  .packet-6 { animation-delay: -6s; animation-duration: 6.875s; animation-direction: reverse; }
+  .packet-human-1 { offset-path: path('M95 76 C135 76 167 99 207 117'); animation-duration: 4.125s; animation-delay: -1.5s; }
+  .packet-human-2 { offset-path: path('M95 76 C37 126 47 225 95 280'); animation-duration: 6.875s; animation-delay: -3.75s; animation-direction: reverse; }
+  .packet-human-3 { offset-path: path('M95 76 C63 166 130 253 280 280'); animation-duration: 7.5s; animation-delay: -5.625s; }
+  .packet-human-4 { offset-path: path('M95 76 C180 19 510 83 465 280'); animation-duration: 8.75s; animation-delay: -2.5s; animation-direction: reverse; }
+  @keyframes message-travel { 0% { offset-distance: 0%; opacity: 0; } 8% { opacity: 1; } 92% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+  .control-room-panel { display: none; grid-area: 1 / 1; position: relative; z-index: 2; min-width: 0; min-height: 0; margin: 0; overflow: hidden; border: 1px solid var(--line, #daddd3); border-radius: .8rem; visibility: hidden; pointer-events: none; }
+  .control-room-image { display: flex; flex: 1; align-items: center; min-height: 0; padding: 1rem; }
+  .control-room-panel img { display: block; width: 100%; height: auto; max-height: 100%; object-fit: contain; border-radius: .4rem; }
+  .cli-strip { display: none; flex: none; min-height: 6.5rem; padding: .8rem 1rem; border-top: 1px solid #ffffff12; background: #191d1b; color: #e5e9e0; text-align: left; }
+  .cli-command { display: flex; align-items: center; gap: .5rem; margin: 0 0 .4rem; font: .72rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+  .cli-command > span { color: #8da8ff; }
+  .cli-command code { font: inherit; }
+  .cli-output { margin: 0; color: #a7b0a6; font: .58rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
+  .cli-output code { font: inherit; }
+  .cli-context { margin: 0; color: #a7b0a6; font-size: .65rem; line-height: 1.6; }
+  .story-footnote { display: flex; justify-content: flex-end; margin-top: 1rem; font-size: .59rem; line-height: 1.8; color: var(--muted, #626660); }
+  .scroll-cue { display: none; white-space: nowrap; }
+  .scroll-cue > span { margin-left: .8rem; color: var(--signal, #2f5eff); }
+  .story-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .static-instructions { margin-top: 2rem; font-size: .85rem; line-height: 1.9; color: var(--muted, #626660); }
+  .static-instructions li { margin-block: .5rem; }
+  .static-instructions details { margin-top: 1.5rem; }
+  .static-instructions summary { cursor: pointer; }
+  .static-instructions img { display: block; width: 100%; height: auto; margin-top: 1rem; border-radius: .6rem; }
+
+  .organization-story[data-enhanced] { height: 400svh; }
+  [data-enhanced] .story-pin { position: sticky; top: 0; height: 100svh; display: flex; flex-direction: column; justify-content: center; padding-block: 2rem; }
+  [data-enhanced] .story-controls { display: grid; }
+  [data-enhanced] .story-scene { height: min(35rem, calc(100svh - 17rem)); flex: none; isolation: isolate; }
+  [data-enhanced] .organization-visual { flex: 1; min-height: 0; container-type: size; }
+  [data-enhanced] .organization-canvas { width: min(100cqw, 37.7rem, calc(100cqh * 560 / 430)); flex: none; margin-inline: auto; }
+  [data-enhanced] .configuration-panel { display: flex; flex-direction: column; }
+  [data-enhanced] .configuration-panel pre { flex: 1; min-height: 0; overflow: auto; }
+  [data-enhanced] .file-heading, [data-enhanced] .file-footer { flex: none; }
+  [data-enhanced] .control-room-panel { display: flex; flex-direction: column; }
+  [data-enhanced] .static-instructions { display: none; }
+  [data-enhanced] .scroll-cue { display: block; }
+  [data-enhanced][data-stage='config'] .organization-panel { background: none; pointer-events: none; }
+  [data-enhanced][data-stage='config'] .organization-panel > * { visibility: hidden; }
+  [data-enhanced][data-stage='config'] .organization-panel > .configuration-server { display: block; visibility: visible; }
+  [data-enhanced][data-stage='up'] .organization-panel > figcaption { padding: 0; }
+  [data-enhanced][data-stage='up'] .organization-caption-text { display: none; }
+  [data-enhanced][data-stage='up'] .boot-terminal, [data-enhanced][data-stage='ui'] .inspect-terminal { display: block; }
+  [data-enhanced]:is([data-stage='up'], [data-stage='message'], [data-stage='ui']) .agent-card { border-color: #2f5eff66; }
+  [data-enhanced]:is([data-stage='up'], [data-stage='message'], [data-stage='ui']) .graph-state { color: var(--signal, #2f5eff); }
+  [data-enhanced]:is([data-stage='up'], [data-stage='message'], [data-stage='ui']) .graph-state::before { background: currentColor; }
+  [data-enhanced]:is([data-stage='up'], [data-stage='message'], [data-stage='ui']) .message-packets { opacity: 1; }
+  [data-enhanced]:is([data-stage='up'], [data-stage='message'], [data-stage='ui']) .message-packets .message-packet { animation-play-state: running; }
+  [data-enhanced][data-stage='message'] .person-node { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  [data-enhanced][data-stage='message'] .human-connections, [data-enhanced][data-stage='message'] .human-message-packets { opacity: 1; }
+  [data-enhanced][data-stage='message'] .human-message-packets .message-packet { animation-play-state: running; }
+  [data-enhanced][data-stage='ui'] .control-room-panel { visibility: visible; pointer-events: auto; }
+  [data-enhanced][data-stage='ui'] .organization-panel { visibility: hidden; pointer-events: none; }
+
+  @media (max-width: 1050px) {
+    .story-scene { gap: 1rem; grid-template-columns: 1fr 1.03fr; }
+    .configuration-panel pre { font-size: .58rem; padding-inline: .9rem; }
+    .file-heading { padding-inline: .9rem; font-size: .53rem; gap: .4rem; }
+    .file-type { display: none; }
+    .agent-card { gap: .4rem; padding-top: .7rem; }
+    .agent-character { width: 2.35rem; height: 2.35rem; top: -1.9rem; }
+    .agent-harness { gap: .3rem; font-size: .54rem; }
+    .agent-harness img { width: 1rem; height: 1rem; }
+    .agent-role { font-size: .55rem; }
+    .graph-meta { padding-inline: .8rem; font-size: .54rem; }
+    .organization-panel > figcaption { padding-inline: .8rem; font-size: .54rem; }
+  }
+  @media (max-width: 760px) {
+    .organization-story { margin-top: 1.5rem; }
+    .story-pin { padding-block: 3rem; }
+    .story-heading { display: block; margin-bottom: 1.1rem; }
+    .story-heading h2 { font-size: 1.85rem; }
+    .stage-description { width: auto; max-width: none; margin-top: .7rem; font-size: .73rem; min-height: 3.4em; line-height: 1.7; }
+    .story-controls { gap: .15rem; padding: .25rem; margin-bottom: .8rem; border-radius: .55rem; }
+    .story-controls button { gap: 0; min-height: 2.5rem; padding: .45rem .2rem; }
+    .step-label { font-size: .7rem; }
+    .step-number { display: none; }
+    .story-scene { grid-template-columns: 1fr; }
+    .configuration-panel { grid-area: 2 / 1; }
+    .organization-canvas { max-width: 32rem; margin-inline: auto; }
+    .agent-card { gap: .5rem; padding-top: 1rem; }
+    .agent-character { width: 2.7rem; height: 2.7rem; top: -2.15rem; }
+    .agent-role { font-size: .62rem; }
+    .agent-harness { gap: .35rem; font-size: clamp(.56rem, 2vw, .7rem); }
+    .agent-harness img { width: 1.2rem; height: 1.2rem; }
+    .graph-meta { padding: 1rem; font-size: .62rem; }
+    .organization-panel > figcaption { padding: 1rem; font-size: .6rem; }
+    .configuration-panel pre { padding: 1rem; font-size: clamp(.625rem, 1.75vw, .7rem); line-height: 1.85; }
+    .file-heading { padding: .9rem 1rem; font-size: .6rem; }
+    .file-footer { padding: .8rem 1rem; gap: 1rem; font-size: .55rem; }
+    .story-footnote { margin-top: .8rem; font-size: .55rem; gap: .8rem; }
+    .story-footnote p { max-width: 27rem; }
+    .scroll-cue { display: none !important; }
+    [data-enhanced] .story-pin { padding-block: 1.25rem; }
+    [data-enhanced] .story-scene { height: min(32rem, calc(100svh - 19rem)); }
+    [data-enhanced] .organization-panel, [data-enhanced] .configuration-panel { grid-area: 1 / 1; }
+    [data-enhanced] .configuration-panel { z-index: 1; align-self: stretch; display: flex; flex-direction: column; }
+    [data-enhanced] .configuration-panel pre { margin-block: auto; }
+    [data-enhanced] .organization-panel { opacity: 0; }
+    [data-enhanced]:is([data-stage='up'], [data-stage='message'], [data-stage='ui']) .organization-panel { opacity: 1; }
+    [data-enhanced]:is([data-stage='up'], [data-stage='message'], [data-stage='ui']) .configuration-panel { opacity: 0; pointer-events: none; transform: translateY(-1.5rem); }
+    [data-enhanced] .control-room-panel { z-index: 2; }
+  }
+  @media (max-width: 390px) {
+    .story-heading h2 { font-size: 1.7rem; }
+    .step-label { font-size: .68rem; }
+    .file-heading { font-size: .53rem; padding-inline: .8rem; }
+    .configuration-panel pre { padding-inline: .8rem; }
+    .agent-character { width: 2.25rem; height: 2.25rem; top: -1.8rem; }
+    .agent-card { gap: .35rem; padding-top: .65rem; }
+    .agent-harness { gap: .25rem; font-size: .53rem; }
+    .agent-harness img { width: 1rem; height: 1rem; }
+    .agent-role { font-size: .55rem; }
+    .graph-state { font-size: .54rem; }
+  }
+  @media (max-height: 700px) and (min-width: 761px) and (pointer: fine) {
+    [data-enhanced] .story-pin { padding-block: 1rem; }
+    .story-heading { margin-bottom: 1rem; }
+    .story-heading h2 { font-size: 1.8rem; }
+    [data-enhanced] .story-scene { height: 27rem; }
+    .configuration-panel pre { font-size: .58rem; line-height: 1.55; padding-block: .75rem; }
+    .file-heading { padding-block: .75rem; }
+    .file-footer { padding-block: .65rem; }
+    .agent-card { padding: .5rem .3rem .4rem; gap: .25rem; }
+  }
+  @media (max-height: 700px) {
+    .organization-story[data-enhanced] { height: auto; }
+    [data-enhanced] .story-pin { position: relative; height: auto; padding-block: 2rem; }
+    [data-enhanced] .story-scene { height: 25rem; }
+  }
+  /* Touch layouts use ordinary page flow at every browser-chrome height.
+     The full YAML stays in the page; only long lines scroll sideways. */
+  @media (max-width: 760px), (pointer: coarse) {
+    .organization-story[data-enhanced] { height: auto; }
+    [data-enhanced] .story-pin { position: relative; height: auto; padding-block: 2rem; }
+    [data-enhanced] .story-scene { height: auto; min-height: 30rem; }
+    [data-enhanced] .configuration-panel pre { flex: none; min-height: auto; overflow-x: auto; overflow-y: hidden; }
+    [data-enhanced] .scroll-cue { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+    [data-enhanced]:is([data-stage='up'], [data-stage='message'], [data-stage='ui']) .message-packet { opacity: 1; }
+    .packet-1, .packet-3 { offset-distance: 32%; }
+    .packet-2 { offset-distance: 45%; }
+    .packet-4, .packet-6 { offset-distance: 72%; }
+    .packet-5 { offset-distance: 80%; }
+    .packet-human-1, .packet-human-3 { offset-distance: 40%; }
+    .packet-human-2, .packet-human-4 { offset-distance: 65%; }
+  }
+</style>
+
+<script is:inline define:vars={{ steps }}>
+  for (const root of document.querySelectorAll('[data-organization-story]')) {
+    if (!(root instanceof HTMLElement) || root.dataset.enhanced) continue;
+    const buttons = Array.from(root.querySelectorAll('[data-story-step]'));
+    const heading = root.querySelector('[data-stage-heading]');
+    const description = root.querySelector('[data-stage-description]');
+    const graphState = root.querySelector('[data-graph-state]');
+    const announcement = root.querySelector('[data-stage-announcement]');
+    const room = root.querySelector('.control-room-panel');
+    const organization = root.querySelector('.organization-panel');
+    const configuration = root.querySelector('.configuration-panel');
+    const pin = root.querySelector('.story-pin');
+    const shortViewport = window.matchMedia('(max-height: 700px)');
+    const narrowViewport = window.matchMedia('(max-width: 760px)');
+    const touchViewport = window.matchMedia('(pointer: coarse)');
+    let activeIndex = -1;
+    let frame = 0;
+
+    function isScrollDriven() {
+      return !shortViewport.matches && !narrowViewport.matches && !touchViewport.matches;
+    }
+
+    function scrollTravel(bounds) {
+      // Match the CSS pin height instead of the mobile browser's changing chrome.
+      return Math.max(1, bounds.height - (pin?.getBoundingClientRect().height ?? window.innerHeight));
+    }
+
+    function syncPanelAccessibility(index) {
+      const stage = steps[index].id;
+      const organizationVisible = stage === 'up' || stage === 'message';
+      const configurationVisible = !narrowViewport.matches || stage === 'config';
+      if (graphState) graphState.textContent = {
+        config: 'Team configuration',
+        up: 'Background sessions',
+        message: 'Telegram connected',
+        ui: 'Background sessions',
+      }[stage];
+      for (const [panel, visible] of [[organization, organizationVisible], [configuration, configurationVisible], [room, stage === 'ui']]) {
+        if (!(panel instanceof HTMLElement)) continue;
+        panel.inert = !visible;
+        panel.setAttribute('aria-hidden', String(!visible));
+      }
+    }
+
+    function showStage(index, announce = false) {
+      if (index === activeIndex) {
+        syncPanelAccessibility(index);
+        return;
+      }
+      activeIndex = index;
+      const step = steps[index];
+      root.dataset.stage = step.id;
+      if (heading) heading.textContent = step.heading;
+      if (description) description.textContent = step.detail;
+      for (const button of buttons) button.setAttribute('aria-pressed', String(button.dataset.storyStep === step.id));
+      if (announce && announcement) announcement.textContent = `${step.label}. ${step.heading} ${step.detail}`;
+      syncPanelAccessibility(index);
+    }
+
+    function updateFromScroll() {
+      frame = 0;
+      syncPanelAccessibility(Math.max(0, activeIndex));
+      if (!isScrollDriven()) return;
+      const bounds = root.getBoundingClientRect();
+      const travel = scrollTravel(bounds);
+      const progress = Math.max(0, Math.min(1, -bounds.top / travel));
+      showStage(Math.min(steps.length - 1, Math.floor(progress * steps.length)));
+    }
+
+    function queueScrollUpdate() {
+      if (!frame) frame = window.requestAnimationFrame(updateFromScroll);
+    }
+
+    root.dataset.enhanced = 'true';
+    showStage(0);
+    for (let index = 0; index < buttons.length; index += 1) {
+      buttons[index].addEventListener('click', () => {
+        showStage(index, true);
+        if (!isScrollDriven()) return;
+        const bounds = root.getBoundingClientRect();
+        const travel = scrollTravel(bounds);
+        const target = window.scrollY + bounds.top + travel * ((index + .5) / steps.length);
+        window.scrollTo({ top: target, behavior: 'instant' });
+      });
+    }
+    window.addEventListener('scroll', queueScrollUpdate, { passive: true });
+    window.addEventListener('resize', () => {
+      if (!frame) frame = window.requestAnimationFrame(updateFromScroll);
+    }, { passive: true });
+    touchViewport.addEventListener('change', queueScrollUpdate);
+    updateFromScroll();
+  }
+</script>

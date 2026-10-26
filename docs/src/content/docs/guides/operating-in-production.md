@@ -2,20 +2,15 @@
 title: Operating in production
 ---
 
-## Supervisor back-ends
+TeamCTL runs agent sessions on your host. Keep the host awake, monitor the sessions and provide the runtime credentials they need.
 
-The default `TmuxSupervisor` works on any host with `tmux` installed. The agent wrapper loops on the runtime binary, so crashes restart within 5 s. What you **don't** get is reboot-survivability.
+## Supervision and restarts
 
-For 24/7 home-lab use, switch to a system supervisor:
+The shipping supervisor is `tmux`, on macOS or Linux. The agent wrapper restarts a runtime after it exits, normally after a five-second wait. Rate-limit hooks can delay that restart until the configured window clears.
 
-```yaml
-# team-compose.yaml
-supervisor:
-  type: systemd        # Linux (user-scope units)
-  # or: type: launchd  # macOS (per-user LaunchAgents)
-```
+Closing the dashboard leaves the sessions running. Host sleep interrupts work, and a reboot stops live processes. Start the team again with `teamctl up`; on-disk state remains available, and conversation resume depends on the runtime.
 
-The `Supervisor` trait abstracts the back-end; agent lifecycle, `teamctl status`, and `teamctl reload` work the same regardless.
+Built-in `systemd` and `launchd` backends are planned. Selecting them in compose does not provide a working supervisor today. If you configure an external system service to start TeamCTL after login or reboot, you own that service's credentials, environment, lifecycle and monitoring.
 
 ## State on disk
 
@@ -42,19 +37,19 @@ Back it up the way you back up any SQLite DB (VACUUM INTO, litestream, or copy w
 ## Observability
 
 - `teamctl status`: agent state + inbox depth per agent.
-- `teamctl budget`: 24 h message / approval / USD counts per project.
+- `teamctl budget`: 24 h message and approval counts, plus the USD ledger. Runtime cost parsers are not wired, so the USD column does not measure actual provider spend.
 - `teamctl bridge list`: open and recently expired inter-project links.
 - `teamctl attach <project>:<agent>`: raw runtime TTY (read-write by default — keystrokes reach the live agent; pass `--ro` to observe without typing). Internally a `tmux attach -t <tmux_prefix><project>-<agent>` where `tmux_prefix` is `a-` by default and configurable in `team-compose.yaml`.
 - `TEAMCTL_LOG=debug teamctl up`: verbose tracing from the control plane.
 
 ## Security posture
 
-- Give each interface adapter the minimum token scope it needs: Telegram bots can be restricted by `authorized_chat_ids`.
-- The HITL gate denies sensitive actions by default. Don't remove items from `hitl.globally_sensitive_actions`: add `auto_approve_windows` with tight `until:` when you need time-limited automation.
-- Runtimes (`claude`, `codex`, `gemini`) can do whatever you permit them to do. Use `permission_mode: plan` to make an agent read-only.
+- Restrict Telegram bots to the chat IDs in each manager's `chat_ids_env` variable.
+- Instruct agents to request approval for sensitive actions. The approval mailbox records explicit requests; `globally_sensitive_actions` and `auto_approve_windows` do not automatically intercept runtime tool calls.
+- Review the permissions and tool access of each runtime (`claude`, `codex`, `opencode`, `gemini`). Permission modes differ by runtime; see [Multi-runtime teams](/guides/multi-runtime/).
 
 ## When something goes wrong
 
 - Agent keeps restarting → `teamctl logs <project>:<agent>` shows the wrapper and runtime output.
 - Mailbox grows unbounded → `teamctl gc`; check `message_ttl_hours`.
-- Agents idle with full inbox → `teamctl status` inbox depth > 0 but no activity usually means the prompt doesn't instruct them to call `inbox_watch`. Review role markdown.
+- Agents idle with full inbox → inspect the runtime, MCP connection and role instructions. Claude Code receives channel events; the other supported runtimes receive a mailbox nudge. The role still needs to explain how to read and act on mail.

@@ -8,3 +8,12 @@
 # Single source of truth: tools/install.sh. docs/public/install is .gitignored
 # and regenerated from tools/install.sh by the docs.yml CI workflow on every
 # build, so the live URL can never drift from the in-repo installer.
+
+# Retired documentation routes. Keep these exact brand paths so shared artwork
+# under /brand/ still loads. Redirect old bookmarks to the public user docs.
+/brand /getting-started/ 302
+/brand/ /getting-started/ 302
+/brand/index.html /getting-started/ 302
+/brand.html /getting-started/ 302
+/adrs /getting-started/ 302
+/adrs/* /getting-started/ 302

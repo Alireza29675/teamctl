@@ -2,9 +2,9 @@
 title: Ways of working
 ---
 
-A `ways-of-working.md` file is a per-agent rulebook you maintain over time. The agent reads it at boot and treats every rule in it as a standing instruction. It's how you train a persistent agent without changing its role prompt: and how the agent remembers what you taught it last week.
+A `ways-of-working.md` file records rules you want an agent to keep using. Its role prompt should tell it to read the file on startup and apply those instructions. TeamCTL does not automatically enforce the file's contents.
 
-Each rule is something you'd otherwise have to repeat every session. *"When you ship a PR, always include a test plan."* *"For accessibility decisions, defer to me before merging."* *"Use the founder voice on customer-facing copy."* Write it once; the agent applies it forever.
+Write rules you would otherwise repeat: include a test plan with a PR, ask before merging an accessibility change, or use a specified voice in public copy. Keep the rules current and check that the agent follows them.
 
 ## Where it lives
 
@@ -48,7 +48,7 @@ A good role prompt has a line like:
 
 > Read `.team/state/<your-role>/ways-of-working.md` at boot and apply every rule there as a standing instruction.
 
-Every agent template in the [examples](https://github.com/Alireza29675/teamctl/tree/main/examples) follows this pattern. If you're hand-authoring, include the same line in your role prompts.
+The [examples](https://github.com/Alireza29675/teamctl/tree/main/examples) show ways to keep per-agent context. If you're hand-authoring, include the reading instruction in the role prompt and check the resulting behavior.
 
 ## When to update it
 
@@ -66,4 +66,4 @@ Every agent template in the [examples](https://github.com/Alireza29675/teamctl/t
 ## Related
 
 - [The `.team/` folder](/concepts/team-folder/): where ways-of-working files live in the broader directory layout.
-- [How to think about agent teams](/concepts/teams/): the methodology that frames why persistent identity earns this kind of curation.
+- [Designing an agent team](/concepts/teams/): the methodology that frames why persistent identity earns this kind of curation.

@@ -2,7 +2,7 @@
 title: Multi-runtime teams
 ---
 
-Mix Claude Code, Codex, OpenCode, and Gemini freely inside one team. They all speak MCP over stdio against the same mailbox; the manager doesn't know or care which CLI a worker happens to be running.
+Choose Claude Code, Codex, OpenCode or Gemini CLI for each agent. Mix runtimes or use several sessions of the same one; all connect to the same team mailbox. Roles and relationships remain your choice.
 
 ## Declaring runtimes
 
@@ -53,20 +53,14 @@ A capability declared on a runtime that doesn't support it is ignored at render 
 
 One subtlety on MCP env: `${VAR}` placeholders in `mcps:` env values are Claude-Code-only — Claude Code expands them at launch, but Codex and OpenCode pass the literal `${VAR}` string to the server. For codex and opencode agents, give servers literal values or put the secret in the operator environment the MCP server process inherits.
 
-## When to pick which
+## Choose for the role
 
-| Runtime | Strong at |
-|---|---|
-| Claude Code · Opus | planning, orchestrating, long system prompts |
-| Claude Code · Sonnet | fast, cheap tool use; frontend refactors |
-| Codex · GPT-5 | deep reasoning on complex backend patches |
-| Gemini · 3.0 Pro | 1M-token context for research / large-corpus reads |
-| OpenCode · any provider | provider-agnostic mixing; always pin `model:` (`provider/model`) — its own default is the priciest authed model |
+Check the tools, permission controls, model availability and account limits the role needs. Test a representative interaction before assigning ongoing work. For OpenCode, pin `model:` in `provider/model` form instead of relying on its default selection.
 
 ## Cost
 
-Each runtime reports cost differently. `teamctl budget` aggregates whatever has been recorded in the `budget` table. Runtime-specific cost parsers are pluggable and land with the runtime adapter itself.
+Each runtime reports usage differently. `teamctl budget` sums its recorded ledger, but runtime cost parsers are not wired today, so its USD column does not measure actual spend. Use provider usage records and spending controls; see [Cost and rate limits](/cost/).
 
 ## Example
 
-See `examples/multi-runtime/` — one Claude-Code manager directs a Codex backend dev and a Gemini researcher.
+See [Product team](https://github.com/Alireza29675/teamctl/tree/main/examples/product-team) for Claude Code and Codex agents, or [Newsletter office](https://github.com/Alireza29675/teamctl/tree/main/examples/newsletter-office) for Claude Code, Codex and Gemini CLI across two projects.

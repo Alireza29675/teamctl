@@ -2,22 +2,24 @@
 title: Your first team
 ---
 
-Two paths into a running team: pick whichever fits how you work.
+Define a team for your work, then start its agents in the background. Use guided setup or adapt a complete example.
+
+You'll need macOS or Linux, `tmux`, `git`, and the runtimes you choose, installed and signed in: Claude Code, Codex, OpenCode or Gemini CLI. Keep the host awake while the team runs.
 
 ## Path 1: guided (recommended)
 
-`teamctl init` walks you through a real discovery conversation (it runs the Claude Code plugin under the hood, so you need `claude` installed):
+The Guided template opens the Claude Code plugin, so this path requires both `claude` and the [TeamCTL plugin](https://github.com/Alireza29675/teamctl/tree/main/plugins/claude-code):
 
 ```bash
 cd /path/to/your/project
-teamctl init
+teamctl init --template guided
 ```
 
-It surfaces the *domains* in your work, proposes a team shape around them, scaffolds `.team/` to disk, and brings the team up. Read [How to think about agent teams](/concepts/teams/) for the methodology the conversation is built on.
+Describe your goal, review the proposed roles and structure, and choose when to bring the team up. The plugin writes editable YAML and Markdown under `.team/`. [Designing an agent team](/concepts/teams/) covers peer collaboration, leads and domain ownership.
 
 ## Path 2: start from a real example
 
-Pick the example closest to your work, copy it, edit. The `personal-research` example is a small one to start from: two agents (a buddy and a curator), one project, Claude Code:
+Choose an example as a starting point, then review its roles, credentials and paths. The `personal-research` definition has a buddy and a curator, one project and Claude Code. You can also define peers without `reports_to` or adapt a larger organization:
 
 ```bash
 git clone git@github.com:Alireza29675/teamctl.git   # the curl install doesn't bundle the examples
@@ -44,6 +46,8 @@ Whichever path you took, `teamctl up` renders these under `.team/state/`:
 - `mailbox.db`: SQLite mailbox (WAL mode)
 
 ## Change something
+
+Edit and share the configuration and role files. Document required tools, and leave credentials and private runtime state out of shared files.
 
 Edit a role prompt and run `teamctl reload`: only the affected agents restart, others are untouched. Same for the project YAML; `reload` picks up adds, drops, and renames.
 

@@ -1,735 +1,312 @@
 ---
-// Landing page with README parity (README is the source of truth). Hero +
-// lede + intro + install + start-a-team + extras + examples + what-a-team +
-// teamctl ui + learn-more. Linear-tier layout, Vercel-tier code container,
-// no animation. Strict accent rule: YAML keys + Copy hover only.
+import '../styles/launch.css';
+import OrganizationStory from '../components/landing/OrganizationStory.astro';
 
-import { Image } from 'astro:assets';
-import logoPng from '../../assets/logo.png';
-import uiSplash from '../../assets/ui/splash.png';
-import uiControlRoom from '../../assets/ui/control-room.png';
-import uiAgentDetail from '../../assets/ui/agent-detail.png';
-import uiTypeIntoPane from '../../assets/ui/type-into-pane.png';
-
-const installCmd = 'curl -fsSL https://teamctl.run/install | sh';
-const initCmd = 'teamctl init';
-
-// Sample team YAML for the demo. Mirrors the README's "What a team looks
-// like" section verbatim: the product-team example — a Product Manager and an Engineering Manager you
-// talk to on Telegram, and two engineers (Claude + Codex) who build and
-// review each other's PRs across model families.
-const yaml = [
-  'version: 2',
-  '',
-  'project:',
-  '  id: product-team',
-  '',
-  '# 📡 Slack-like channels: agents in a channel can post messages and receive notifications',
-  'channels:',
-  '  - name: product             # 🧭 the Product Manager hands requirements.md to the Engineering Manager here',
-  '    members: [pm, em]',
-  '',
-  '  - name: eng                 # 🛠️ the Engineering Manager routes build work to the engineers',
-  '    members: [em, eng-claude, eng-codex]',
-  '',
-  '  - name: code_review         # 🔀 the two engineers review each other\'s PRs (cross-model)',
-  '    members: [eng-claude, eng-codex]',
-  '',
-  'managers:',
-  '  # 🧭 you talk to the Product Manager about *what* to build — it owns requirements.md',
-  '  pm:',
-  '    display_name: "Product Manager"',
-  '    runtime: claude-code',
-  '    model: claude-opus-4-8',
-  '    role_prompt:               # 🧬 cascading roles: _base.md layers into every agent',
-  '      - roles/_base.md',
-  '      - roles/pm.md',
-  '    subagents:                # 🧩 give an agent its own sub-agents (claude-code)',
-  '      - subagents/product-researcher.md',
-  '      - subagents/prd-drafter.md',
-  '    interfaces:',
-  '      telegram:               # 📱 tap to talk to your team from your phone',
-  '        bot_token_env: TEAMCTL_TG_PM_TOKEN',
-  '        chat_ids_env: TEAMCTL_TG_PM_CHATS',
-  '',
-  '  # 🛠️ you talk to the Engineering Manager about *how* it ships — it routes work and gates merges',
-  '  em:',
-  '    display_name: "Engineering Manager"',
-  '    runtime: claude-code',
-  '    model: claude-opus-4-8',
-  '    role_prompt:',
-  '      - roles/_base.md',
-  '      - roles/em.md',
-  '    interfaces:',
-  '      telegram:               # 📱 a separate bot: two conversations, product & delivery',
-  '        bot_token_env: TEAMCTL_TG_EM_TOKEN',
-  '        chat_ids_env: TEAMCTL_TG_EM_CHATS',
-  '',
-  'workers:',
-  '  # 🤖 a Claude engineer: builds, and reviews the Codex engineer\'s PRs',
-  '  eng-claude:',
-  '    display_name: "Engineer (Claude)"',
-  '    runtime: claude-code',
-  '    model: claude-sonnet-4-6',
-  '    role_prompt:',
-  '      - roles/_base.md',
-  '      - roles/_engineer.md     # 🧬 group layer shared by both engineers',
-  '      - roles/eng.md',
-  '    reports_to: em',
-  '    subagents:',
-  '      - subagents/implementer.md',
-  '      - subagents/test-author.md',
-  '    hooks:                    # 🪝 fmt+lint gate on every Edit/Write (claude-code)',
-  '      - event: PreToolUse',
-  '        matcher: "Edit|Write"',
-  '        command: hooks/fmt-lint.sh',
-  '',
-  '  # 🤖 a Codex engineer: the other half of the cross-model review loop',
-  '  eng-codex:',
-  '    display_name: "Engineer (Codex)"',
-  '    runtime: codex',
-  '    model: gpt-5-codex',
-  '    role_prompt:',
-  '      - roles/_base.md',
-  '      - roles/_engineer.md',
-  '      - roles/eng.md',
-  '    reports_to: em',
+const title = 'TeamCTL — Create autonomous teams of agents';
+const description = 'Open-source infrastructure for agents that work together in the background. Define roles, connect agents and run anything from a personal assistant to a research team.';
+const github = 'https://github.com/Alireza29675/teamctl';
+const releaseSignupEndpoint = '/api/release-signup';
+// Public widget identifier; keep CI builds functional without a private .env file.
+const turnstileSiteKey = import.meta.env.PUBLIC_TURNSTILE_SITE_KEY?.trim() || '0x4AAAAAAFaBROEb6aP6oIK7';
+const harnesses = [
+  { name: 'Claude Code', icon: 'claude-code' },
+  { name: 'Codex', icon: 'codex' },
+  { name: 'OpenCode', icon: 'opencode' },
+  { name: 'Gemini CLI', icon: 'gemini-cli' },
 ];
-
-// Render each YAML line server-side as muted-2-tone HTML. Keys carry
-// the accent token; everything else is base --fg.
-const escape = (s: string) =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const yamlHtml = yaml
-  .map((raw) => {
-    if (raw === '') return '';
-    // Full-line comment → muted.
-    const fc = /^(\s*)(#.*)$/.exec(raw);
-    if (fc) return `${fc[1]}<span class="cmt">${escape(fc[2])}</span>`;
-    // Split off a trailing inline comment (first " #") and mute it.
-    let code = raw;
-    let comment = '';
-    const ci = raw.indexOf(' #');
-    if (ci !== -1) {
-      code = raw.slice(0, ci);
-      comment = raw.slice(ci);
-    }
-    const m = /^(\s*)([A-Za-z_][\w-]*)(:.*)$/.exec(code);
-    const codeHtml = m
-      ? `${m[1]}<span class="k">${escape(m[2])}:</span>${escape(m[3].slice(1))}`
-      : escape(code);
-    const commentHtml = comment ? `<span class="cmt">${escape(comment)}</span>` : '';
-    return codeHtml + commentHtml;
-  })
-  .join('\n');
-
-// Examples mirror the README table: same set, same order, same descriptions.
-const examples = [
-  {
-    emoji: '🏗️',
-    title: 'product-team',
-    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/product-team',
-    what: 'A product squad: a Product Manager and engineers coordinating around what to build and ship.',
-  },
-  {
-    emoji: '🛰️',
-    title: 'oss-maintainer',
-    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/oss-maintainer',
-    what: 'Runs a one-person open-source project: triage, bug-fix PRs, docs, and release proposals you approve.',
-  },
-  {
-    emoji: '🧪',
-    title: 'autonomous-prototyper',
-    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/autonomous-prototyper',
-    what: 'Hunts startup ideas, kills the weak ones, and builds throwaway prototypes of the survivors.',
-  },
-  {
-    emoji: '🌱',
-    title: 'personal-research',
-    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/personal-research',
-    what: 'A reading buddy that holds your interests, plus a curator that follows the news and surfaces what matters.',
-  },
-  {
-    emoji: '💼',
-    title: 'job-finder',
-    href: 'https://github.com/Alireza29675/teamctl/tree/main/examples/job-finder',
-    what: 'Runs your job search: watches boards, aligns your CV to postings, and drafts cover letters you approve.',
-  },
+const heroHarnesses = harnesses.filter((harness) => harness.icon !== 'gemini-cli');
+const approaches = [
+  { name: 'Grok Bot', icon: 'grok-bot', href: 'https://x.ai/news/introducing-grok-bot' },
+  { name: 'Dots', icon: 'dots', href: 'https://openai.com/index/introducing-dots/' },
+  { name: 'Muse', icon: 'muse', href: 'https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/' },
+  { name: 'Gemini Spark', icon: 'gemini-spark', href: 'https://blog.google/innovation-and-ai/products/gemini-app/next-evolution-gemini-app/' },
 ];
-
-// "Extras on top" mirrors the README: same six, same framing, same links.
-const extras = [
-  {
-    emoji: '🔀',
-    title: 'Orchestration and a shared mailbox',
-    href: '/concepts/channels/',
-    body: 'agents coordinate and message each other through durable channels you can audit.',
-  },
-  {
-    emoji: '⚙️',
-    title: 'Per-agent settings',
-    href: '/reference/team-compose-yaml/',
-    body: 'give each agent its own runtime, model, role, and tools.',
-  },
-  {
-    emoji: '🧬',
-    title: 'Cascading role prompts',
-    href: '/reference/team-compose-yaml/',
-    body: 'layer a shared `_base.md` and group files like `_engineer.md` under each agent\'s own role, so the rules they share live in one place.',
-  },
-  {
-    emoji: '🖥️',
-    title: 'One terminal UI for the whole team',
-    href: '/reference/teamctl/',
-    body: 'watch every agent in one place with `teamctl ui`.',
-  },
-  {
-    emoji: '📱',
-    title: 'Easy Telegram hookup',
-    href: '/guides/telegram-bot/',
-    body: 'steer your team from your phone (more interfaces on the way).',
-  },
-  {
-    emoji: '⏳',
-    title: '(soon) Auto-recovery from rate limits',
-    href: null,
-    body: 'teamctl can let your session know when its rate limit has cleared so it picks the work back up.',
-  },
-];
-
-const uiShots = [
-  { src: uiSplash, caption: 'Splash screen' },
-  { src: uiControlRoom, caption: 'You can view all your teams, their actual sessions, their mailbox' },
-  { src: uiAgentDetail, caption: 'You can inspect each message exchanged between agents' },
-  { src: uiTypeIntoPane, caption: 'You can also connect to the actual tmux sessions by pressing Ctrl+E and take control of the session' },
-];
-
-// Render inline `code` spans in body text.
-const withCode = (s: string) =>
-  s.replace(/`([^`]+)`/g, '<code>$1</code>');
 ---
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>teamctl: bottle your agent setup and run it like a recipe</title>
-    <meta
-      name="description"
-      content="You configure the perfect Claude Code or Codex session, then it dies with the session. teamctl lets you bottle your whole agent setup as something you can run, share, and remix like a recipe."
-    />
-    <meta property="og:title" content="teamctl: bottle your agent setup and run it like a recipe" />
-    <meta
-      property="og:description"
-      content="You configure the perfect Claude Code or Codex session, then it dies with the session. teamctl lets you bottle your whole agent setup as something you can run, share, and remix like a recipe."
-    />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href="https://teamctl.run/" />
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
+    <link rel="preload" href="/fonts/manrope-regular.ttf" as="font" type="font/ttf" crossorigin />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="TeamCTL" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content="https://teamctl.run/" />
+    <meta property="og:image" content="https://teamctl.run/brand/social-cover.png" />
+    <meta property="og:image:alt" content="Two TeamCTL characters building a structure together. Create autonomous teams of agents." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content="https://teamctl.run/brand/social-cover.png" />
   </head>
   <body>
-    <main>
-      <figure class="hero">
-        <Image src={logoPng} alt="teamctl" loading="eager" decoding="async" />
-      </figure>
-
-      <header class="lede">
-        <h1>Bottle your agent setup. Run it, share it, remix it like a recipe.</h1>
-        <p class="subline">You configure the perfect Claude Code or Codex session setup, then it dies with the session. You can't run it again, can't hand it to a teammate, can't pass it on.</p>
-      </header>
-
-      <p class="intro">
-        You describe your team in YAML: who the agents are, what each one owns, and how they talk to each other. Each agent is a real Claude Code, Codex, or Gemini session with its own memory. <code>teamctl up</code> brings them up. Hand it to a teammate and they get the same team, not a screenshot of yours.
-      </p>
-
-      <p class="intro">
-        I built this for myself. Experiments worth sharing, so here we are :)
-      </p>
-
-      <section class="install-section">
-        <div class="install">
-          <pre><code id="install-cmd">{installCmd}</code></pre>
-          <button type="button" class="copy-btn" data-copy aria-label="Copy install command">
-            <span class="copy-default">Copy</span>
-            <span class="copy-done" hidden>Copied</span>
-          </button>
-        </div>
-        <p class="install-note">
-          Installs <code>teamctl</code> in your command line.
-        </p>
-      </section>
-
-      <section class="start-team">
-        <h2>🚀 Start a team</h2>
-        <p>
-          Then, inside your project directory:
-        </p>
-        <pre class="cmd"><code><span class="prompt">$ </span>cd /path/to/your/project
-<span class="prompt">$ </span>{initCmd}</code></pre>
-        <p>
-          <code>init</code> opens a short conversation that surfaces the <em>domains</em> in your work and proposes a team shape. You can let it design the team with you (guided), start from a small essentials scaffold, or take an empty tree and hand-wire it yourself. By the time you're done, <code>.team/team-compose.yaml</code> is on disk and the team is running in <code>tmux</code>.
-        </p>
-      </section>
-
-      <section class="extras">
-        <h2>🍒 Extras on top</h2>
-        <p>
-          Because teamctl runs your sessions, it can hand them tools they would not have on their own. A session can call <code>compact_self</code> to compact its own context and keep going, and that is just the start:
-        </p>
-        <ol class="extras-list">
-          {extras.map((x) => (
-            <li>
-              <span class="extra-emoji" aria-hidden="true">{x.emoji}</span>{' '}
-              {x.href
-                ? <a href={x.href}><strong>{x.title}:</strong></a>
-                : <strong>{x.title}:</strong>}{' '}
-              <span set:html={withCode(x.body)} />
-            </li>
-          ))}
-        </ol>
-        <p class="extras-note">
-          <em>These extras are optional. They are here to help fill the gaps as you design different agent setups.</em>
-        </p>
-      </section>
-
-      <section class="examples">
-        <h2>🧩 Examples</h2>
-        <p>
-          Real teams running on teamctl. Copy any of them as a starting point.
-        </p>
-        <ul class="examples-list">
-          {examples.map((ex) => (
-            <li>
-              <a class="example-link" href={ex.href}>
-                <div class="example-head">
-                  <span class="example-emoji" aria-hidden="true">{ex.emoji}</span>
-                  <span class="example-title">{ex.title}</span>
-                </div>
-                <p class="example-what">{ex.what}</p>
-              </a>
-            </li>
-          ))}
-        </ul>
-        <p class="examples-more">
-          More under <a href="https://github.com/Alireza29675/teamctl/tree/main/examples"><code>examples/</code></a>.
-        </p>
-      </section>
-
-      <section class="demo-section">
-        <h2>🧱 What a team looks like</h2>
-        <p>A project YAML with two managers you talk to and two engineers who build (illustrative, not a full config):</p>
-        <figure class="demo" aria-label="Example team-compose.yaml and the commands to run it">
-          <div class="code-card">
-            <pre class="yaml"><code set:html={yamlHtml}></code></pre>
-          </div>
-          <pre class="cmd"><code><span class="prompt">$ </span>teamctl validate    <span class="cmt"># check the YAML</span>
-<span class="prompt">$ </span>teamctl up          <span class="cmt"># bring the team up</span>
-<span class="prompt">$ </span>teamctl ui          <span class="cmt"># watch them work</span>
-<span class="prompt">$ </span>teamctl status      <span class="cmt"># is everyone alive?</span></code></pre>
-        </figure>
-        <p class="demo-note">
-          <em>All of this lives in a <code>.team/</code> folder in your project, so you can read it, version it, and share it.</em>
-        </p>
-      </section>
-
-      <section class="ui-section">
-        <h2>🔍 Inspect your setup (<code>teamctl ui</code>)</h2>
-        <p>
-          A super lightweight UI, built in Rust, for inspecting your agents and their <em>actual</em> Claude Code sessions. See which agents you have, the messages they have exchanged, and work with a live session right from the UI. Each agent runs in a tmux session in the background, so when you close the UI the sessions keep working.
-        </p>
-        <div class="ui-shots">
-          {uiShots.map((shot) => (
-            <figure class="ui-shot">
-              <Image src={shot.src} alt={shot.caption} loading="lazy" decoding="async" quality={80} />
-              <figcaption>{shot.caption}</figcaption>
-            </figure>
-          ))}
-        </div>
-      </section>
-
-      <section class="learn-more">
-        <h2>📚 Learn more</h2>
-        <ul class="learn-list">
-          <li>
-            📖 <a href="/concepts/teams/">How to think about agent teams</a> for the methodology behind team design.
-          </li>
-          <li>
-            📚 <a href="/getting-started/">Documentation</a> for full docs, concepts, and reference.
-          </li>
-          <li>
-            🧪 <a href="/compare/">How teamctl compares</a> for the feature matrix against neighboring tools.
-          </li>
-        </ul>
-      </section>
-
-      <nav class="outbound" aria-label="Outbound links">
-        <a href="https://github.com/Alireza29675/teamctl">Star on GitHub</a>
-        <span class="sep" aria-hidden="true">·</span>
-        <a href="https://github.com/Alireza29675/teamctl/tree/main/examples">Examples on GitHub</a>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="launch-nav wrap">
+      <a class="brand" href="/" aria-label="TeamCTL home"><img src="/brand/teamctl-head.svg" width="44" height="44" alt="" />TeamCTL</a>
+      <nav aria-label="Main navigation">
+        <a href="#how-it-works">How it works</a>
+        <a href="/getting-started/">Docs</a>
+        <a href={github}>GitHub <span aria-hidden="true">↗</span></a>
       </nav>
+    </header>
+
+    <main id="main" class="wrap">
+      <section class="launch-hero" aria-labelledby="hero-heading">
+        <div class="hero-copy">
+          <h1 id="hero-heading">Create autonomous<br class="wide-break" /> teams of agents.</h1>
+          <div class="harness-line">
+            <span class="harness-intro">And orchestrate</span>
+            <ul class="harnesses" aria-label="Supported agent harnesses">
+              {heroHarnesses.map((harness) => <li><a href="/concepts/runtimes/"><img src={`/harness/${harness.icon}.svg`} width="26" height="26" alt="" /><span>{harness.name}</span></a></li>)}
+              <li class="harness-more"><a href="/concepts/runtimes/">and more</a></li>
+            </ul>
+          </div>
+          <p class="hero-description">Define their roles and how they work together.<br class="wide-break" /> Run them in the background, on your own machine.</p>
+          <div class="actions">
+            <a class="primary" href="/getting-started/">Get started <span aria-hidden="true">↗</span></a>
+            <a class="secondary" href={github}>Explore the source <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+        <figure class="hero-art">
+          <img src="/brand/teamwork.png" width="1254" height="1254" alt="Two TeamCTL characters building one structure together from blue and cream blocks." loading="eager" decoding="async" fetchpriority="high" />
+        </figure>
+        <div class="hero-caption">
+          <p class="caption-summary"><strong>TeamCTL will give you the building blocks</strong> to create an autonomous personal assistant, a research team, or a whole organization of agents.</p>
+          <p class="caption-detail">You define the structures, roles, and how the agents are connected.</p>
+          <a href="#how-it-works" class="scroll-link">See how it works <span aria-hidden="true">↓</span></a>
+        </div>
+      </section>
+
+      <OrganizationStory />
+
+      <section id="context" class="context" aria-labelledby="context-heading">
+        <div class="story">
+          <h2 id="context-heading">A personal assistant is one thing you can build with TeamCTL.</h2>
+          <p>TeamCTL helps you build agent orchestration around your needs. Run a personal assistant in the background, or put a team of researchers to work around the clock.</p>
+          <p class="origin"><a href={`${github}/releases/tag/v0.2.8`}>Released in April 2026</a>, over three months before <a href="https://x.ai/news/introducing-grok-bot">Grok Bot’s beta launch</a> and five months before <a href="https://openai.com/index/introducing-dots/">OpenAI announced Dots</a>.</p>
+          <div class="timeline" aria-label="Release timeline">
+            <a href={`${github}/releases/tag/v0.2.8`}><time datetime="2026-04-26">26 Apr 2026</time><strong>TeamCTL release</strong></a>
+            <span class="timeline-line" aria-hidden="true"></span>
+            <a href="https://x.ai/news/introducing-grok-bot"><time datetime="2026-08-11">11 Aug 2026</time><strong>Grok Bot beta launch</strong></a>
+            <span class="timeline-line" aria-hidden="true"></span>
+            <a href="https://openai.com/index/introducing-dots/"><time datetime="2026-09-29">29 Sep 2026</time><strong>OpenAI announces Dots</strong></a>
+            <span class="timeline-line" aria-hidden="true"></span>
+            <a class="timeline-next" href="#next-teamctl"><span class="timeline-date">???</span><strong>??? by TeamCTL</strong></a>
+          </div>
+        </div>
+        <div class="comparison">
+          <h3 id="comparison-heading">Where TeamCTL fits</h3>
+          <div class="comparison-scroll" role="region" aria-labelledby="comparison-heading" tabindex="0">
+            <table class="comparison-table" aria-labelledby="comparison-heading">
+              <colgroup><col class="capability-column" /><col class="assistants-column" /><col class="orchestration-column" /></colgroup>
+              <thead><tr><th scope="col">Capability</th><th scope="col"><span class="comparison-products">{approaches.map((item) => <a href={item.href}><img class="product-icon" src={`/products/${item.icon}.svg`} width="16" height="16" alt="" />{item.name}<span aria-hidden="true">↗</span></a>)}</span><span class="table-heading-note">Ready-made assistants</span></th><th scope="col"><span class="comparison-team"><img class="product-icon" src="/brand/teamctl-head.svg" width="16" height="16" alt="" />TeamCTL</span><span class="table-heading-note">Open-source orchestration layer</span></th></tr></thead>
+              <tbody>
+                <tr>
+                  <th scope="row">Starting point</th>
+                  <td>An assistant ready to work.</td>
+                  <td>Building blocks for agent teams, including a personal assistant.<a class="footnote-mark" href="#assistant-definitions" aria-label="About sharing team definitions">*</a></td>
+                </tr>
+                <tr>
+                  <th scope="row">Agent engines</th>
+                  <td>A provider-managed agent stack.</td>
+                  <td>Mix {harnesses.map((harness) => harness.name).join(', ')}.<a class="cell-note" href="/concepts/runtimes/#adding-a-new-runtime">Extend with custom harness adapters.</a></td>
+                </tr>
+                <tr>
+                  <th scope="row">What you define</th>
+                  <td>Your assistant’s goals, instructions and connected apps; options vary by product.</td>
+                  <td>Your team’s agent roles, reporting lines, channels and tools.</td>
+                </tr>
+                <tr>
+                  <th scope="row">Where it runs</th>
+                  <td>Their cloud.</td>
+                  <td>Your machine, your Mac mini, your server.</td>
+                </tr>
+                <tr>
+                  <th scope="row">Definitions &amp; source</th>
+                  <td>Configuration managed within each product.</td>
+                  <td>Open source. Team definitions as code in YAML. Store, version and share with Git.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="comparison-footnote" id="assistant-definitions"><span class="footnote-symbol" aria-hidden="true">*</span><span>Create a personalized assistant and share its team definition, or start with someone else’s <a href={`${github}/blob/main/examples/personal-research/.team/projects/research.yaml`}>example YAML definition</a>.</span></p>
+        </div>
+      </section>
     </main>
 
+    <section id="open-source" class="ownership" aria-labelledby="ownership-heading">
+      <div class="wrap ownership-inner">
+        <h2 id="ownership-heading">TeamCTL is <a href={github}>open source</a>, so you can:</h2>
+        <ul class="ownership-freedoms" aria-label="The TeamCTL philosophy">
+          <li>Switch providers freely.</li>
+          <li>Own your data.</li>
+          <li>Customize everything.</li>
+          <li>Store team definitions in open repositories and share them with others <span class="sharing-aside">(sharing is caring).</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="next-teamctl" class="next-release" aria-labelledby="next-release-heading">
+      <div class="release-stage">
+        <div class="wrap next-release-inner">
+          <div class="release-copy">
+            <h2 id="next-release-heading">The next TeamCTL<br /> is taking shape<br /> <span>in the shadows.</span></h2>
+            <p class="release-team">With a TeamCTL team helping build it.</p>
+          </div>
+          <div class="signup-block">
+            <div class="signup-title">
+              <img class="signup-character" src="/brand/teamctl-head.svg" width="52" height="52" alt="" aria-hidden="true" />
+              <h3 id="signup-heading">Get notified when it’s ready.</h3>
+            </div>
+            <form id="release-signup" method="post" action={releaseSignupEndpoint || '/api/release-signup'} aria-labelledby="signup-heading" data-endpoint={releaseSignupEndpoint} hidden>
+              <label class="signup-label" for="release-email">Email address</label>
+              <div class="signup-trap" aria-hidden="true"><label for="signup-website">Website</label><input id="signup-website" name="website" type="text" tabindex="-1" autocomplete="off" /></div>
+              <div class="signup-field">
+                <input id="release-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" maxlength="254" required aria-describedby="signup-promise" />
+                <button type="submit" disabled>Notify me <span aria-hidden="true">↗</span></button>
+              </div>
+              <div class="signup-verification" data-sitekey={turnstileSiteKey}></div>
+              <p class="signup-success" tabindex="-1" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="m7.5 12 3 3 6-6" /></svg><span>You’re on the list.</span></p>
+              <p class="signup-promise" id="signup-promise">No spam. Just one email when the next TeamCTL is ready.</p>
+              <p class="signup-status" role="status" aria-live="polite" hidden></p>
+            </form>
+            <noscript><p class="signup-promise">Enable JavaScript to sign up for the release notification.</p></noscript>
+          </div>
+        </div>
+      </div>
+      <aside class="creator-contact wrap" aria-labelledby="creator-heading">
+        <h3 id="creator-heading">Contact the creator</h3>
+        <div class="creator-profile">
+          <a class="creator-identity" href="https://github.com/Alireza29675">
+            <img src="/creator/alireza.jpg" width="56" height="56" loading="lazy" decoding="async" alt="" />
+            <span class="creator-details"><span>Alireza Sheikholmolouki</span><small>Virgin Music, ex-Miro</small></span>
+          </a>
+          <nav aria-label="Creator links">
+            <a href="https://github.com/Alireza29675">GitHub <span aria-hidden="true">↗</span></a>
+            <a href="https://www.linkedin.com/in/alireza-sheikholmolouki/">LinkedIn <span aria-hidden="true">↗</span></a>
+            <a href="https://alireza.cc/">Website <span aria-hidden="true">↗</span></a>
+          </nav>
+        </div>
+      </aside>
+    </section>
+
+    <footer class="launch-footer wrap">
+      <p>TeamCTL <span>· Open source, MIT</span></p>
+      <nav aria-label="Footer"><a href="/getting-started/">Documentation</a><a href={`${github}/tree/main/examples`}>Examples</a><a href={github}>GitHub ↗</a></nav>
+    </footer>
     <script>
-      const btn = document.querySelector<HTMLButtonElement>('[data-copy]');
-      const cmd = document.getElementById('install-cmd');
-      if (btn && cmd) {
-        btn.addEventListener('click', async () => {
-          try {
-            await navigator.clipboard.writeText(cmd.textContent ?? '');
-            const def = btn.querySelector<HTMLElement>('.copy-default');
-            const done = btn.querySelector<HTMLElement>('.copy-done');
-            if (def && done) {
-              def.hidden = true;
-              done.hidden = false;
-              setTimeout(() => {
-                def.hidden = false;
-                done.hidden = true;
-              }, 1600);
+      type TurnstileApi = {
+        render(container: HTMLElement, options: Record<string, unknown>): string;
+        reset(widgetId: string): void;
+        remove(widgetId: string): void;
+      };
+      const turnstileWindow = window as Window & { turnstile?: TurnstileApi };
+      const signupForm = document.querySelector<HTMLFormElement>('#release-signup');
+      const signupInput = signupForm?.querySelector<HTMLInputElement>('#release-email');
+      const signupButton = signupForm?.querySelector<HTMLButtonElement>('button');
+      const signupStatus = signupForm?.querySelector<HTMLParagraphElement>('.signup-status');
+      const signupField = signupForm?.querySelector<HTMLDivElement>('.signup-field');
+      const signupSuccess = signupForm?.querySelector<HTMLParagraphElement>('.signup-success');
+      const signupVerification = signupForm?.querySelector<HTMLDivElement>('.signup-verification');
+
+      if (signupForm && signupInput && signupButton && signupStatus && signupField && signupSuccess && signupVerification) {
+        let widgetId: string | undefined;
+        let token = '';
+        let submitting = false;
+        let complete = false;
+        let verificationMessage = false;
+        const updateButton = () => { signupButton.disabled = submitting || complete || !token; };
+        const showStatus = (message: string, verification = false) => {
+          verificationMessage = verification;
+          signupStatus.textContent = message;
+          signupStatus.hidden = false;
+        };
+        const sitekey = signupVerification.dataset.sitekey;
+        if (sitekey) {
+          showStatus('Verifying…', true);
+          const script = document.createElement('script');
+          script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+          script.async = true;
+          script.onload = () => {
+            const api = turnstileWindow.turnstile;
+            if (!api) { showStatus('Verification couldn’t load. Refresh and try again.', true); return; }
+            try {
+              widgetId = api.render(signupVerification, {
+                sitekey, action: 'release-signup', theme: 'dark', size: 'compact', appearance: 'interaction-only',
+                callback: (value: string) => {
+                  token = value;
+                  updateButton();
+                  if (verificationMessage) { signupStatus.hidden = true; signupStatus.textContent = ''; verificationMessage = false; }
+                },
+                'expired-callback': () => {
+                  token = '';
+                  updateButton();
+                  if (!complete && widgetId) api.reset(widgetId);
+                },
+                'error-callback': () => {
+                  token = '';
+                  updateButton();
+                  if (!complete) showStatus('Verification couldn’t finish. Refresh and try again.', true);
+                  return true;
+                },
+              });
+            } catch {
+              showStatus('Verification couldn’t load. Refresh and try again.', true);
             }
+          };
+          script.onerror = () => showStatus('Verification couldn’t load. Refresh and try again.', true);
+          document.head.append(script);
+        } else {
+          showStatus('Signup is being connected. Please try again soon.');
+        }
+
+        signupForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          if (submitting || complete || !signupForm.reportValidity()) return;
+          if (!token) { showStatus('Please wait for verification, then try again.', true); return; }
+          const endpoint = signupForm.dataset.endpoint;
+          if (!endpoint) { showStatus('Signup isn’t connected yet.'); return; }
+
+          submitting = true;
+          updateButton();
+          showStatus('Saving your spot…');
+          try {
+            const response = await fetch(endpoint, {
+              method: 'POST',
+              signal: AbortSignal.timeout(10000),
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: signupInput.value.trim(), website: new FormData(signupForm).get('website'), consentVersion: 'teamctl-next-release-v1', turnstileToken: token }),
+            });
+            if (response.status === 429) { showStatus('Too many attempts. Please try again shortly.'); return; }
+            if (response.status === 403) { showStatus('Verification expired. Please try again.'); return; }
+            if (response.status === 503) { showStatus('Signup is being connected. Please try again soon.'); return; }
+            const result = await response.json();
+            if (!response.ok || result.success !== true) throw new Error('Signup failed');
+            complete = true;
+            signupField.hidden = true;
+            signupVerification.hidden = true;
+            signupSuccess.hidden = false;
+            signupStatus.hidden = true;
+            signupStatus.textContent = '';
+            signupForm.reset();
+            if (widgetId) turnstileWindow.turnstile?.remove(widgetId);
+            signupSuccess.focus();
           } catch {
-            /* clipboard refused: leave UI untouched */
+            showStatus('Couldn’t subscribe. Please try again.');
+          } finally {
+            submitting = false;
+            token = '';
+            updateButton();
+            if (!complete && widgetId) turnstileWindow.turnstile?.reset(widgetId);
           }
         });
+        signupForm.hidden = false;
       }
     </script>
-
-    <style>
-      :root {
-        --bg: #0d0e10;
-        --bg-soft: #14161a;
-        --fg: #e9e7df;
-        --fg-mute: #8a8780;
-        --hairline: rgba(233, 231, 223, 0.12);
-        --accent: #d6a15a;
-        --serif: 'Iowan Old Style', 'Charter', 'Georgia', serif;
-        --sans: ui-sans-serif, system-ui, -apple-system, 'Inter', sans-serif;
-        --mono: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, monospace;
-      }
-      html, body {
-        background:
-          radial-gradient(ellipse 80% 60% at 50% 0%, rgba(255, 240, 215, 0.025), transparent 60%),
-          var(--bg);
-        color: var(--fg);
-        font-family: var(--sans);
-        margin: 0;
-        -webkit-font-smoothing: antialiased;
-      }
-      main {
-        max-width: 50rem;
-        margin: 0 auto;
-        padding: 14vh 2rem 8rem;
-        display: grid;
-        gap: 3rem;
-      }
-      a { color: var(--fg); }
-      a:hover { color: var(--accent); }
-
-      /* Hero — the README's teamctl wordmark, centered and borderless */
-      .hero {
-        margin: 0;
-        text-align: center;
-      }
-      .hero img {
-        display: block;
-        width: 100%;
-        max-width: 34rem;
-        height: auto;
-        margin: 0 auto;
-      }
-
-      /* Lede */
-      .lede { display: grid; gap: 0.9rem; }
-      h1 {
-        font-family: var(--serif);
-        font-weight: 400;
-        font-size: clamp(2rem, 4.4vw, 3rem);
-        line-height: 1.18;
-        letter-spacing: -0.012em;
-        margin: 0;
-      }
-      .subline {
-        margin: 0;
-        color: var(--fg-mute);
-        font-size: 1.05rem;
-        line-height: 1.5;
-      }
-
-      .intro {
-        margin: 0;
-        color: var(--fg);
-        font-size: 1.02rem;
-        line-height: 1.65;
-      }
-      .intro a {
-        border-bottom: 1px solid var(--hairline);
-        text-decoration: none;
-      }
-      .intro a:hover {
-        border-color: rgba(214, 161, 90, 0.5);
-      }
-
-      h2 {
-        font-family: var(--serif);
-        font-weight: 400;
-        font-size: 1.6rem;
-        margin: 0 0 0.6rem;
-        letter-spacing: -0.005em;
-      }
-      h2 code {
-        font-family: var(--mono);
-        font-size: 0.8em;
-        background: rgba(214, 161, 90, 0.08);
-        padding: 0.05em 0.3em;
-        border-radius: 4px;
-      }
-
-      section p {
-        margin: 0 0 0.9rem;
-        color: var(--fg);
-        font-size: 1rem;
-        line-height: 1.6;
-      }
-      section p:last-child { margin-bottom: 0; }
-      section code {
-        font-family: var(--mono);
-        font-size: 0.9em;
-        background: rgba(214, 161, 90, 0.08);
-        padding: 0.05em 0.3em;
-        border-radius: 4px;
-      }
-      section a {
-        border-bottom: 1px solid var(--hairline);
-        text-decoration: none;
-      }
-      section a:hover {
-        border-color: rgba(214, 161, 90, 0.5);
-      }
-
-      /* Install */
-      .install-section { margin-top: 0; display: grid; gap: 0.6rem; }
-      .install {
-        position: relative;
-        background: var(--bg-soft);
-        border: 1px solid var(--hairline);
-        border-radius: 8px;
-      }
-      .install pre {
-        margin: 0;
-        padding: 1.05rem 6rem 1.05rem 1.25rem;
-        overflow-x: auto;
-        font-family: var(--mono);
-        font-size: 0.95rem;
-        color: var(--fg);
-        white-space: pre;
-      }
-      .install-note {
-        margin: 0;
-        color: var(--fg-mute);
-        font-size: 0.92rem;
-      }
-      .copy-btn {
-        position: absolute;
-        right: 0.5rem;
-        top: 50%;
-        transform: translateY(-50%);
-        background: transparent;
-        color: var(--fg-mute);
-        border: 1px solid var(--hairline);
-        border-radius: 6px;
-        padding: 0.35rem 0.8rem;
-        font: inherit;
-        font-size: 0.82rem;
-        cursor: pointer;
-        transition: color 200ms ease, border-color 200ms ease;
-      }
-      .copy-btn:hover, .copy-btn:focus-visible {
-        color: var(--accent);
-        border-color: rgba(214, 161, 90, 0.5);
-        outline: none;
-      }
-
-      /* Extras */
-      .extras-list {
-        margin: 0.6rem 0 0.9rem;
-        padding-left: 1.4rem;
-        display: grid;
-        gap: 0.6rem;
-      }
-      .extras-list li {
-        color: var(--fg);
-        font-size: 1rem;
-        line-height: 1.55;
-      }
-      .extras-list strong { color: var(--fg); }
-      .extras-list a { border-bottom: none; }
-      .extra-emoji { margin-right: 0.15rem; }
-      .extras-note {
-        margin: 0;
-        color: var(--fg-mute);
-        font-size: 0.95rem;
-      }
-
-      /* Examples list */
-      .examples-list {
-        list-style: none;
-        padding: 0;
-        margin: 1rem 0 0.6rem;
-        display: grid;
-        gap: 0.6rem;
-      }
-      .example-link {
-        display: block;
-        padding: 0.9rem 1.1rem;
-        border: 1px solid var(--hairline);
-        border-radius: 8px;
-        background: var(--bg-soft);
-        text-decoration: none;
-        color: var(--fg);
-        transition: border-color 200ms ease, background 200ms ease;
-      }
-      .example-link:hover {
-        border-color: rgba(214, 161, 90, 0.5);
-        background: rgba(214, 161, 90, 0.04);
-      }
-      .example-head {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        gap: 0.5rem;
-        margin-bottom: 0.25rem;
-      }
-      .example-emoji {
-        font-size: 1.1rem;
-      }
-      .example-title {
-        font-weight: 600;
-        color: var(--fg);
-        font-family: var(--mono);
-        font-size: 0.96rem;
-      }
-      .example-what {
-        margin: 0;
-        color: var(--fg-mute);
-        font-size: 0.96rem;
-        line-height: 1.55;
-      }
-      .examples-more {
-        margin: 0.6rem 0 0;
-        color: var(--fg-mute);
-        font-size: 0.95rem;
-      }
-
-      /* Demo: code card + terminal command block */
-      .demo { margin: 0.6rem 0 0; display: grid; gap: 0.75rem; }
-
-      .code-card {
-        position: relative;
-        background:
-          linear-gradient(180deg, rgba(255, 245, 220, 0.018), transparent 40%),
-          var(--bg-soft);
-        border: 1px solid var(--hairline);
-        border-radius: 10px;
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.025),
-          0 1px 0 rgba(0, 0, 0, 0.4);
-      }
-      .yaml {
-        margin: 0;
-        padding: 1.4rem 1.6rem;
-        overflow-x: auto;
-        font-family: var(--mono);
-        font-size: 0.9rem;
-        line-height: 1.55;
-        color: var(--fg);
-        white-space: pre;
-      }
-      .yaml :global(.k) { color: var(--accent); }
-      .yaml :global(.cmt) { color: var(--fg-mute); }
-
-      .cmd {
-        margin: 0;
-        padding: 0.95rem 1.25rem;
-        background: var(--bg-soft);
-        border: 1px solid var(--hairline);
-        border-radius: 8px;
-        overflow-x: auto;
-        font-family: var(--mono);
-        font-size: 0.9rem;
-        line-height: 1.7;
-        color: var(--fg);
-        white-space: pre;
-      }
-      .cmd .prompt { color: var(--fg-mute); user-select: none; }
-      .cmd code { color: var(--fg); }
-      .cmd .cmt { color: var(--fg-mute); }
-      /* Neutralize the global inline-code chip inside code blocks (it tints
-         each wrapped line). Keep plain monospace on the pre instead. */
-      .yaml code, .cmd code {
-        background: none;
-        padding: 0;
-        border-radius: 0;
-      }
-      .demo-note {
-        margin: 0.6rem 0 0;
-        color: var(--fg-mute);
-        font-size: 0.95rem;
-      }
-
-      /* teamctl ui shots */
-      .ui-shots {
-        display: grid;
-        gap: 1.5rem;
-        margin: 0.6rem 0 0;
-      }
-      .ui-shot { margin: 0; }
-      .ui-shot img {
-        display: block;
-        width: 100%;
-        height: auto;
-        border: 1px solid var(--hairline);
-        border-radius: 8px;
-        background: var(--bg-soft);
-      }
-      .ui-shot figcaption {
-        margin-top: 0.5rem;
-        color: var(--fg-mute);
-        font-size: 0.92rem;
-        font-style: italic;
-      }
-
-      /* Learn more */
-      .learn-list {
-        list-style: none;
-        padding: 0;
-        margin: 0.4rem 0 0;
-        display: grid;
-        gap: 0.5rem;
-      }
-      .learn-list li {
-        color: var(--fg);
-        font-size: 1rem;
-      }
-
-      /* Outbound */
-      .outbound {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        gap: 0.85rem;
-        font-size: 0.98rem;
-      }
-      .outbound a {
-        color: var(--fg-mute);
-        text-decoration: none;
-        border-bottom: 1px solid var(--hairline);
-        padding-bottom: 0.15rem;
-        transition: color 200ms ease, border-color 200ms ease;
-      }
-      .outbound a:hover {
-        color: var(--fg);
-        border-color: rgba(233, 231, 223, 0.32);
-      }
-      .outbound .sep {
-        color: var(--fg-mute);
-        opacity: 0.45;
-        user-select: none;
-      }
-    </style>
   </body>
 </html>

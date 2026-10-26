@@ -10,7 +10,7 @@ This file is short on purpose. Keep it under roughly 2K tokens and treat it like
 
 ## What this repo is
 
-`teamctl` is a multi-crate Rust workspace that ships docker-compose-shaped tooling for persistent agent teams. The crates cover the CLI, the schema / validate / render / supervisor core, the MCP server agents read and write the mailbox through, the Telegram bridge, and the TUI. The repo also carries an Astro Starlight docs site under `docs/`, cookbook examples under `examples/`, and a dogfood team config under `.team/` — the team that develops teamctl on teamctl, shipped in-tree because it doubles as the showcase.
+TeamCTL is an open-source platform for defining, running and sharing autonomous teams of agents, implemented as a multi-crate Rust workspace. The crates cover the CLI, the schema / validate / render / supervisor core, the MCP server agents read and write the mailbox through, the Telegram bridge, and the TUI. The repo also carries an Astro Starlight docs site under `docs/`, cookbook examples under `examples/`, and a dogfood team config under `.team/` — the team that develops teamctl on teamctl, shipped in-tree because it doubles as the showcase.
 
 User-facing intro and install path: see `@README.md`.
 

@@ -3,13 +3,15 @@ title: Mixing runtimes in one team
 description: One manager, two workers, three different CLI runtimes — Claude Code + Codex + Gemini.
 ---
 
-A pattern for letting one manager dispatch to workers running on different CLI stacks — Claude Code for orchestration, Codex for deep backend reasoning, Gemini for million-token research. All three agents share the same SQLite mailbox and talk through the same MCP tools; the manager doesn't know — or care — that its workers run on different runtimes.
+One possible TeamCTL configuration: a lead using Claude Code, a builder using Codex and a researcher using Gemini CLI. They share the same mailbox and messaging tools. Choose runtimes and models around the roles and access your work needs.
 
-The multi-runtime story is now told inside the curated examples themselves: `newsletter-office` mixes Claude Code + Codex + Gemini; `oss-maintainer` does the same; and the `multi-runtime` guide in the docs walks through the moving parts. The compose file below stays preserved as a reference recipe.
+The [newsletter-office](https://github.com/Alireza29675/teamctl/tree/main/examples/newsletter-office) example mixes Claude Code, Codex and Gemini CLI; [oss-maintainer](https://github.com/Alireza29675/teamctl/tree/main/examples/oss-maintainer) uses Claude Code and Codex. The [multi-runtime guide](/guides/multi-runtime/) explains capability differences. The excerpt below shows one possible roster.
+
+The excerpt shows runtime selection. Role files should define responsibilities and conversations; adapt a complete example when you want those files alongside the roster.
 
 ```yaml
 # .team/projects/mixed.yaml
-version: "2.0.0"
+version: 2
 
 project:
   id: mixed

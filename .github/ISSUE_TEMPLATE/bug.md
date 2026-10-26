@@ -22,4 +22,4 @@ labels: bug
 
 - teamctl: `teamctl --version`
 - OS:
-- Runtime(s) involved (Claude Code / Codex / Gemini + versions):
+- Runtime(s) involved (Claude Code / Codex / OpenCode / Gemini CLI + versions):

@@ -1,12 +1,8 @@
 # Example: product-team
 
-Product discovery while an engineering team builds. You set a goal, and
-two managers you talk to on Telegram run with it: a **Product Manager** who owns the
-*what* (product discovery → a living `requirements.md`) and an **Engineering Manager** who
-owns the *how* (decompose, route, integrate, ship, gate). Behind them,
-**two engineers on two model families** build the product and review each
-other's PRs. You touch exactly two agents; everything between a settled
-requirement and a shipped increment runs on its own.
+One possible TeamCTL team definition: product discovery and engineering in one project. A **Product Manager** maintains requirements, an **Engineering Manager** coordinates delivery, and two engineers using different runtimes build and review work.
+
+You can adapt the roles, channels and target project. Their instructions describe the intended workflow; active sessions, tools, provider access and runtime permissions determine what happens in practice.
 
 ```
         ┌─ pm  (Claude Opus)    ← Telegram: Product Manager bot       · the *what*: discovery → requirements.md
@@ -24,7 +20,7 @@ app — a tiny static habit/streak tracker it grows from skeleton toward
 [`.team/requirements.md`](.team/requirements.md). Swap it for your own
 product in one line (see [Point it at your own product](#point-it-at-your-own-product)).
 
-## The autonomy loop
+## The intended workflow
 
 `requirements.md` is the contract between the two tracks. The Product Manager writes
 it; the Engineering Manager delivers against it.
@@ -41,13 +37,11 @@ it; the Engineering Manager delivers against it.
    `#code_review` — a cross-model pass before anything goes to a gate.
 5. **Engineering Manager** gates anything sensitive (`merge_to_main`, `release`, `deploy`,
    `publish`, `external_api_post`) → a Telegram approval prompt to you.
-6. The loop continues: the Product Manager keeps discovering and refining; you adjust
-   the *what* anytime via the Product Manager; the Engineering Manager keeps shipping toward the current
-   contract. You're never the bottleneck.
+6. You can adjust the requirements through the Product Manager and inspect delivery through the Engineering Manager. Check the work and make the decisions the team requests.
 
 ## What this demonstrates
 
-Three properties make this a working team, not a toy:
+Three configuration patterns:
 
 1. **Per-agent capability stacks.** Every agent carries its own tooling,
    declared in `projects/product-team.yaml` — not a shared global set:
@@ -64,8 +58,7 @@ Three properties make this a working team, not a toy:
    different bug classes — a genuine quality mechanism, not decoration.
 3. **A deliberately narrow human surface.** You touch exactly two agents,
    on two separate bots: product with the Product Manager, delivery with the Engineering Manager.
-   Everything between a requirement and a shipped increment is autonomous,
-   with hard gates only where work reaches the outside world.
+   The roles ask for approvals before sensitive actions. The approval mailbox records those requests; runtime and repository permissions provide the enforced action boundaries.
 
 ## The cross-model parity gap
 

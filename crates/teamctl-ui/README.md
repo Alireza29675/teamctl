@@ -1,16 +1,16 @@
-# teamctl-ui
+# TeamCTL terminal UI
 
-Interactive terminal UI for `teamctl`.
+Inspect your TeamCTL agents, conversations and approval requests in the terminal. TeamCTL is an open-source platform for defining and running autonomous teams of agents; `teamctl-ui` is its dashboard.
 
 ```bash
 cargo install teamctl-ui     # or: cargo build -p teamctl-ui
 teamctl-ui                   # from inside any directory under a `.team/` tree
 ```
 
-**Keys (PR-UI-1 scaffold):** `Tab` to cycle focus across the three panes, `q`
-to quit (with confirm). `?` and `t` are reserved for the help overlay and
-onboarding tutorial that land in later stacked-PRs (PR-UI-7).
+You can also open the dashboard with `teamctl ui`. Closing it leaves the team's background sessions running while the host remains awake.
 
 The crate is excluded from the workspace's `default-members`: plain
 `cargo build` does not pull the ratatui dep tree. Build it with
 `-p teamctl-ui` or `--workspace`.
+
+[Documentation](https://teamctl.run/getting-started/) · [CLI reference](https://teamctl.run/reference/teamctl/) · [Source](https://github.com/Alireza29675/teamctl)

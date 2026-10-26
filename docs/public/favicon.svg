@@ -1,1 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="160 160 960 960" role="img" aria-labelledby="title desc">
+  <title id="title">TeamCTL</title>
+  <desc id="desc">A friendly Signal-blue hooded head with a tilted Chalk face and a small smile.</desc>
+  <path fill="#2F5EFF" stroke="#191B1A" stroke-width="20" stroke-linejoin="round" d="M803 482C734 440 700 391 654 338C600 274 543 246 479 250C402 247 335 281 279 333C233 376 211 418 217 460C222 496 243 514 276 516C315 519 363 497 410 469C416 511 395 554 366 612C325 690 291 743 294 810C298 890 344 948 411 982C493 1027 602 1041 709 1030C828 1018 925 976 974 909C1020 848 1025 786 1000 710C981 650 953 592 944 544C964 579 994 601 1025 600C1054 600 1067 579 1060 546C1050 489 1013 441 969 425C909 403 848 424 803 482Z"/>
+  <path fill="#191B1A" d="M397 476C425 454 446 432 465 414C456 448 434 466 413 480Z"/>
+  <path fill="#191B1A" d="M789 476C813 488 833 500 847 511C824 505 806 497 791 490Z"/>
+  <path fill="#191B1A" d="M934 553C931 530 932 505 936 489C946 522 958 547 977 568C958 558 946 551 934 553Z"/>
+  <path fill="#F7F7F2" d="M429 754C476 681 576 635 674 617C774 598 865 610 915 658C957 699 966 752 945 811C918 889 839 934 741 957C639 981 533 981 468 944C409 910 392 845 419 776C422 768 425 761 429 754Z"/>
+  <ellipse cx="558" cy="846" rx="29" ry="47" transform="rotate(-14 558 846)" fill="#191B1A"/>
+  <ellipse cx="819" cy="782" rx="29" ry="48" transform="rotate(-15 819 782)" fill="#191B1A"/>
+  <path d="M663 855C681 878 722 871 734 838" fill="none" stroke="#191B1A" stroke-width="17" stroke-linecap="round"/>
+</svg>

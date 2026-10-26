@@ -24,3 +24,6 @@ Cargo.lock.bak
 /docs/dist/
 /docs/.astro/
 /docs/node_modules/
+
+# Local Cloudflare deployment cache
+/.wrangler/

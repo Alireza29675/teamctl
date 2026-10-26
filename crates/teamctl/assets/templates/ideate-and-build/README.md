@@ -1,6 +1,6 @@
 # Ideate & Build Team
 
-A four-agent team scaffolded by `teamctl init` (ideate-and-build template): think an idea through with a dedicated partner, then build it with a small engineering crew.
+One possible TeamCTL starter, scaffolded by `teamctl init --template ideate-and-build`. A Compass helps explore ideas, an Executor coordinates work, and two engineers build and review it. You can change the roles, structure and conversations to fit your needs.
 
 ## What's here
 
@@ -20,9 +20,11 @@ A four-agent team scaffolded by `teamctl init` (ideate-and-build template): thin
 
 1. **Create two Telegram bots.** Message [@BotFather](https://t.me/BotFather), run `/newbot` twice — one bot for the Executor, one for Compass — and copy each token.
 2. **Configure secrets.** Copy `.env.example` to `.env` and paste the tokens into `TEAMCTL_TG_EXECUTOR_TOKEN` and `TEAMCTL_TG_COMPASS_TOKEN`.
-3. **Find your chat IDs.** Start a chat with each bot, then run `teamctl status` — it'll show the chat IDs. Put them in the matching `*_CHATS` variables.
-4. **Bring the team up.** Run `teamctl up`. Your Executor and Compass are now live on Telegram.
+3. **Authorize your chats.** Use `teamctl bot setup` for guided token and chat-ID setup, or get your Telegram chat ID and fill the matching `*_CHATS` variables.
+4. **Review and start the team.** Run `teamctl validate`, then `teamctl up`. Keep the host awake and the configured runtimes signed in while agents work in the background.
 
 ## Growing your team
 
 Edit the roster in `projects/main.yaml`, adjust role prompts under `roles/`, and run `teamctl reload`. See https://teamctl.run for the full guide.
+
+Share the intended configuration, roles and capability files with their prerequisites. Each person supplies their own accounts and permissions; keep `.env` and private runtime state out of shared files.

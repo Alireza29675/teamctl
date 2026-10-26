@@ -1,6 +1,8 @@
 # Example: personal-research
 
-An agentic setup that owns your information life. A **curator** follows the world on the topics you care about; a **buddy** holds your compounding mental model and is the only one you talk to. Two agents, each with a real capability stack, running a daily loop so the signal finds you instead of the other way around.
+One possible TeamCTL team definition: a **curator** follows chosen topics and a **buddy** connects findings to your questions and research notes. Their roles describe how they exchange sources and what the buddy brings to Telegram.
+
+Adapt the roles, tools and conversation to your needs. Background work requires an awake host, active sessions and provider access; the definition describes intended behavior, not a guaranteed result.
 
 ```
 buddy (Claude Opus)              ← Telegram: your thinking partner
@@ -70,17 +72,13 @@ DM the buddy bot about anything you're curious about. A half-remembered concept,
 
 Tell the buddy what you want followed. *"I care about AI agent orchestration, post-training research, and what's happening with TeamOps as a category."* The buddy briefs the curator. The curator starts watching the world. Once a day (or whenever something breaks), the curator surfaces what matters. The buddy filters again and brings 1-2 items to your phone if any earned it. Most days nothing crosses the bar. That's the right output.
 
-[Screenshot of a Telegram conversation: user asks "remind me what we settled on for X" and the buddy responds with a connected answer pulling from prior research]
-
-[Screenshot of a proactive surfacing: buddy DMs *"Curator surfaced something on TeamOps you might want to see. Short version: ..."*]
-
 ## What this setup shows
 
 Three patterns layer:
 
 1. **Per-agent stacks, not just prompts.** Each agent carries real capabilities sized to its job: the curator gets a search/news MCP and a source-scout because its work is *finding*; the buddy gets summarizer/synthesizer subagents because its work is *framing*. Capabilities follow the domain, not the org chart.
 2. **Filters compose.** Curator filters "what's worth surfacing" against the operator's interests. Buddy filters "what's worth saying" against the operator's voice and timing. Two filters land less noise than one, and each improves over time from the other's signal.
-3. **HITL on outbound.** Researching and surfacing are free. Sending an email to a researcher you don't know yet is not. `external_email` is on the globally-sensitive list, so both agents pause for your tap before reaching out on your behalf.
+3. **Approval instructions for outbound actions.** The roles tell agents to request approval before external email. The sensitive-action list records that policy; runtime permissions and tools determine the enforced boundary.
 
 ## Teardown
 
@@ -91,6 +89,6 @@ rm -rf .team/state/
 
 ## Related
 
-- [How to think about agent teams](https://teamctl.run/concepts/teams/). The methodology behind the team shape.
+- [Designing an agent team](https://teamctl.run/concepts/teams/). The methodology behind the team shape.
 - [Market analysis](../market-analysis/). A medium team where dissent is the load-bearing trigger.
 - [OSS maintainer](../oss-maintainer/). A pipeline team with per-agent stacks and plan-mode HITL on release.

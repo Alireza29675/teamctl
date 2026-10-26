@@ -1,10 +1,15 @@
 ---
 title: Interfaces
+description: Follow conversations and respond to agents from Telegram or the host.
 ---
 
-An **interface** is a pluggable human-facing channel. Telegram is the shipping adapter; Discord, iMessage, CLI, and webhook are planned.
+Telegram is the shipping messaging adapter. Each configured user-facing manager gets its own bot: a message to that bot goes to the matching manager's mailbox, and replies and approval requests return through the same chat.
 
-Telegram lives directly on the manager and is set up by `teamctl bot setup` (one bot per user-facing manager — DM the bot, the message goes to the matching manager). Other adapters use the top-level `interfaces:` array shape.
+On the host, use `teamctl send`, the terminal UI and the approval commands to follow or direct the work. Discord, iMessage, CLI chat, webhook and email adapters are planned; accepting an interface declaration in the schema does not start a working adapter.
+
+## Connect Telegram
+
+Run `teamctl bot setup`. It writes the credentials to `.team/.env` and adds a Telegram block to the manager:
 
 ```yaml
 # projects/news.yaml — Telegram on the manager itself
@@ -18,47 +23,22 @@ managers:
         chat_ids_env: TEAMCTL_TG_HEAD_EDITOR_CHATS
 ```
 
-```yaml
-# team-compose.yaml — non-Telegram adapters
-interfaces:
-  - type: discord
-    name: discord-home-lab
-    config:
-      bot_token_env: TEAMCTL_DISCORD_TOKEN
-      server_id: "…"
+`teamctl up` starts one `team-bot` process per configured manager. Authorized chat IDs can send text, receive replies and decide approval requests. See the [Telegram setup guide](/guides/telegram-bot/).
 
-  - type: imessage
-    name: imsg
-    config:
-      my_number: "+31…"
+## Use the host controls
 
-  - type: cli
-    name: local
-    # No config. Reachable via `teamctl chat <project>:<manager>`.
-```
-
-Approvals are routed to every attached interface until one of them decides.
-
-## What interfaces do
-
-| Interface | Inbound DMs | Approval buttons | Notes |
-|---|---|---|---|
-| telegram | ✓ | ✓ | Shipping adapter. |
-| discord | ✓ | ✓ | Slash commands + buttons. |
-| imessage | ✓ | ✗ (reply "approve 3") | macOS host only. |
-| cli | ✓ | ✓ | `teamctl chat` / `teamctl pending`. |
-| webhook | ✓ | ✓ | For web dashboards or IFTTT-style. |
+| Control | Purpose |
+| --- | --- |
+| `teamctl send <project>:<agent> "<text>"` | Send a message to a named agent. |
+| `teamctl ui` | Inspect sessions, messages and approval requests. |
+| `teamctl pending` | List pending approval requests. |
+| `teamctl approve <id>` / `teamctl deny <id>` | Decide a pending request. |
 
 ## Adapter contract
 
-An adapter is a process that:
+An adapter connects a human surface to the mailbox. It reads messages for its subscribed managers, displays them, writes authorized replies and presents approval requests for a decision.
 
-1. Reads new messages for subscribed managers (`inbox_peek` / `inbox_watch`, scoped via `--manager` for the Telegram adapter).
-2. Surfaces them to the human.
-3. Writes human replies back as `sender=user:<handle>` via SQL insert or team-mcp.
-4. Listens for approval notifications and renders inline decision UI.
-
-Adapters ship as small standalone binaries next to `teamctl` — `team-interface-telegram`, `team-interface-discord`, etc.
+The shipped Telegram adapter is the `team-bot` binary. The top-level `interfaces:` array remains in the schema for other adapters; Telegram's current configuration lives on the manager.
 
 ## Related
 

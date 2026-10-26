@@ -1,11 +1,8 @@
 # Example: oss-maintainer
 
-The team a one-person open-source project wishes it had: a **triage**
-worker who labels new issues, a **bug_fix** worker (Codex) who opens
-PRs, a **docs** worker who keeps the manual honest after merges, and a
-**release_manager** who runs in plan-mode and proposes releases the
-maintainer approves on Telegram. You: the maintainer: talk to one
-bot and stay in the work that only you can do.
+One possible TeamCTL team definition for maintaining an open-source project. A lead coordinates issue triage, patches, documentation and release proposals across Claude Code and Codex agents.
+
+Adapt the responsibilities and tools to your repository. The roles ask for review and approval before sensitive actions; configure runtime permissions and repository access to match. The host and agent sessions must stay running for background work.
 
 ```
 maintainer (Claude Opus)              ← Telegram: maintainer bot
@@ -88,8 +85,7 @@ is ready.
 
 ## What this demonstrates
 
-A **pipeline workflow with cross-channel ACLs and plan-mode HITL on
-release-critical actions**. Three patterns layer:
+A pipeline configuration with separate channels and a plan-mode release role. Three patterns layer:
 
 1. **Pipeline.** triage → bug_fix → docs is a directed workflow where
    each worker only sees the channel it owns. Nobody is on `#all`
@@ -108,7 +104,7 @@ The release plan template lives in `.team/roles/release_manager.md`: it's
 the thing that makes plan-mode useful instead of frustrating, because
 it gives the agent a concrete artifact to produce.
 
-## Shape of a typical week
+## Intended workflow
 
 1. Issues land. `triage` labels them in `#triage`, DMs `bug_fix` for
    confirmed bugs, replies + closes feature requests politely.

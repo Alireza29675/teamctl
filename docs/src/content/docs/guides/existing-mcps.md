@@ -1,23 +1,23 @@
 ---
 title: Existing MCP servers
-description: Community and Anthropic MCP servers that work with teamctl today, with paste-ready mcps blocks.
+description: Community and Anthropic MCP servers that work with TeamCTL today, with paste-ready mcps blocks.
 ---
 
-teamctl gives any agent its own MCP servers through a per-agent `mcps:` block, alongside the built-in `team` mailbox bus. This page curates servers that work with teamctl **today**, with paste-ready snippets, so you don't have to rediscover which packages still exist or how they launch.
+TeamCTL gives any agent its own MCP servers through a per-agent `mcps:` block, alongside the built-in `team` mailbox bus. This page curates servers that work with TeamCTL **today**, with paste-ready snippets, so you don't have to rediscover which packages still exist or how they launch.
 
 The list moves fast. Treat every entry as a snapshot (dated below), and confirm the upstream link before you lean on it.
 
-## What "works with teamctl" means
+## What "works with TeamCTL" means
 
 The contract is narrow and worth understanding before you paste anything:
 
-- **stdio only.** A server fits teamctl if it launches as a local process (a `command` plus `args`) and speaks MCP over stdio. teamctl renders each entry into the runtime's MCP config next to the `team` server. Remote, SSE, or streamable-HTTP-only servers do **not** fit yet (the `url` transport is deferred, see [What doesn't fit yet](#what-doesnt-fit-yet)).
-- **Three fields, passed through verbatim.** An `mcps:` entry is `command`, `args`, and `env`, nothing else. teamctl does no `${VAR}` expansion of its own.
+- **stdio only.** A server fits TeamCTL if it launches as a local process (a `command` plus `args`) and speaks MCP over stdio. TeamCTL renders each entry into the runtime's MCP config next to the `team` server. Remote, SSE, or streamable-HTTP-only servers do **not** fit yet (the `url` transport is deferred, see [What doesn't fit yet](#what-doesnt-fit-yet)).
+- **Three fields, passed through verbatim.** An `mcps:` entry is `command`, `args`, and `env`, nothing else. TeamCTL does no `${VAR}` expansion of its own.
 - **Secrets come from `.team/.env`.** Reference a variable as `"${TOKEN}"` in `env:` and put the real value in `.team/.env` (gitignored). See [Secrets](#secrets) for how the value actually reaches the server. Never inline a literal token.
 - **Paths are cwd-relative.** A filesystem-style server's directory args resolve against the agent's project `cwd`, not the team root.
-- **`team` is reserved** for the mailbox bus teamctl injects for you. You can't name a server `team`.
+- **`team` is reserved** for the mailbox bus TeamCTL injects for you. You can't name a server `team`.
 
-**How each entry is verified.** Claude Code is the reference runtime. Every server below carries a badge: *validated* means the `mcps:` block passes `teamctl validate` and matches a launch shape teamctl already ships; *desk-checked* means the launch shape is confirmed against the upstream project but wasn't run here. Neither badge proves the upstream server itself still works end to end, so confirm the upstream link and run one `teamctl up` before you rely on a server. teamctl hands the same config to Codex and Gemini, but third-party-server acceptance there isn't verified, so treat non-Claude runtimes as desk-checked.
+**How each entry is verified.** Claude Code is the reference runtime. Every server below carries a badge: *validated* means the `mcps:` block passes `teamctl validate` and matches a launch shape TeamCTL already ships; *desk-checked* means the launch shape is confirmed against the upstream project but wasn't run here. Neither badge proves the upstream server itself still works end to end, so confirm the upstream link and run one `teamctl up` before you rely on a server. TeamCTL hands the same config to Codex and Gemini, but third-party-server acceptance there isn't verified, so treat non-Claude runtimes as desk-checked.
 
 ## The 2024 server list is out of date
 
@@ -107,7 +107,7 @@ mcps:
       GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
 ```
 
-Needs Docker on the host and `GITHUB_PERSONAL_ACCESS_TOKEN` in `.team/.env`. The `-e NAME` in `args` tells docker to forward the env var into the container; `env:` is where teamctl supplies it. The hosted remote-HTTP GitHub server does **not** fit (see below). Upstream: [github/github-mcp-server](https://github.com/github/github-mcp-server).
+Needs Docker on the host and `GITHUB_PERSONAL_ACCESS_TOKEN` in `.team/.env`. The `-e NAME` in `args` tells docker to forward the env var into the container; `env:` is where TeamCTL supplies it. The hosted remote-HTTP GitHub server does **not** fit (see below). Upstream: [github/github-mcp-server](https://github.com/github/github-mcp-server).
 
 ### Browser automation: Playwright
 
@@ -176,7 +176,7 @@ GITHUB_PERSONAL_ACCESS_TOKEN=ghp_your_real_token
 ## What doesn't fit yet
 
 - **Remote / hosted servers.** Anything that only speaks SSE or streamable-HTTP (including GitHub's hosted remote server and most SaaS-hosted MCPs) has no home in `mcps:` today. The `url` / `headers` transport is deferred until a concrete need lands. Use the stdio variant where one exists (as with GitHub's container above).
-- **Non-Claude runtimes, unverified.** teamctl hands the same config to Codex and Gemini, but whether each third-party server is accepted there hasn't been verified for this page. Assume Claude Code unless you've tested otherwise.
+- **Non-Claude runtimes, unverified.** TeamCTL hands the same config to Codex and Gemini, but whether each third-party server is accepted there hasn't been verified for this page. Assume Claude Code unless you've tested otherwise.
 
 ## Keeping this current
 

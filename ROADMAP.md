@@ -1,5 +1,9 @@
 # Roadmap
 
+TeamCTL is an open-source platform for autonomous teams of agents. Its current direction is to make teams easier to define, run, inspect and share.
+
+The sections below are a dated planning snapshot, preserved with their original release scope. Use the [changelog](./CHANGELOG.md) for shipped releases and the [documentation](https://teamctl.run/getting-started/) for current behavior.
+
 > Last updated: 2026-04-28 (against v0.2.9). The full release-by-release
 > history lives in [`CHANGELOG.md`](./CHANGELOG.md); this file is the
 > short answer to "what's done, what's next, what's later".

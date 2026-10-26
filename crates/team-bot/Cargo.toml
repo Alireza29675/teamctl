@@ -5,7 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Telegram bot front-end for teamctl managers."
+description = "Telegram conversations and agent-requested approvals for TeamCTL teams."
+readme = "README.md"
+homepage.workspace = true
+documentation = "https://teamctl.run/getting-started/"
 
 [[bin]]
 name = "team-bot"

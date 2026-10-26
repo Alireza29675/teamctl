@@ -1,17 +1,17 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "teamctl",
-  "description": "teamctl — persistent AI agent teams, declared in YAML and launched from a chat with Claude.",
+  "description": "TeamCTL: an open-source platform for autonomous teams of agents.",
   "owner": {
-    "name": "teamctl",
+    "name": "TeamCTL",
     "url": "https://github.com/Alireza29675/teamctl"
   },
   "plugins": [
     {
       "name": "teamctl",
-      "description": "Persistent AI agent teams, declared in YAML and launched from a chat with Claude. Walks you from no-teamctl-installed to a running team in one conversation, then stays useful for evolving the org afterwards.",
+      "description": "Create and adjust TeamCTL teams from Claude Code. Define roles, runtimes and channels in portable YAML and Markdown.",
       "author": {
-        "name": "teamctl",
+        "name": "TeamCTL",
         "url": "https://github.com/Alireza29675/teamctl"
       },
       "category": "development",

@@ -1,13 +1,11 @@
-# teamctl-core team — the dogfood team
+# TeamCTL development team
 
-This is the team that develops `teamctl` on `teamctl`. It ships
-inside the public `teamctl` repo as a real-world showcase of how
-we use the tool to build the tool. If you want a starter,
-see [`teamctl init`](../README.md) (which scaffolds the `guided`,
-`essentials`, or `blank` template — interactive flow picks for you).
+This is one example of a TeamCTL organization: the team that develops the platform. Its YAML and Markdown define the roles, relationships and conversations used to build TeamCTL.
+
+For a smaller starting point, use [`teamctl init`](../README.md). The interactive picker offers Ideate & Build, Guided and Blank; Essentials is available with `--template essentials`. Review the chosen roles and runtimes before starting the agents.
 
 This `.team/` is intentionally larger than a starter team. It
-encodes the actual operating model that develops teamctl in
+encodes the actual operating model that develops TeamCTL in
 production, with comments dense enough that a reader can learn
 the model by following the YAML.
 

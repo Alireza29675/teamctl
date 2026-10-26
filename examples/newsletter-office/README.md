@@ -1,9 +1,8 @@
 # Example: newsletter-office
 
-A full newsroom that publishes a daily unbiased news digest, plus a small
-web-dev team that owns the blog website. You reach the **head editor by
-email**; the head editor coordinates the newsroom and, through a bridge,
-the website team.
+One possible TeamCTL team definition: a newsroom and a website team in separate projects. A **head editor** coordinates research and writing, then exchanges messages with the website manager through an operator-opened bridge.
+
+This example declares a future email interface; that adapter does not ship yet. Use the host's messaging and approval commands today. Review the roles, tools and publishing permissions before running the definition.
 
 Two projects, seven agents across three runtimes.
 
@@ -56,17 +55,15 @@ The seven agents are now running in `tmux` sessions named
 ## Email interface
 
 The `email` interface type is declared in `.team/team-compose.yaml` and scoped
-to `newsroom:head_editor`. The email adapter is on the near-term roadmap
-and isn't in the shipping v0.1 binaries — until it lands, drive the head
+to `newsroom:head_editor`. The email adapter is planned
+and does not ship today — drive the head
 editor with:
 
 ```bash
 teamctl send newsroom:head_editor "Topic: EU AI Act enforcement"
 ```
 
-The compose file is future-proof: once the adapter ships as
-`team-interface-email`, start it against the same mailbox and the
-head-editor begins reading / replying via email without any other changes.
+The declaration records the intended email connection. Revisit its schema and setup when an adapter ships rather than assuming this example already provides email delivery.
 
 ## Publishing a post
 

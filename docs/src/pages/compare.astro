@@ -1,151 +1,91 @@
 ---
-// /compare/ — comparative-positioning page (T-021 §5 target).
-// Lifted verbatim from the v1 _legacy-landing.mdx "How it compares" section
-// so the morning preview has a working round-trip from the landing's
-// "Quiet outbound" line. Real treatment lands in a follow-up.
+import Footer from '../components/landing/Footer.astro';
 import '../styles/landing.css';
+
+const title = 'Compare approaches | TeamCTL';
+const description = 'Choose how you want your agents to work together. TeamCTL combines configurable roles and structures, background sessions and an agent mailbox.';
 ---
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>How teamctl compares</title>
-    <meta
-      name="description"
-      content="How teamctl compares to claude-squad, claude-flow, mcp_agent_mail, and tmux + scripts. Plain comparison, no put-downs."
-    />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href="https://teamctl.run/compare/" />
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="TeamCTL" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content="https://teamctl.run/compare/" />
+    <meta property="og:image" content="https://teamctl.run/brand/social-cover.png" />
+    <meta property="og:image:alt" content="TeamCTL — Create autonomous teams of agents." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://teamctl.run/brand/social-cover.png" />
   </head>
   <body class="landing">
-    <main class="compare">
-      <header>
-        <p class="compare-eyebrow">
-          <a href="/">← Back to teamctl</a>
-        </p>
-        <h1>How teamctl compares.</h1>
-        <p class="compare-lede">
-          Plain comparison. No put-downs. We respect every tool here.
-        </p>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-nav">
+      <a class="brand-link" href="/" aria-label="TeamCTL home"><img src="/brand/teamctl-head.svg" alt="" width="44" height="44" />TeamCTL</a>
+      <nav class="nav-links" aria-label="Main navigation"><a href="/getting-started/">Docs</a><a class="nav-github" href="https://github.com/Alireza29675/teamctl">GitHub ↗</a></nav>
+    </header>
+    <main id="main" class="compare page-width">
+      <header class="compare-header">
+        <p class="eyebrow">Choosing your setup</p>
+        <h1>How do you want your agents to work together?</h1>
+        <p class="compare-lede">TeamCTL is a platform for defining the team itself: its roles, structure and conversations. Other tools approach agent work through session management, orchestration frameworks or messaging.</p>
       </header>
 
-      <div class="compare-table-wrap">
-        <table class="compare-table">
-          <thead>
-            <tr>
-              <th></th>
-              <th>teamctl</th>
-              <th>claude-squad</th>
-              <th>claude-flow</th>
-              <th>mcp_agent_mail</th>
-              <th>tmux + scripts</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <th scope="row">YAML-declared <code>reports_to</code> org chart</th>
-              <td>✅</td><td>❌</td><td>❌</td><td>n/a</td><td>❌</td>
-            </tr>
-            <tr>
-              <th scope="row">Multi-runtime (CC + Codex + Gemini)</th>
-              <td>✅</td><td>✅ (also Aider)</td><td>partial (CC + Codex)</td><td>n/a</td><td>manual</td>
-            </tr>
-            <tr>
-              <th scope="row">Persistent across reboots</th>
-              <td>✅</td><td>❌</td><td>❌</td><td>n/a</td><td>manual</td>
-            </tr>
-            <tr>
-              <th scope="row">HITL approvals (Telegram)</th>
-              <td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>❌</td>
-            </tr>
-            <tr>
-              <th scope="row">Inter-agent mailbox bundled</th>
-              <td>✅</td>
-              <td>❌ (shared workspaces)</td>
-              <td>partial (MCP tools, no mail layer)</td>
-              <td>✅ (it <em>is</em> the mailbox)</td>
-              <td>❌</td>
-            </tr>
-            <tr>
-              <th scope="row">
-                System-native supervision
-                <sup><a href="#fn1">1</a></sup>
-              </th>
-              <td>planned</td><td>❌</td><td>❌</td><td>n/a</td><td>❌</td>
-            </tr>
-            <tr>
-              <th scope="row">Rust</th>
-              <td>✅</td><td>❌ (Go)</td><td>❌ (TS)</td><td>mixed</td><td>n/a</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <section class="compare-section" aria-labelledby="teamctl-heading">
+        <h2 id="teamctl-heading">Choose TeamCTL when you want to define and run a team.</h2>
+        <p>Create peer research partners, a project team or an organization with separate project rosters. Write the roles and relationships, choose the runtimes, and share the configuration others need to reproduce the setup.</p>
+        <div class="scope-grid">
+          <article><h3>Your structure</h3><p>Markdown roles and YAML configuration define who does what, who reports to whom and which channels connect them.</p><a href="/reference/team-compose-yaml/">Configuration reference ↗</a></article>
+          <article><h3>Background sessions</h3><p>Real Claude Code, Codex, OpenCode or Gemini CLI sessions run in tmux while the host and provider access remain available.</p><a href="/concepts/runtimes/">Runtime support ↗</a></article>
+          <article><h3>Connected conversations</h3><p>A SQLite-backed MCP mailbox carries messages between agents. The terminal UI lets you inspect sessions and conversations.</p><a href="/concepts/channels/">Channels and messages ↗</a></article>
+        </div>
+      </section>
 
-      <footer class="compare-footnote">
-        <p id="fn1">
-          <strong>1.</strong> teamctl's persistent supervisor is tmux today;
-          <code>systemd</code> and <code>launchd</code> back-ends are designed
-          and on the roadmap. We mark this row "planned" rather than ✅ to
-          keep the table honest.
-        </p>
-      </footer>
+      <section class="compare-section" aria-labelledby="approaches-heading">
+        <h2 id="approaches-heading">Explore the neighboring approaches.</h2>
+        <p>These are summaries of each project’s stated focus, checked on October 10, 2026. Follow the upstream documentation for current features, requirements and limits.</p>
+        <div class="approaches">
+          <article><span class="shape-number">SESSION MANAGEMENT</span><h3><a href="https://github.com/smtg-ai/claude-squad">Claude Squad ↗</a></h3><p>A terminal app for managing multiple coding-agent sessions in separate workspaces, with task navigation and change review.</p></article>
+          <article><span class="shape-number">AGENT HARNESS</span><h3><a href="https://github.com/ruvnet/ruflo">Ruflo / formerly Claude Flow ↗</a></h3><p>An agent harness with orchestration, memory and MCP tooling for agent workflows. Its setup and capabilities are documented in the upstream repository.</p></article>
+          <article><span class="shape-number">COORDINATION LAYER</span><h3><a href="https://github.com/Dicklesworthstone/mcp_agent_mail_rust">MCP Agent Mail (Rust) ↗</a></h3><p>A messaging and coordination layer with agent identities, inboxes, searchable threads and advisory file leases.</p></article>
+          <article><span class="shape-number">YOUR OWN TOOLING</span><h3><a href="https://github.com/tmux/tmux">tmux + scripts ↗</a></h3><p>Use a terminal multiplexer and scripts to create a workflow around your own sessions, configuration and communication tools.</p></article>
+        </div>
+      </section>
+
+      <section class="compare-section" aria-labelledby="boundaries-heading">
+        <h2 id="boundaries-heading">What to expect from TeamCTL today.</h2>
+        <p>Closing the terminal UI leaves agent sessions running. Rebooting the host stops live processes. System-native supervision through systemd or launchd is planned.</p>
+        <p>Each agent keeps its own session and conversation history. Messages connect agents; they do not merge their context. Agent instructions and runtime permissions define action boundaries.</p>
+        <p>Configure Telegram for conversations and explicit approval requests. TeamCTL’s mailbox is not a universal action gate or a sandbox.</p>
+        <a class="text-link" href="/getting-started/">Set up your first team</a>
+      </section>
     </main>
+    <Footer />
   </body>
 </html>
 
 <style>
-  .compare {
-    max-width: 56rem;
-    margin: 0 auto;
-    padding: 6rem 2rem 8rem;
-    color: var(--fg);
-  }
-  .compare-eyebrow a {
-    color: var(--fg-mute);
-    text-decoration: none;
-    font-size: 0.9rem;
-    border-bottom: 1px solid var(--hairline);
-    padding-bottom: 0.15rem;
-  }
-  .compare-eyebrow a:hover { color: var(--fg); }
-  .compare h1 {
-    font-family: var(--serif);
-    font-weight: 400;
-    font-size: clamp(2rem, 4vw, 3rem);
-    margin: 2rem 0 1rem;
-    letter-spacing: -0.012em;
-  }
-  .compare-lede { color: var(--fg-mute); margin: 0 0 3rem; }
-
-  .compare-table-wrap { overflow-x: auto; }
-  .compare-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.92rem;
-  }
-  .compare-table th, .compare-table td {
-    padding: 0.85rem 1rem;
-    border-bottom: 1px solid var(--hairline);
-    text-align: left;
-    vertical-align: top;
-  }
-  .compare-table thead th {
-    color: var(--fg-mute);
-    font-weight: 500;
-    font-family: var(--sans);
-    border-bottom: 1px solid rgba(233, 231, 223, 0.18);
-  }
-  .compare-table tbody th { font-weight: 400; color: var(--fg); }
-  .compare-table tbody td { color: var(--fg-mute); }
-  .compare-table code {
-    background: var(--bg-soft);
-    padding: 0.05rem 0.4rem;
-    border-radius: 4px;
-    font-size: 0.85em;
-  }
-
-  .compare-footnote {
-    margin-top: 4rem;
-    color: var(--fg-mute);
-    font-size: 0.86rem;
-    line-height: 1.7;
-  }
+  .compare { max-width: 66rem; }
+  .compare-header { padding-block: 5rem 4rem; }
+  .compare-header h1 { max-width: 17ch; font-size: clamp(2.6rem, 5vw, 4.4rem); }
+  .compare-lede { max-width: 43rem; color: var(--fg-mute); margin-top: 1.75rem; font-size: 1.1rem; }
+  .compare-section { padding-block: 3.5rem; border-top: 1px solid var(--hairline); }
+  .compare-section h2 { max-width: 28ch; font-size: clamp(1.75rem, 3vw, 2.4rem); margin-bottom: 1.5rem; }
+  .compare-section > p { max-width: 48rem; color: var(--fg-mute); margin-bottom: 1.25rem; }
+  .scope-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2.5rem; margin-top: 3rem; }
+  .scope-grid h3 { font-size: 1.2rem; }
+  .scope-grid p { margin-block: 1rem; color: var(--fg-mute); font-size: 0.9rem; }
+  .scope-grid a { font-size: 0.8rem; text-decoration: none; font-weight: 700; }
+  .approaches { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3rem; margin-top: 3rem; }
+  .approaches h3 { margin-top: 1rem; font-size: 1.3rem; }
+  .approaches h3 a { text-decoration: none; }
+  .approaches p { color: var(--fg-mute); font-size: 0.95rem; margin-top: 1rem; }
+  @media (max-width: 800px) { .scope-grid { grid-template-columns: 1fr; gap: 2rem; } }
+  @media (max-width: 540px) { .compare-header { padding-block: 3rem; } .approaches { grid-template-columns: 1fr; gap: 2.5rem; } }
 </style>
